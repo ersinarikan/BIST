@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Hisseler - BIST Pattern Detection{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <i class="fas fa-list me-2"></i>
+                    BIST Hisseleri (450 Adet)
+                </div>
+                <div class="card-body">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <input type="text" class="form-control" id="searchInput" placeholder="Hisse ara...">
+                        </div>
+                        <div class="col-md-3">
+                            <select class="form-select" id="sectorFilter">
+                                <option value="">Tüm Sektörler</option>
+                                <option value="Bankacılık">Bankacılık</option>
+                                <option value="Teknoloji">Teknoloji</option>
+                                <option value="Elektrik">Elektrik</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <button class="btn btn-success" onclick="loadAllStocks()">
+                                <i class="fas fa-sync-alt me-1"></i>Yenile
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div id="stocksGrid" class="row">
+                        <div class="col-12 text-center">
+                            <div class="spinner-border text-success" role="status"></div>
+                            <div class="mt-2">Hisseler yükleniyor...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadAllStocks();
+});
+
+async function loadAllStocks() {
+    try {
+        const response = await fetch('/api/stocks');
+        const stocks = await response.json();
+        
+        const stocksGrid = document.getElementById('stocksGrid');
+        stocksGrid.innerHTML = '';
+        
+        // İlk 50 hisseyi göster
+        stocks.slice(0, 50).forEach(stock => {
+            const stockCard = document.createElement('div');
+            stockCard.className = 'col-md-3 mb-3';
+            stockCard.innerHTML = `
+                <div class="card stock-card h-100">
+                    <div class="card-body">
+                        <h6 class="card-title text-success">${stock.symbol}</h6>
+                        <p class="card-text small">${stock.name}</p>
+                        <span class="badge bg-secondary">${stock.sector}</span>
+                        <div class="mt-2">
+                            <button class="btn btn-sm btn-outline-primary" onclick="viewStockDetails('${stock.symbol}')">
+                                <i class="fas fa-chart-line me-1"></i>Analiz
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            stocksGrid.appendChild(stockCard);
+        });
+        
+    } catch (error) {
+        console.error('Error loading stocks:', error);
+        document.getElementById('stocksGrid').innerHTML = `
+            <div class="col-12 text-center text-danger">
+                <i class="fas fa-exclamation-triangle"></i>
+                Hisseler yüklenirken hata oluştu
+            </div>
+        `;
+    }
+}
+
+function viewStockDetails(symbol) {
+    window.location.href = `/stock/${symbol}`;
+}
+</script>
+{% endblock %}

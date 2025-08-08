@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BIST AI System - Real-time Dashboard</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Socket.IO -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    
+    <script>
+        // 🚀 CACHE BUSTER & VERSION CONTROL
+        const DASHBOARD_VERSION = '2025.08.08.WebSocket.1.0';
+        const CACHE_BUSTER = Date.now();
+        console.log('🎯 BIST Dashboard - Version:', DASHBOARD_VERSION, 'Cache:', CACHE_BUSTER);
+        
+        // Force refresh indicator
+        if (localStorage.getItem('dashboardVersion') !== DASHBOARD_VERSION) {
+            localStorage.setItem('dashboardVersion', DASHBOARD_VERSION);
+            console.log('✅ Dashboard version updated - forcing fresh data');
+        }
+        
+        // 🔗 WebSocket Connection
+        let socket = null;
+        let isConnected = false;
+        
+        function initializeWebSocket() {
+            socket = io();
+            
+            socket.on('connect', function() {
+                isConnected = true;
+                console.log('🔗 WebSocket connected:', socket.id);
+                addLog('SUCCESS', '🔗 Real-time connection established');
+                
+                // Join admin room
+                socket.emit('join_admin');
+                updateConnectionStatus(true);
+            });
+            
+            socket.on('disconnect', function() {
+                isConnected = false;
+                console.log('❌ WebSocket disconnected');
+                addLog('ERROR', '❌ Real-time connection lost');
+                updateConnectionStatus(false);
+            });
+            
+            socket.on('room_joined', function(data) {
+                console.log('👤 Joined room:', data.room);
+                addLog('INFO', `👤 ${data.message}`);
+            });
+            
+            socket.on('log_update', function(data) {
+                addLog(data.level.toUpperCase(), data.message, data.category);
+            });
+            
+            socket.on('pattern_analysis', function(data) {
+                console.log('📊 Pattern analysis received:', data.symbol);
+                addLog('INFO', `📊 Pattern analysis updated for ${data.symbol}`);
+                // Auto-refresh dashboard when new analysis arrives
+                updateDashboard();
+                // Also update recent tasks to show new trading activity
+                setTimeout(updateRecentTasks, 1000);
+            });
+            
+            socket.on('error', function(data) {
+                console.error('❌ Socket error:', data.message);
+                addLog('ERROR', `❌ ${data.message}`);
+            });
+            
+            // Real-time simulation updates
+            socket.on('simulation_trade', function(data) {
+                console.log('💰 Simulation trade received:', data);
+                addLog('INFO', `💰 ${data.trade_type}: ${data.symbol} @ ${data.price}₺`);
+                // Update recent tasks immediately
+                updateRecentTasks();
+                // Update simulation status if currently shown
+                if (currentSimulationId) {
+                    checkSimulationStatus();
+                }
+            });
+            
+            // Task updates
+            socket.on('task_update', function(data) {
+                console.log('📋 Task update received:', data);
+                updateRecentTasks();
+            });
+        }
+        
+        function updateConnectionStatus(connected) {
+            const statusEl = document.getElementById('connection-status');
+            if (statusEl) {
+                statusEl.innerHTML = connected ? 
+                    '<i class="fas fa-wifi text-success"></i> Real-time' : 
+                    '<i class="fas fa-wifi text-danger"></i> Disconnected';
+            }
+        }
+    </script>
+    
+    <style>
+        body { 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        .dashboard-card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            transition: transform 0.3s ease;
+        }
+        
+        .dashboard-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .status-healthy { color: #28a745; }
+        .status-warning { color: #ffc107; }
+        .status-error { color: #dc3545; }
+        .status-unknown { color: #6c757d; }
+        
+        .metric-card {
+            background: linear-gradient(45deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .metric-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+        }
+        
+        .metric-label {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+        
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .log-container {
+            background: #1a1a1a;
+            color: #00ff00;
+            border-radius: 8px;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .navbar-brand {
+            font-weight: bold;
+            font-size: 1.5rem;
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="#"><i class="fas fa-robot me-2"></i>BIST AI System Dashboard</a>
+            <div class="navbar-nav ms-auto">
+                <span class="navbar-text me-3" id="connection-status">
+                    <i class="fas fa-wifi text-warning"></i> Connecting...
+                </span>
+                <span class="navbar-text me-3">
+                    <i class="fas fa-circle pulse status-healthy"></i> Live Monitoring
+                </span>
+                <span class="navbar-text" id="last-update">
+                    Last update: <span id="timestamp">--:--:--</span>
+                </span>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid mt-4">
+        <div class="row">
+            <!-- System Overview -->
+            <div class="col-12 mb-4">
+                <div class="dashboard-card p-4">
+                    <h3><i class="fas fa-tachometer-alt me-2"></i>System Overview</h3>
+                    <div class="row mt-3">
+                <div class="col-md-3">
+                            <div class="metric-card text-center">
+                                <div class="metric-value" id="automation-status">--</div>
+                                <div class="metric-label">Automation Status</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="metric-card text-center" style="background: linear-gradient(45deg, #f093fb 0%, #f5576c 100%);">
+                                <div class="metric-value" id="scheduled-jobs">--</div>
+                                <div class="metric-label">Scheduled Jobs</div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                            <div class="metric-card text-center" style="background: linear-gradient(45deg, #4ecdc4 0%, #44a08d 100%);">
+                                <div class="metric-value" id="stocks-count">--</div>
+                                <div class="metric-label">Stocks in DB</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="metric-card text-center" style="background: linear-gradient(45deg, #ffecd2 0%, #fcb69f 100%); color: #333;">
+                                <div class="metric-value" id="price-records">--</div>
+                                <div class="metric-label">Price Records</div>
+                </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- System Health -->
+            <div class="col-lg-4 mb-4">
+                <div class="dashboard-card p-4 h-100" style="background: white; border: 2px solid #e9ecef; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+                    <h4><i class="fas fa-heartbeat me-2 text-success"></i>System Health</h4>
+                    <div id="health-status" class="mt-3">
+                        <div class="d-flex align-items-center mb-3 p-3 rounded" style="background: #f8f9fa; border-left: 4px solid #28a745;">
+                            <i class="fas fa-server me-3 text-primary"></i>
+                            <div class="flex-grow-1">
+                                <div class="fw-bold">Overall Status</div>
+                                <small class="text-muted">System Integration</small>
+                            </div>
+                            <span class="badge bg-success" id="overall-status">MIGRATED</span>
+                        </div>
+                        <div class="d-flex align-items-center mb-3 p-3 rounded" style="background: #f8f9fa; border-left: 4px solid #17a2b8;">
+                            <i class="fas fa-robot me-3 text-info"></i>
+                            <div class="flex-grow-1">
+                                <div class="fw-bold">Automation Engine</div>
+                                <small class="text-muted">Background Processing</small>
+                            </div>
+                            <span class="badge bg-info" id="automation-status">active</span>
+                        </div>
+                        <div class="d-flex align-items-center mb-3 p-3 rounded" style="background: #f8f9fa; border-left: 4px solid #6c757d;">
+                            <i class="fas fa-flask me-3 text-secondary"></i>
+                            <div class="flex-grow-1">
+                                <div class="fw-bold">Flask API</div>
+                                <small class="text-muted">Web Service</small>
+                            </div>
+                            <span class="badge bg-success" id="flask-status">healthy</span>
+                        </div>
+                        <div class="d-flex align-items-center mb-3 p-3 rounded" style="background: #f8f9fa; border-left: 4px solid #ffc107;">
+                            <i class="fas fa-database me-3 text-warning"></i>
+                            <div class="flex-grow-1">
+                                <div class="fw-bold">Database</div>
+                                <small class="text-muted">PostgreSQL Connection</small>
+                            </div>
+                            <span class="badge bg-success" id="db-status">connected</span>
+                        </div>
+                        <div class="d-flex align-items-center p-3 rounded" style="background: #f8f9fa; border-left: 4px solid #dc3545;">
+                            <i class="fas fa-wifi me-3 text-danger"></i>
+                            <div class="flex-grow-1">
+                                <div class="fw-bold">WebSocket</div>
+                                <small class="text-muted">Real-time Updates</small>
+                            </div>
+                            <span class="badge bg-success" id="websocket-status">connected</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Automation Control -->
+            <div class="col-lg-4 mb-4">
+                <div class="dashboard-card p-4 h-100" style="background: white; border: 2px solid #e9ecef; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+                    <h4><i class="fas fa-cogs me-2 text-primary"></i>Automation Control</h4>
+                    <div class="d-grid gap-3 mt-4">
+                        <button class="btn btn-success btn-lg py-3" onclick="startAutomation()">
+                            <i class="fas fa-play me-2"></i>Start Automation
+                        </button>
+                        <button class="btn btn-danger btn-lg py-3" onclick="stopAutomation()">
+                            <i class="fas fa-stop me-2"></i>Stop Automation
+                        </button>
+                        <button class="btn btn-warning btn-lg py-3" onclick="runTask('health_check')">
+                            <i class="fas fa-stethoscope me-2"></i>Health Check
+                        </button>
+                        <button class="btn btn-info btn-lg py-3" onclick="runTask('data_collection')">
+                            <i class="fas fa-database me-2"></i>Data Collection
+                        </button>
+                        <button class="btn btn-primary btn-lg py-3" onclick="runTask('model_retraining')">
+                            <i class="fas fa-brain me-2"></i>Retrain Models
+                        </button>
+                        <button class="btn btn-secondary btn-lg py-3" onclick="generateReport()">
+                            <i class="fas fa-file-alt me-2"></i>Generate Report
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Paper Trading Simulation Panel -->
+            <div class="col-lg-4 mb-4">
+                <div class="dashboard-card p-4 h-100" style="background: white; border: 2px solid #e9ecef; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+                    <h4><i class="fas fa-robot me-2 text-info"></i>AI Simulation</h4>
+                    <p class="mb-3 small text-muted">Test AI model with virtual trading - TÜM 606 hisse takip</p>
+                    
+                    <!-- Duration Selection -->
+                    <div class="mb-3">
+                        <label class="form-label small text-muted">Test Duration:</label>
+                        <select class="form-select form-select-sm" id="simulation-duration">
+                            <option value="12">12 Hours</option>
+                            <option value="24">24 Hours</option>
+                            <option value="48" selected>48 Hours</option>
+                            <option value="72">72 Hours</option>
+                            <option value="168">1 Week</option>
+                        </select>
+                    </div>
+                    
+                    <!-- Current Simulation Status -->
+                    <div id="simulation-status" class="mb-3">
+                        <div class="d-flex justify-content-between align-items-center p-3 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
+                            <div>
+                                <div class="h6 mb-1 text-dark" id="sim-status-text">No Active Test</div>
+                                <small class="text-muted" id="sim-details">Select duration & click start</small>
+                            </div>
+                            <div class="text-end">
+                                <div class="h5 mb-0 text-dark" id="sim-balance">₺0.00</div>
+                                <small class="text-success" id="sim-profit">±0%</small>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Simulation Controls -->
+                    <div class="row">
+                        <div class="col-6">
+                            <button class="btn btn-success w-100 mb-2" id="start-simulation-btn" onclick="startSimulation()">
+                                <i class="fas fa-play me-2"></i>Start Test
+                            </button>
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">₺</span>
+                                <input type="number" class="form-control" id="trade-amount" value="10000" min="1000" max="50000" placeholder="Trade Amount">
+                                <small class="text-muted">Per Signal Amount</small>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <button class="btn btn-danger w-100 mb-2" id="stop-simulation-btn" onclick="stopSimulation()" disabled>
+                                <i class="fas fa-stop me-2"></i>Stop
+                            </button>
+                            <button class="btn btn-outline-info w-100" onclick="viewSimulationDetails()">
+                                <i class="fas fa-eye me-2"></i>Details
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Quick Stats -->
+                    <div class="row mt-3" id="simulation-stats" style="display: none;">
+                        <div class="col-4 text-center">
+                            <div class="p-2 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
+                                <div class="small text-muted">Trades</div>
+                                <div class="fw-bold text-dark" id="sim-trades">0</div>
+                            </div>
+                        </div>
+                        <div class="col-4 text-center">
+                            <div class="p-2 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
+                                <div class="small text-muted">Win Rate</div>
+                                <div class="fw-bold text-success" id="sim-winrate">0%</div>
+                            </div>
+                        </div>
+                        <div class="col-4 text-center">
+                            <div class="p-2 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
+                                <div class="small text-muted">Time</div>
+                                <div class="fw-bold text-dark" id="sim-runtime">0h</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        <div class="row">
+            <!-- Performance Chart -->
+            <div class="col-lg-8 mb-4">
+                <div class="dashboard-card p-4">
+                    <h4><i class="fas fa-chart-line me-2"></i>System Performance</h4>
+                    <div class="chart-container">
+                        <canvas id="performanceChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Recent Tasks -->
+            <div class="col-lg-4 mb-4">
+                <div class="dashboard-card p-4">
+                    <h4><i class="fas fa-tasks me-2"></i>Recent Tasks</h4>
+                    <div id="recent-tasks" class="mt-3">
+                        <div class="text-center">
+                            <div class="spinner-border spinner-border-sm" role="status"></div>
+                            <p class="mt-2">Loading tasks...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- Live Logs -->
+            <div class="col-12 mb-4">
+                <div class="dashboard-card p-4">
+                    <h4><i class="fas fa-terminal me-2"></i>Live System Logs</h4>
+                    <div class="log-container" id="live-logs">
+                        <div>[INFO] Dashboard initialized - Waiting for system logs...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+        // Global variables
+        let performanceChart;
+        let logCounter = 0;
+
+// Initialize dashboard
+document.addEventListener('DOMContentLoaded', function() {
+            initializeChart();
+            updateDashboard();
+            // Load recent tasks immediately on page load
+            updateRecentTasks();
+            startLiveUpdates();
+        });
+
+        // Initialize performance chart
+        function initializeChart() {
+            const ctx = document.getElementById('performanceChart').getContext('2d');
+            performanceChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                        label: 'System Health Score',
+                        data: [],
+                        borderColor: '#4facfe',
+                        backgroundColor: 'rgba(79, 172, 254, 0.1)',
+                        tension: 0.4
+                    }, {
+                        label: 'Active Jobs',
+                data: [],
+                        borderColor: '#f093fb',
+                        backgroundColor: 'rgba(240, 147, 251, 0.1)',
+                        tension: 0.4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: true
+                }
+            }
+        }
+    });
+        }
+
+        // Update dashboard data
+        async function updateDashboard() {
+            try {
+                // Update timestamp
+                document.getElementById('timestamp').textContent = new Date().toLocaleTimeString();
+                
+                // Get automation status with retry logic
+                let automationData;
+                try {
+                    const automationResponse = await fetch('/api/automation/status');
+                    if (!automationResponse.ok) throw new Error('Automation API failed');
+                    automationData = await automationResponse.json();
+                } catch (error) {
+                    console.warn('Automation status fetch failed, retrying...', error);
+                    // Retry after 1 second
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    const automationResponse = await fetch('/api/automation/status');
+                    automationData = await automationResponse.json();
+                }
+                
+                if (automationData && automationData.available) {
+                    const status = automationData.scheduler_status;
+                    // Ensure status exists and has valid data
+                    if (status && typeof status.is_running === 'boolean') {
+                        const currentStatus = status.is_running ? 'RUNNING' : 'STOPPED';
+                        const currentJobs = status.scheduled_jobs || 0;
+                        
+                        // Only update if different to prevent flickering
+                        const statusElement = document.getElementById('automation-status');
+                        const jobsElement = document.getElementById('scheduled-jobs');
+                        
+                        if (statusElement.textContent !== currentStatus) {
+                            statusElement.textContent = currentStatus;
+                            console.log('🔄 Automation status updated to:', currentStatus);
+                        }
+                        if (jobsElement.textContent !== currentJobs.toString()) {
+                            jobsElement.textContent = currentJobs;
+                            console.log('📊 Scheduled jobs updated to:', currentJobs);
+                        }
+                    }
+                } else {
+                    // Fallback when automation data is unavailable
+                    console.warn('⚠️ Automation data unavailable, using fallback');
+                    document.getElementById('automation-status').textContent = 'CHECKING...';
+                    document.getElementById('scheduled-jobs').textContent = '?';
+                }
+
+                // Get system info
+                const systemResponse = await fetch('/api/system-info');
+                const systemData = await systemResponse.json();
+                
+                if (systemData.database) {
+                    document.getElementById('stocks-count').textContent = systemData.database.stocks || 0;
+                    document.getElementById('price-records').textContent = (systemData.database.price_records || 0).toLocaleString();
+                }
+
+                // Get health status
+                const healthResponse = await fetch('/api/automation/health');
+                const healthData = await healthResponse.json();
+                
+                updateHealthStatus(healthData);
+                updatePerformanceChart(healthData);
+                
+                // Update Recent Tasks
+                await updateRecentTasks();
+                
+                addLog('INFO', 'Dashboard updated successfully');
+        
+    } catch (error) {
+                console.error('Dashboard update error:', error);
+                addLog('ERROR', `Dashboard update failed: ${error.message}`);
+            }
+        }
+
+        // Update health status display
+        function updateHealthStatus(healthData) {
+            const healthContainer = document.getElementById('health-status');
+            
+            if (healthData.health_check) {
+                const health = healthData.health_check;
+                const overall = health.overall_status;
+                const systems = health.systems || {};
+                
+                const statusEmoji = {
+                    'healthy': '✅',
+                    'warning': '⚠️',
+                    'error': '❌'
+                };
+                
+                const statusClass = {
+                    'healthy': 'status-healthy',
+                    'warning': 'status-warning',
+                    'error': 'status-error'
+                };
+                
+                let html = `
+                    <div class="mb-3">
+                        <h5>${statusEmoji[overall] || '❓'} Overall Status: 
+                            <span class="${statusClass[overall] || 'status-unknown'}">${overall.toUpperCase()}</span>
+                        </h5>
+                    </div>
+                    <div class="row">
+                `;
+                
+                Object.entries(systems).forEach(([system, info]) => {
+                    const status = info.status;
+                    html += `
+                        <div class="col-md-6 mb-2">
+                            <div class="d-flex align-items-center">
+                                <span class="me-2">${statusEmoji[status] || '❓'}</span>
+                                <strong>${system.replace('_', ' ').toUpperCase()}:</strong>
+                                <span class="ms-2 ${statusClass[status] || 'status-unknown'}">${status}</span>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                html += '</div>';
+                healthContainer.innerHTML = html;
+            } else {
+                healthContainer.innerHTML = '<div class="alert alert-warning">Health data not available</div>';
+            }
+        }
+
+        // Update performance chart
+        function updatePerformanceChart(healthData) {
+            const now = new Date().toLocaleTimeString();
+            const healthScore = calculateHealthScore(healthData);
+            
+            // Keep only last 20 data points
+            if (performanceChart.data.labels.length > 20) {
+                performanceChart.data.labels.shift();
+                performanceChart.data.datasets[0].data.shift();
+                performanceChart.data.datasets[1].data.shift();
+            }
+            
+            performanceChart.data.labels.push(now);
+            performanceChart.data.datasets[0].data.push(healthScore);
+            performanceChart.data.datasets[1].data.push(document.getElementById('scheduled-jobs').textContent || 0);
+            performanceChart.update('none');
+        }
+
+        // Calculate health score
+        function calculateHealthScore(healthData) {
+            if (!healthData.health_check || !healthData.health_check.systems) return 0;
+            
+            const systems = healthData.health_check.systems;
+            const total = Object.keys(systems).length;
+            const healthy = Object.values(systems).filter(s => s.status === 'healthy').length;
+            
+            return Math.round((healthy / total) * 100);
+        }
+
+        // Update Recent Tasks
+        async function updateRecentTasks() {
+            try {
+                const response = await fetch('/api/recent-tasks');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                const tasksContainer = document.getElementById('recent-tasks');
+                
+                if (data.status === 'success' && data.tasks && data.tasks.length > 0) {
+                    let html = '';
+                    
+                    data.tasks.forEach(task => {
+                        const statusClass = {
+                            'completed': 'text-success',
+                            'running': 'text-primary',
+                            'failed': 'text-danger',
+                            'pending': 'text-warning'
+                        };
+                        
+                        const statusIcon = {
+                            'completed': '✅',
+                            'running': '⏳',
+                            'failed': '❌',
+                            'pending': '⏰'
+                        };
+                        
+                        html += `
+                            <div class="d-flex align-items-start mb-3 p-2 border-bottom">
+                                <span class="me-2 fs-5">${task.icon}</span>
+                                <div class="flex-grow-1">
+                                    <div class="d-flex justify-content-between">
+                                        <strong class="small">${task.task}</strong>
+                                        <small class="text-muted">${task.timestamp}</small>
+                                    </div>
+                                    <div class="small text-muted">${task.description}</div>
+                                    <div class="small ${statusClass[task.status] || 'text-secondary'}">
+                                        ${statusIcon[task.status] || '❓'} ${task.status.toUpperCase()}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    
+                    tasksContainer.innerHTML = html;
+                    console.log('✅ Recent Tasks updated successfully');
+                } else {
+                    tasksContainer.innerHTML = `
+                        <div class="text-center text-muted">
+                            <i class="fas fa-info-circle"></i>
+                            <p class="mt-2">No recent tasks available</p>
+                        </div>
+                    `;
+                }
+                
+            } catch (error) {
+                console.error('Recent Tasks update error:', error);
+                const tasksContainer = document.getElementById('recent-tasks');
+                tasksContainer.innerHTML = `
+                    <div class="text-center text-danger">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <p class="mt-2">Failed to load tasks</p>
+                        <small>${error.message}</small>
+                    </div>
+                `;
+            }
+        }
+
+        // Automation control functions
+        async function startAutomation() {
+            try {
+                addLog('INFO', 'Starting automation...');
+                const response = await fetch('/api/automation/start', { method: 'POST' });
+                const data = await response.json();
+                addLog('SUCCESS', `Automation: ${data.message}`);
+                updateDashboard();
+            } catch (error) {
+                addLog('ERROR', `Start automation failed: ${error.message}`);
+            }
+        }
+
+        async function stopAutomation() {
+            try {
+                addLog('INFO', 'Stopping automation...');
+                const response = await fetch('/api/automation/stop', { method: 'POST' });
+                const data = await response.json();
+                addLog('WARNING', `Automation: ${data.message}`);
+                updateDashboard();
+            } catch (error) {
+                addLog('ERROR', `Stop automation failed: ${error.message}`);
+            }
+        }
+
+        async function runTask(taskName) {
+            try {
+                addLog('INFO', `Running task: ${taskName}...`);
+                const response = await fetch(`/api/automation/run-task/${taskName}`, { method: 'POST' });
+                const data = await response.json();
+                const logType = data.status === 'success' ? 'SUCCESS' : 'ERROR';
+                addLog(logType, `Task ${taskName}: ${data.message}`);
+                updateDashboard();
+            } catch (error) {
+                addLog('ERROR', `Task ${taskName} failed: ${error.message}`);
+            }
+        }
+
+        async function generateReport() {
+            try {
+                addLog('INFO', 'Generating system report...');
+                const response = await fetch('/api/automation/report');
+                const data = await response.json();
+                addLog('SUCCESS', 'System report generated successfully');
+                // Could show report in modal here
+    } catch (error) {
+                addLog('ERROR', `Report generation failed: ${error.message}`);
+            }
+        }
+
+        // Add log entry
+        function addLog(level, message) {
+            const logContainer = document.getElementById('live-logs');
+            const timestamp = new Date().toLocaleTimeString();
+            const colors = {
+                'INFO': '#00ff00',
+                'SUCCESS': '#00ff88',
+                'WARNING': '#ffaa00',
+                'ERROR': '#ff4444'
+            };
+            
+            const logEntry = document.createElement('div');
+            logEntry.style.color = colors[level] || '#00ff00';
+            logEntry.innerHTML = `[${timestamp}] [${level}] ${message}`;
+            
+            logContainer.appendChild(logEntry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+            
+            // Keep only last 100 log entries
+            if (logContainer.children.length > 100) {
+                logContainer.removeChild(logContainer.firstChild);
+            }
+        }
+
+        // Start live updates
+        function startLiveUpdates() {
+            // Update every 10 seconds
+            setInterval(updateDashboard, 10000);
+            
+            // Add random log entries for demo (remove in production)
+            setInterval(() => {
+                const demoLogs = [
+                    'System heartbeat OK',
+                    'Scheduled task check completed',
+                    'Data collection in progress',
+                    'ML model performance within limits',
+                    'Health check passed'
+                ];
+                const randomLog = demoLogs[Math.floor(Math.random() * demoLogs.length)];
+                addLog('INFO', randomLog);
+            }, 15000);
+        }
+
+        // Initialize everything when page loads
+        window.onload = function() {
+            // Initialize WebSocket first
+            initializeWebSocket();
+            
+            // Load initial dashboard data
+            updateDashboard();
+            
+            // Start live updates (reduced frequency with WebSocket)
+            // Update every 30 seconds instead of 10
+            setInterval(() => {
+                updateDashboard();
+                updateRecentTasks(); // Recent tasks'ı da güncelle
+            }, 15000); // Her 15 saniyede bir
+            
+            addLog('INFO', '🚀 BIST Dashboard initialized with WebSocket support');
+            
+            // Initialize simulation monitoring
+            checkSimulationStatus();
+            setInterval(checkSimulationStatus, 30000); // Check every 30 seconds
+        }
+
+        // ==========================================
+        // PAPER TRADING SIMULATION FUNCTIONS
+        // ==========================================
+        
+        let currentSimulationId = null;
+        
+        // Start new simulation
+        async function startSimulation() {
+            const tradeAmountInput = document.getElementById('trade-amount');
+            const durationSelect = document.getElementById('simulation-duration');
+            const startBtn = document.getElementById('start-simulation-btn');
+            const stopBtn = document.getElementById('stop-simulation-btn');
+            
+            const tradeAmount = parseFloat(tradeAmountInput.value) || 10000;
+            const durationHours = parseInt(durationSelect.value) || 48;
+            
+            try {
+                startBtn.disabled = true;
+                startBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Starting...';
+                
+                const response = await fetch('/api/simulation/start', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        initial_balance: 100000,  // Unlimited budget
+                        trade_amount: tradeAmount,  // Parametrik trade amount
+                        duration_hours: durationHours,
+                        session_name: `AI Test ${tradeAmount}₺/signal ${durationHours}h - ${new Date().toLocaleDateString()}`
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    currentSimulationId = data.session.id;
+                    startBtn.disabled = true;
+                    stopBtn.disabled = false;
+                    
+                    updateSimulationUI(data.session);
+                    addLog('SUCCESS', `✅ Simulation started: ID ${currentSimulationId}`);
+                } else {
+                    throw new Error(data.message);
+                }
+                
+            } catch (error) {
+                addLog('ERROR', `❌ Simulation start failed: ${error.message}`);
+                alert('Simulation start failed: ' + error.message);
+            } finally {
+                startBtn.disabled = false;
+                startBtn.innerHTML = '<i class="fas fa-play me-2"></i>Start 48h Test';
+            }
+        }
+        
+        // Stop current simulation
+        async function stopSimulation() {
+            if (!currentSimulationId) return;
+            
+            const stopBtn = document.getElementById('stop-simulation-btn');
+            
+            try {
+                stopBtn.disabled = true;
+                stopBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Stopping...';
+                
+                const response = await fetch(`/api/simulation/${currentSimulationId}/stop`, {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    updateSimulationUI(data.session);
+                    addLog('INFO', `🛑 Simulation stopped: ID ${currentSimulationId}`);
+                    
+                    document.getElementById('start-simulation-btn').disabled = false;
+                    stopBtn.disabled = true;
+                } else {
+                    throw new Error(data.message);
+                }
+                
+            } catch (error) {
+                addLog('ERROR', `❌ Simulation stop failed: ${error.message}`);
+                alert('Simulation stop failed: ' + error.message);
+            } finally {
+                stopBtn.innerHTML = '<i class="fas fa-stop me-2"></i>Stop Test';
+            }
+        }
+        
+        // Check simulation status
+        async function checkSimulationStatus() {
+            try {
+                // Get list of recent simulations
+                const response = await fetch('/api/simulation/list');
+                const data = await response.json();
+                
+                if (data.status === 'success' && data.sessions.length > 0) {
+                    // Find active simulation
+                    const activeSession = data.sessions.find(s => s.status === 'active');
+                    
+                    if (activeSession) {
+                        currentSimulationId = activeSession.id;
+                        await updateSimulationStatus(activeSession.id);
+                    } else {
+                        // No active simulation
+                        resetSimulationUI();
+                    }
+                }
+                
+            } catch (error) {
+                console.error('Simulation status check failed:', error);
+            }
+        }
+        
+        // Update simulation status with performance data
+        async function updateSimulationStatus(sessionId) {
+            try {
+                const response = await fetch(`/api/simulation/${sessionId}/status`);
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    const session = data.performance.session;
+                    updateSimulationUI(session);
+                    
+                    // Update trade stats if available
+                    if (data.performance.open_positions) {
+                        updateTradeStats(data.performance);
+                    }
+                }
+                
+            } catch (error) {
+                console.error('Simulation status update failed:', error);
+            }
+        }
+        
+        // Update simulation UI elements
+        function updateSimulationUI(session) {
+            document.getElementById('sim-status-text').textContent = 
+                session.status === 'active' ? 'Simulation Running' : 'Simulation Completed';
+            
+            document.getElementById('sim-details').textContent = 
+                `Started: ${new Date(session.start_time).toLocaleString()}`;
+            
+            document.getElementById('sim-balance').textContent = 
+                `₺${session.current_balance.toFixed(2)}`;
+            
+            const profitLoss = session.profit_loss_percentage;
+            const profitElement = document.getElementById('sim-profit');
+            profitElement.textContent = `${profitLoss >= 0 ? '+' : ''}${profitLoss.toFixed(2)}%`;
+            profitElement.style.color = profitLoss >= 0 ? '#28a745' : '#dc3545';
+            
+            // Update stats
+            document.getElementById('sim-trades').textContent = session.total_trades;
+            document.getElementById('sim-winrate').textContent = `${session.win_rate.toFixed(1)}%`;
+            
+            // Calculate runtime (use server-provided runtime_hours)
+            const runtimeHours = status.runtime_hours || 0;
+            let runtimeText;
+            if (runtimeHours < 1) {
+                const runtimeMinutes = Math.floor(runtimeHours * 60);
+                runtimeText = `${runtimeMinutes}m`;
+            } else {
+                runtimeText = `${runtimeHours.toFixed(1)}h`;
+            }
+            document.getElementById('sim-runtime').textContent = runtimeText;
+            
+            // Show stats panel
+            document.getElementById('simulation-stats').style.display = 'block';
+            
+            // Update button states
+            const isActive = session.status === 'active';
+            document.getElementById('start-simulation-btn').disabled = isActive;
+            document.getElementById('stop-simulation-btn').disabled = !isActive;
+        }
+        
+        // Reset simulation UI to default state
+        function resetSimulationUI() {
+            document.getElementById('sim-status-text').textContent = 'No Active Simulation';
+            document.getElementById('sim-details').textContent = 'Start a new simulation to test AI performance';
+            document.getElementById('sim-balance').textContent = '₺0.00';
+            document.getElementById('sim-profit').textContent = '±0%';
+            document.getElementById('sim-profit').style.color = '#6c757d';
+            
+            document.getElementById('simulation-stats').style.display = 'none';
+            
+            document.getElementById('start-simulation-btn').disabled = false;
+            document.getElementById('stop-simulation-btn').disabled = true;
+            
+            currentSimulationId = null;
+        }
+        
+        // View detailed simulation results
+        function viewSimulationDetails() {
+            if (currentSimulationId) {
+                // Open simulation details in new tab/modal
+                window.open(`/api/simulation/${currentSimulationId}/status`, '_blank');
+            } else {
+                alert('No active simulation to view');
+            }
+        }
+        
+        // Update trade statistics
+        function updateTradeStats(performance) {
+            const trades = performance.trades || [];
+            const recentTrades = trades.slice(0, 5); // Last 5 trades
+            
+            // Could add more detailed trade info here
+            console.log('Recent trades:', recentTrades);
+        }
+</script>
+</body>
+</html>

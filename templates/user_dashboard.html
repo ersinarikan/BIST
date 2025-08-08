@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BIST AI - Hisse Takip Sistemi</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <!-- Socket.IO -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    
+    <style>
+        body { 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            min-height: 100vh;
+        }
+        
+        .user-card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            transition: transform 0.3s ease;
+        }
+        
+        .user-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .signal-buy { color: #28a745; font-weight: bold; }
+        .signal-sell { color: #dc3545; font-weight: bold; }
+        .signal-hold { color: #6c757d; font-weight: bold; }
+        
+        .stock-item {
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 10px;
+            border-left: 5px solid #007bff;
+            transition: all 0.3s ease;
+        }
+        
+        .stock-item:hover {
+            background: rgba(0, 123, 255, 0.1);
+        }
+        
+        .price-change-positive { color: #28a745; }
+        .price-change-negative { color: #dc3545; }
+        
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            min-width: 300px;
+        }
+        
+        .connection-status {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 10px 15px;
+            border-radius: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+        }
+        
+        .stock-search-item {
+            transition: background-color 0.2s ease;
+        }
+        
+        .stock-search-item:hover {
+            background-color: rgba(0, 123, 255, 0.1);
+        }
+        
+        .stock-search-item:last-child {
+            border-bottom: none !important;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-chart-line me-2"></i>BIST AI Hisse Takip
+            </a>
+            <div class="navbar-nav ms-auto">
+                <span class="navbar-text me-3" id="user-info">
+                    <i class="fas fa-user me-2"></i>Kullanıcı
+                </span>
+                <span class="navbar-text" id="connection-status">
+                    <i class="fas fa-wifi text-warning"></i> Bağlanıyor...
+                </span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container mt-4">
+        <div class="row">
+            <!-- Stock Watchlist -->
+            <div class="col-lg-8">
+                <div class="user-card p-4 mb-4">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h4><i class="fas fa-star text-warning me-2"></i>Takip Edilen Hisseler</h4>
+                        <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addStockModal">
+                            <i class="fas fa-plus me-2"></i>Hisse Ekle
+                        </button>
+                    </div>
+                    <div id="watchlist">
+                        <!-- Takip edilen hisseler burada listelenecek -->
+                        <div class="text-center text-muted py-4">
+                            <i class="fas fa-chart-bar fa-3x mb-3"></i>
+                            <p>Henüz takip edilen hisse bulunmuyor.<br>Hisse eklemek için yukarıdaki butonu kullanın.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Signals & Notifications -->
+            <div class="col-lg-4">
+                <!-- Live Signals -->
+                <div class="user-card p-4 mb-4">
+                    <h5><i class="fas fa-bell text-primary me-2"></i>Canlı Sinyaller</h5>
+                    <div id="live-signals" class="mt-3">
+                        <div class="text-center text-muted py-3">
+                            <i class="fas fa-signal fa-2x mb-2"></i>
+                            <p>Sinyal bekleniyor...</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- System Status -->
+                <div class="user-card p-4">
+                    <h6><i class="fas fa-heartbeat text-success me-2"></i>Sistem Durumu</h6>
+                    <div class="mt-3">
+                        <div class="d-flex justify-content-between">
+                            <span>Bağlantı:</span>
+                            <span id="system-connection" class="text-warning">Kontrol ediliyor...</span>
+                        </div>
+                        <div class="d-flex justify-content-between mt-2">
+                            <span>Veri Akışı:</span>
+                            <span id="data-stream" class="text-warning">Kontrol ediliyor...</span>
+                        </div>
+                        <div class="d-flex justify-content-between mt-2">
+                            <span>Son Güncelleme:</span>
+                            <span id="last-update" class="text-muted">--:--:--</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Stock Modal -->
+    <div class="modal fade" id="addStockModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Hisse Ekle</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="stockSearch" class="form-label">Hisse Ara</label>
+                        <input type="text" class="form-control" id="stockSearch" 
+                               placeholder="Hisse kodu veya şirket adı girin..." 
+                               oninput="searchStocks(this.value)">
+                        <div class="form-text">Örn: THYAO, Türk Hava, bankacılık</div>
+                    </div>
+                    
+                    <!-- Search Results -->
+                    <div id="stockSearchResults" class="mb-3" style="display: none;">
+                        <label class="form-label">Arama Sonuçları:</label>
+                        <div class="border rounded p-2" style="max-height: 200px; overflow-y: auto;">
+                            <div id="searchResultsList">
+                                <!-- Arama sonuçları burada gösterilecek -->
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Selected Stock -->
+                    <div class="mb-3">
+                        <label for="selectedStock" class="form-label">Seçilen Hisse</label>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="selectedStock" 
+                                   placeholder="Yukarıdan hisse seçin veya kod girin" readonly>
+                            <button class="btn btn-outline-secondary" type="button" 
+                                    onclick="clearSelectedStock()">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="alertType" class="form-label">Sinyal Türü</label>
+                        <select class="form-select" id="alertType">
+                            <option value="all">Tüm Sinyaller</option>
+                            <option value="buy">Sadece Alım Sinyalleri</option>
+                            <option value="sell">Sadece Satım Sinyalleri</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">İptal</button>
+                    <button type="button" class="btn btn-primary" onclick="addStock()">Ekle</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Container -->
+    <div id="notification-container" class="notification"></div>
+    
+    <!-- Connection Status -->
+    <div class="connection-status" id="bottom-connection-status">
+        <i class="fas fa-wifi me-2"></i>Bağlantı durumu...
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+        // WebSocket bağlantısı
+        let socket = null;
+        let isConnected = false;
+        let watchedStocks = [];
+        const userId = 'user_' + Math.random().toString(36).substr(2, 9);
+
+        function initializeWebSocket() {
+            socket = io();
+            
+            socket.on('connect', function() {
+                isConnected = true;
+                console.log('🔗 WebSocket connected:', socket.id);
+                updateConnectionStatus(true);
+                
+                // Join user room
+                socket.emit('join_user', {user_id: userId});
+                
+                showNotification('success', '🔗 Sistem bağlantısı kuruldu');
+            });
+            
+            socket.on('disconnect', function() {
+                isConnected = false;
+                console.log('❌ WebSocket disconnected');
+                updateConnectionStatus(false);
+                showNotification('error', '❌ Bağlantı kesildi');
+            });
+            
+            socket.on('room_joined', function(data) {
+                console.log('👤 Joined room:', data.room);
+                // WebSocket bağlandıktan sonra mevcut hisselere subscribe ol
+                subscribeToAllStocks();
+            });
+            
+            socket.on('pattern_analysis', function(data) {
+                handlePatternUpdate(data);
+            });
+            
+            socket.on('subscription_confirmed', function(data) {
+                showNotification('success', `📈 ${data.symbol} takibe eklendi`);
+            });
+            
+            socket.on('error', function(data) {
+                showNotification('error', `❌ ${data.message}`);
+            });
+        }
+        
+        function updateConnectionStatus(connected) {
+            const elements = ['#connection-status', '#bottom-connection-status', '#system-connection'];
+            elements.forEach(selector => {
+                const el = document.querySelector(selector);
+                if (el) {
+                    if (connected) {
+                        el.innerHTML = '<i class="fas fa-wifi text-success me-2"></i>Bağlı';
+                        el.className = el.className.replace('text-warning text-danger', 'text-success');
+                    } else {
+                        el.innerHTML = '<i class="fas fa-wifi text-danger me-2"></i>Bağlantı yok';
+                        el.className = el.className.replace('text-warning text-success', 'text-danger');
+                    }
+                }
+            });
+            
+            // Update data stream status
+            const dataStreamEl = document.getElementById('data-stream');
+            if (dataStreamEl) {
+                dataStreamEl.innerHTML = connected ? 
+                    '<span class="text-success">Aktif</span>' : 
+                    '<span class="text-danger">Durduruldu</span>';
+            }
+        }
+        
+        function showNotification(type, message) {
+            const container = document.getElementById('notification-container');
+            const alertClass = type === 'success' ? 'alert-success' : 
+                              type === 'error' ? 'alert-danger' : 'alert-info';
+            
+            const notification = document.createElement('div');
+            notification.className = `alert ${alertClass} alert-dismissible fade show`;
+            notification.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            
+            container.appendChild(notification);
+            
+            // Auto remove after 5 seconds
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.remove();
+                }
+            }, 5000);
+        }
+        
+        // Stock Search Functions
+        let searchTimeout = null;
+        let selectedStockData = null;
+        
+        function searchStocks(query) {
+            // Clear previous timeout
+            if (searchTimeout) {
+                clearTimeout(searchTimeout);
+            }
+            
+            // Debounce search
+            searchTimeout = setTimeout(() => {
+                performSearch(query);
+            }, 300);
+        }
+        
+        async function performSearch(query) {
+            const resultsContainer = document.getElementById('stockSearchResults');
+            const resultsList = document.getElementById('searchResultsList');
+            
+            if (query.length < 2) {
+                resultsContainer.style.display = 'none';
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/stocks/search?q=${encodeURIComponent(query)}`);
+                const data = await response.json();
+                
+                if (data.status === 'success' && data.stocks.length > 0) {
+                    resultsList.innerHTML = data.stocks.map(stock => `
+                        <div class="stock-search-item p-2 border-bottom" 
+                             style="cursor: pointer;" 
+                             onclick="selectStock('${stock.symbol}', '${stock.name}', '${stock.sector}')">
+                            <div class="d-flex justify-content-between">
+                                <div>
+                                    <strong>${stock.symbol}</strong>
+                                    <div class="small text-muted">${stock.name}</div>
+                                </div>
+                                <div class="text-end">
+                                    <small class="badge bg-light text-dark">${stock.sector}</small>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('');
+                    
+                    resultsContainer.style.display = 'block';
+                } else {
+                    resultsList.innerHTML = '<div class="text-muted p-2">Sonuç bulunamadı</div>';
+                    resultsContainer.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Search error:', error);
+                resultsList.innerHTML = '<div class="text-danger p-2">Arama hatası</div>';
+                resultsContainer.style.display = 'block';
+            }
+        }
+        
+        function selectStock(symbol, name, sector) {
+            selectedStockData = { symbol, name, sector };
+            document.getElementById('selectedStock').value = `${symbol} - ${name}`;
+            document.getElementById('stockSearchResults').style.display = 'none';
+            document.getElementById('stockSearch').value = '';
+        }
+        
+        function clearSelectedStock() {
+            selectedStockData = null;
+            document.getElementById('selectedStock').value = '';
+        }
+
+        function addStock() {
+            const symbol = selectedStockData ? selectedStockData.symbol : 
+                          document.getElementById('selectedStock').value.split(' - ')[0] || 
+                          document.getElementById('stockSearch').value.toUpperCase().trim();
+            const alertType = document.getElementById('alertType').value;
+            
+            if (!symbol) {
+                showNotification('error', 'Lütfen hisse kodu girin');
+                return;
+            }
+            
+            if (watchedStocks.find(s => s.symbol === symbol)) {
+                showNotification('error', 'Bu hisse zaten takip ediliyor');
+                return;
+            }
+            
+            // Add to watchlist
+            watchedStocks.push({
+                symbol: symbol,
+                alertType: alertType,
+                addedAt: new Date().toISOString()
+            });
+            
+            // LocalStorage'a kaydet
+            saveWatchedStocks();
+            
+            // Subscribe to real-time updates
+            socket.emit('subscribe_stock', {symbol: symbol});
+            
+            // Request initial analysis
+            socket.emit('request_pattern_analysis', {symbol: symbol});
+            
+            // Update UI
+            renderWatchlist();
+            
+            // Close modal
+            const modal = bootstrap.Modal.getInstance(document.getElementById('addStockModal'));
+            modal.hide();
+            
+            // Clear form
+            document.getElementById('stockSearch').value = '';
+            document.getElementById('selectedStock').value = '';
+            document.getElementById('alertType').value = 'all';
+            document.getElementById('stockSearchResults').style.display = 'none';
+            selectedStockData = null;
+            
+            showNotification('success', `📈 ${symbol} takibe eklendi`);
+        }
+        
+        function removeStock(symbol) {
+            watchedStocks = watchedStocks.filter(s => s.symbol !== symbol);
+            
+            // LocalStorage'a kaydet
+            saveWatchedStocks();
+            
+            socket.emit('unsubscribe_stock', {symbol: symbol});
+            renderWatchlist();
+            showNotification('info', `📉 ${symbol} takipten çıkarıldı`);
+        }
+        
+        function renderWatchlist() {
+            const container = document.getElementById('watchlist');
+            
+            if (watchedStocks.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center text-muted py-4">
+                        <i class="fas fa-chart-bar fa-3x mb-3"></i>
+                        <p>Henüz takip edilen hisse bulunmuyor.<br>Hisse eklemek için yukarıdaki butonu kullanın.</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = watchedStocks.map(stock => `
+                <div class="stock-item" id="stock-${stock.symbol}">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <h6 class="mb-1">${stock.symbol}</h6>
+                            <small class="text-muted">Sinyal türü: ${stock.alertType === 'all' ? 'Tümü' : stock.alertType}</small>
+                        </div>
+                        <div class="text-end">
+                            <div id="price-${stock.symbol}" class="text-muted">Fiyat yükleniyor...</div>
+                            <div id="signal-${stock.symbol}" class="text-muted">Sinyal bekleniyor...</div>
+                            <button class="btn btn-sm btn-outline-danger mt-1" onclick="removeStock('${stock.symbol}')">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        function handlePatternUpdate(data) {
+            const symbol = data.symbol;
+            const analysis = data.data;
+            
+            // Update price
+            const priceEl = document.getElementById(`price-${symbol}`);
+            if (priceEl && analysis.current_price) {
+                priceEl.innerHTML = `₺${analysis.current_price}`;
+            }
+            
+            // Update signal
+            const signalEl = document.getElementById(`signal-${symbol}`);
+            if (signalEl && analysis.overall_signal) {
+                const signal = analysis.overall_signal.signal;
+                const confidence = Math.round(analysis.overall_signal.confidence * 100);
+                
+                let signalClass = '';
+                let signalIcon = '';
+                if (signal === 'BULLISH') {
+                    signalClass = 'signal-buy';
+                    signalIcon = 'fas fa-arrow-up';
+                } else if (signal === 'BEARISH') {
+                    signalClass = 'signal-sell';
+                    signalIcon = 'fas fa-arrow-down';
+                } else {
+                    signalClass = 'signal-hold';
+                    signalIcon = 'fas fa-minus';
+                }
+                
+                // Confidence açıklaması
+                let confidenceExplanation = '';
+                if (confidence >= 85) {
+                    confidenceExplanation = 'Tüm AI modelleri hemfikir - Çok güçlü sinyal';
+                } else if (confidence >= 70) {
+                    confidenceExplanation = 'Güçlü sinyal - Bazı karışık veriler var';
+                } else if (confidence >= 55) {
+                    confidenceExplanation = 'Zayıf sinyal - Dikkatli olun';
+                } else {
+                    confidenceExplanation = 'Çok zayıf sinyal - İşlem yapmayın';
+                }
+                
+                signalEl.innerHTML = `
+                    <span class="${signalClass}" data-bs-toggle="tooltip" data-bs-placement="top" 
+                          title="${confidenceExplanation}">
+                        <i class="${signalIcon} me-1"></i>${signal} (%${confidence})
+                        <i class="fas fa-info-circle ms-1 text-muted" style="font-size: 0.8em;"></i>
+                    </span>
+                `;
+                
+                // Tooltip'i yeniden initialize et
+                setTimeout(() => {
+                    const tooltipEl = signalEl.querySelector('[data-bs-toggle="tooltip"]');
+                    if (tooltipEl) {
+                        new bootstrap.Tooltip(tooltipEl);
+                    }
+                }, 100);
+                
+                // Show notification for strong signals
+                if (confidence > 70) {
+                    showNotification('info', `🎯 ${symbol}: ${signal} sinyali (%${confidence} güven)`);
+                }
+            }
+            
+            // Update last update time
+            document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+        }
+        
+        function loadWatchedStocks() {
+            console.log('🔄 loadWatchedStocks() called');
+            
+            // LocalStorage'dan kullanıcı hisselerini yükle
+            const savedStocks = localStorage.getItem('watchedStocks');
+            console.log('💾 Raw localStorage data:', savedStocks);
+            
+            if (savedStocks) {
+                try {
+                    const parsedStocks = JSON.parse(savedStocks);
+                    console.log('📂 Parsed stocks:', parsedStocks);
+                    
+                    // Mevcut stocks array'ini tamamen değiştir
+                    watchedStocks.length = 0; // Array'i temizle
+                    watchedStocks.push(...parsedStocks); // Yeni verileri ekle
+                    
+                    console.log('✅ Saved stocks loaded:', watchedStocks.length, watchedStocks);
+                } catch (e) {
+                    console.error('❌ Error loading saved stocks:', e);
+                    watchedStocks = [];
+                }
+            } else {
+                console.log('📭 No saved stocks found in localStorage');
+            }
+            
+            // Eğer hiç hisse yoksa demo hisseleri ekle
+            if (watchedStocks.length === 0) {
+                console.log('🆕 Initializing demo stocks...');
+                watchedStocks = [
+                    {symbol: 'THYAO', alertType: 'all', addedAt: new Date().toISOString()},
+                    {symbol: 'GARAN', alertType: 'all', addedAt: new Date().toISOString()},
+                    {symbol: 'AKBNK', alertType: 'all', addedAt: new Date().toISOString()}
+                ];
+                console.log('🆕 Demo stocks created, now saving...');
+                saveWatchedStocks(); // LocalStorage'a kaydet
+                console.log('🆕 Demo stocks initialized and saved:', watchedStocks.length);
+            } else {
+                // Eğer localStorage'dan yüklendiyse, tekrar kaydet (verification için)
+                console.log('💾 Re-saving loaded stocks for verification...');
+                saveWatchedStocks();
+            }
+            
+            console.log('🎯 Final watchedStocks:', watchedStocks);
+            renderWatchlist();
+        }
+        
+        function subscribeToAllStocks() {
+            // WebSocket bağlandıktan sonra tüm hisselere subscribe ol
+            if (socket && socket.connected) {
+                watchedStocks.forEach(stock => {
+                    socket.emit('subscribe_stock', {symbol: stock.symbol});
+                    socket.emit('request_pattern_analysis', {symbol: stock.symbol});
+                });
+                console.log('📊 Subscribed to', watchedStocks.length, 'stocks');
+            }
+        }
+        
+        // Global saveWatchedStocks function - defined early for safety
+        function saveWatchedStocks() {
+            try {
+                const dataToSave = JSON.stringify(watchedStocks);
+                console.log('💾 Saving to localStorage:', dataToSave);
+                localStorage.setItem('watchedStocks', dataToSave);
+                
+                // Verify save
+                const saved = localStorage.getItem('watchedStocks');
+                console.log('✅ Verification - saved data:', saved);
+                console.log('✅ Stocks saved successfully:', watchedStocks.length, 'items');
+                return true;
+            } catch (e) {
+                console.error('❌ Error saving stocks:', e);
+                return false;
+            }
+        }
+        
+        // Make globally accessible
+        window.saveWatchedStocks = saveWatchedStocks;
+        
+        // Initialize when page loads - Multiple event listeners for safety
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('🚀 DOMContentLoaded fired');
+            initializeApp();
+        });
+        
+        window.addEventListener('load', function() {
+            console.log('🚀 Window load fired');
+            initializeApp();
+        });
+        
+        // Backup: immediate execution if DOM is already ready
+        if (document.readyState === 'loading') {
+            console.log('📄 DOM is loading...');
+        } else {
+            console.log('📄 DOM already loaded, initializing immediately');
+            setTimeout(initializeApp, 100);
+        }
+        
+        function initializeApp() {
+            console.log('🔥 initializeApp() called');
+            
+            // Prevent double initialization
+            if (window.appInitialized) {
+                console.log('⚠️ App already initialized, skipping...');
+                return;
+            }
+            window.appInitialized = true;
+            
+            // İlk olarak localStorage'dan hisseleri yükle
+            loadWatchedStocks();
+            
+            // Sonra WebSocket'i başlat
+            initializeWebSocket();
+            
+            // Initialize Bootstrap tooltips
+            setTimeout(() => {
+                var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+                var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+                    return new bootstrap.Tooltip(tooltipTriggerEl);
+                });
+                console.log('✅ Tooltips initialized');
+            }, 1000);
+            
+            // Update timestamp every second
+            setInterval(() => {
+                const now = new Date();
+                const timeEl = document.getElementById('last-update');
+                if (timeEl) {
+                    timeEl.textContent = now.toLocaleTimeString();
+                }
+            }, 1000);
+            
+            console.log('✅ App initialization complete');
+        }
+    </script>
+</body>
+</html>
