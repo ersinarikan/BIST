@@ -93,6 +93,8 @@
                 <span class="navbar-text me-3" id="user-info">
                     <i class="fas fa-user me-2"></i>Kullanıcı
                 </span>
+                <a class="nav-link" href="/login"><i class="fas fa-right-to-bracket me-1"></i>Giriş</a>
+                <a class="nav-link" href="/logout"><i class="fas fa-right-from-bracket me-1"></i>Çıkış</a>
                 <span class="navbar-text" id="connection-status">
                     <i class="fas fa-wifi text-warning"></i> Bağlanıyor...
                 </span>
@@ -117,6 +119,39 @@
                         <div class="text-center text-muted py-4">
                             <i class="fas fa-chart-bar fa-3x mb-3"></i>
                             <p>Henüz takip edilen hisse bulunmuyor.<br>Hisse eklemek için yukarıdaki butonu kullanın.</p>
+                        </div>
+                    </div>
+                    <div class="mt-3">
+                        <div class="row g-2 align-items-center">
+                            <div class="col-6 col-md-3">
+                                <label class="form-label small mb-0">Sırala (Tahmin Ufku)</label>
+                                <select id="pred-sort-horizon" class="form-select form-select-sm">
+                                    <option value="1d">1 Gün</option>
+                                    <option value="3d">3 Gün</option>
+                                    <option value="7d" selected>7 Gün</option>
+                                    <option value="14d">14 Gün</option>
+                                    <option value="30d">30 Gün</option>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-2">
+                                <label class="form-label small mb-0">Sıra</label>
+                                <select id="pred-sort-order" class="form-select form-select-sm">
+                                    <option value="desc" selected>Azalan</option>
+                                    <option value="asc">Artan</option>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label small mb-0">Yön Filtresi</label>
+                                <select id="pred-dir" class="form-select form-select-sm">
+                                    <option value="all" selected>Hepsi</option>
+                                    <option value="bullish">Yükseliş</option>
+                                    <option value="bearish">Düşüş</option>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <label class="form-label small mb-0">Min değişim % (mutlak): <span id="pred-min-abs-val">0</span></label>
+                                <input type="range" min="0" max="50" step="1" value="0" id="pred-min-abs" class="form-range">
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -151,6 +186,24 @@
                             <span>Son Güncelleme:</span>
                             <span id="last-update" class="text-muted">--:--:--</span>
                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Predictions Panel (hidden: moved to per-card predictions) -->
+        <div class="row mt-3" style="display:none" id="predictions-panel">
+            <div class="col-12">
+                <div class="user-card p-4">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h5 class="mb-0"><i class="fas fa-brain text-info me-2"></i>Tahminler <small class="text-muted">(<span id="pred-current-symbol">-</span>)</small></h5>
+                        <div id="pred-control" style="display:none">
+                            <input type="text" id="predictionSymbol" class="form-control form-control-sm d-inline-block" style="width:140px" placeholder="Örn: THYAO">
+                            <button class="btn btn-sm btn-primary ms-2" onclick="loadPredictions()">Yükle</button>
+                        </div>
+                    </div>
+                    <div id="predictions" class="row g-3">
+                        <!-- horizon cards will render here -->
                     </div>
                 </div>
             </div>
@@ -257,6 +310,11 @@
                 console.log('👤 Joined room:', data.room);
                 // WebSocket bağlandıktan sonra mevcut hisselere subscribe ol
                 subscribeToAllStocks();
+                try {
+                    if (watchedStocks && watchedStocks.length > 0) {
+                        loadPredictions(watchedStocks[0].symbol);
+                    }
+                } catch (e) { /* ignore */ }
             });
             
             socket.on('pattern_analysis', function(data) {
@@ -388,7 +446,7 @@
             document.getElementById('selectedStock').value = '';
         }
 
-        function addStock() {
+        async function addStock() {
             const symbol = selectedStockData ? selectedStockData.symbol : 
                           document.getElementById('selectedStock').value.split(' - ')[0] || 
                           document.getElementById('stockSearch').value.toUpperCase().trim();
@@ -404,23 +462,25 @@
                 return;
             }
             
-            // Add to watchlist
-            watchedStocks.push({
-                symbol: symbol,
-                alertType: alertType,
-                addedAt: new Date().toISOString()
-            });
-            
-            // LocalStorage'a kaydet
+            // DB-backed watchlist kaydı
+            try {
+                const res = await fetch('/api/watchlist', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ symbol, alert_enabled: alertType !== 'sell', notes: '' })
+                });
+                const payload = await res.json();
+                if (payload.status !== 'success') {
+                    showNotification('error', 'Watchlist kaydı başarısız: ' + (payload.error || ''));
+                }
+            } catch (e) { /* ignore */ }
+
+            // Local UI güncelle
+            watchedStocks.push({ symbol, alertType, addedAt: new Date().toISOString() });
             saveWatchedStocks();
-            
-            // Subscribe to real-time updates
-            socket.emit('subscribe_stock', {symbol: symbol});
-            
-            // Request initial analysis
-            socket.emit('request_pattern_analysis', {symbol: symbol});
-            
-            // Update UI
+            socket.emit('subscribe_stock', {symbol});
+            socket.emit('request_pattern_analysis', {symbol});
             renderWatchlist();
             
             // Close modal
@@ -437,20 +497,28 @@
             showNotification('success', `📈 ${symbol} takibe eklendi`);
         }
         
-        function removeStock(symbol) {
+        async function removeStock(symbol) {
             watchedStocks = watchedStocks.filter(s => s.symbol !== symbol);
-            
-            // LocalStorage'a kaydet
             saveWatchedStocks();
-            
-            socket.emit('unsubscribe_stock', {symbol: symbol});
+            try { await fetch(`/api/watchlist/${encodeURIComponent(symbol)}`, { method: 'DELETE', credentials: 'include' }); } catch (e) { /* ignore */ }
+            socket.emit('unsubscribe_stock', {symbol});
             renderWatchlist();
             showNotification('info', `📉 ${symbol} takipten çıkarıldı`);
         }
         
-        function renderWatchlist() {
+        async function renderWatchlist() {
             const container = document.getElementById('watchlist');
             
+            // Sunucudan güncel watchlist'i çek ve UI'ı senkronize et
+            try {
+                const res = await fetch('/api/watchlist');
+                const data = await res.json();
+                if (data.status === 'success') {
+                    watchedStocks = (data.watchlist || []).map(w => ({ symbol: w.symbol, alertType: 'all', addedAt: w.created_at }));
+                    saveWatchedStocks();
+                }
+            } catch (e) { /* ignore */ }
+
             if (watchedStocks.length === 0) {
                 container.innerHTML = `
                     <div class="text-center text-muted py-4">
@@ -476,8 +544,21 @@
                             </button>
                         </div>
                     </div>
+                    <div id="pred-${stock.symbol}" class="mt-2 small text-muted">
+                        Tahminler yükleniyor...
+                    </div>
                 </div>
             `).join('');
+
+            // İlk sembol için tahminleri otomatik yükle
+            try {
+                if (watchedStocks.length > 0) {
+                    loadPredictions(watchedStocks[0].symbol);
+                }
+            } catch (e) { /* ignore */ }
+
+            // Watchlist tahminlerini toplu getir ve öğelere işle
+            try { updateWatchlistPredictions(); } catch (e) { /* ignore */ }
         }
         
         function handlePatternUpdate(data) {
@@ -545,6 +626,9 @@
             
             // Update last update time
             document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+
+            // Load predictions for this symbol as soon as a fresh analysis arrives
+            try { loadPredictions(symbol); } catch (e) { /* ignore */ }
         }
         
         function loadWatchedStocks() {
@@ -629,6 +713,12 @@
         document.addEventListener('DOMContentLoaded', function() {
             console.log('🚀 DOMContentLoaded fired');
             initializeApp();
+            // Bind controls
+            ['pred-sort-horizon','pred-sort-order','pred-dir','pred-min-abs'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('change', () => { try { updateWatchlistPredictions(); } catch (e) {} });
+                if (el && el.type === 'range') el.addEventListener('input', () => { try { updateWatchlistPredictions(); } catch (e) {} });
+            });
         });
         
         window.addEventListener('load', function() {
@@ -679,6 +769,145 @@
             }, 1000);
             
             console.log('✅ App initialization complete');
+
+            // Default predictions for first watched or THYAO
+            setTimeout(() => {
+                const sym = (watchedStocks[0] && watchedStocks[0].symbol) || 'THYAO';
+                try {
+                    document.getElementById('predictionSymbol').value = sym;
+                    document.getElementById('pred-current-symbol').textContent = sym;
+                } catch (e) {}
+                // Panel gizlendi; per-card tahminler kullanılıyor
+            }, 500);
+        }
+
+        async function loadPredictions(symbolOpt) {
+            const sym = (symbolOpt || document.getElementById('predictionSymbol').value || '').toUpperCase().trim();
+            if (!sym) return;
+            try {
+                const res = await fetch(`/api/user/predictions/${encodeURIComponent(sym)}`);
+                const data = await res.json();
+                try { console.log('🔮 Predictions payload', data); } catch (e) {}
+                renderPredictions(data);
+                const span = document.getElementById('pred-current-symbol');
+                if (span) span.textContent = sym;
+                document.getElementById('predictionSymbol').value = sym;
+            } catch (e) {
+                showNotification('error', 'Tahminler yüklenemedi');
+                try { console.error('Predictions fetch error', e); } catch (err) {}
+            }
+        }
+
+        function renderPredictions(payload) {
+            const container = document.getElementById('predictions');
+            if (!payload || payload.status !== 'success') {
+                container.innerHTML = '<div class="text-danger">Tahmin verisi yok</div>';
+                return;
+            }
+            const horizons = [1,3,7,14,30];
+            const preds = payload.predictions || {};
+            const currentPrice = payload.current_price || 0;
+
+            const toPct = (p) => {
+                if (typeof p !== 'number') return '-';
+                const pct = ((p - currentPrice) / (currentPrice || 1)) * 100;
+                const sign = pct >= 0 ? '+' : '';
+                return `${sign}${pct.toFixed(1)}%`;
+            };
+
+            const card = (label, value, pct) => `
+                <div class="col-6 col-md-4 col-lg-2">
+                    <div class="p-3 text-center" style="background:#f8f9fa;border:1px solid #e9ecef;border-radius:10px;">
+                        <div class="small text-muted">${label}</div>
+                        <div class="h5 mb-1">${typeof value==='number' ? '₺'+value.toFixed(2) : '-'}</div>
+                        <div class="small ${pct.startsWith('+')? 'text-success':'text-danger'}">${pct}</div>
+                    </div>
+                </div>`;
+
+            let html = '';
+            horizons.forEach(h => {
+                // Şema uyumluluğu: enhanced/simple/basics farklı dönebilir → common accessors
+                const key = `${h}d`;
+                let price = undefined;
+                if (typeof preds[key] === 'number') price = preds[key];
+                else if (preds[key] && typeof preds[key].price === 'number') price = preds[key].price;
+                else if (preds[key] && typeof preds[key].prediction === 'number') price = preds[key].prediction;
+                else if (typeof preds[h] === 'number') price = preds[h];
+                html += card(`${h} Gün`, price, toPct(price));
+            });
+
+            container.innerHTML = html;
+            try { console.log('✅ Predictions rendered for', payload.symbol, payload.predictions); } catch (e) {}
+        }
+
+        // Fallback: REST ile pattern analizi çek ve UI'ı güncelle
+        async function fetchPattern(symbol) {
+            try {
+                const res = await fetch(`/api/pattern-analysis/${encodeURIComponent(symbol)}`);
+                const data = await res.json();
+                handlePatternUpdate({ symbol, data });
+            } catch (e) { /* ignore */ }
+        }
+
+        async function updateWatchlistPredictions() {
+            try {
+                const res = await fetch('/api/watchlist/predictions', { credentials: 'include' });
+                const data = await res.json();
+                if (!data || data.status !== 'success') return;
+                const items = data.items || [];
+                const toPct = (p, base) => {
+                    if (typeof p !== 'number' || typeof base !== 'number' || base === 0) return NaN;
+                    const pct = ((p - base) / base) * 100;
+                    return pct;
+                };
+                // Controls
+                const horizon = (document.getElementById('pred-sort-horizon')?.value || '7d').toLowerCase();
+                const order = (document.getElementById('pred-sort-order')?.value || 'desc').toLowerCase();
+                const dir = (document.getElementById('pred-dir')?.value || 'all').toLowerCase();
+                const minAbs = parseFloat(document.getElementById('pred-min-abs')?.value || '0') || 0;
+                const minAbsLabel = document.getElementById('pred-min-abs-val');
+                if (minAbsLabel) minAbsLabel.textContent = String(minAbs);
+
+                // Compute deltas and filter
+                const decorated = items.map(it => {
+                    const base = it.current_price;
+                    const preds = it.predictions || {};
+                    const val = typeof preds[horizon] === 'number' ? preds[horizon] : NaN;
+                    const pct = toPct(val, base);
+                    return { ...it, _val: val, _pct: pct };
+                }).filter(it => {
+                    if (isNaN(it._pct)) return false;
+                    const absok = Math.abs(it._pct) >= minAbs;
+                    const dirok = (dir === 'all') || (dir === 'bullish' && it._pct >= 0) || (dir === 'bearish' && it._pct < 0);
+                    return absok && dirok;
+                }).sort((a,b) => {
+                    const d = (b._pct - a._pct);
+                    return order === 'asc' ? -d : d;
+                });
+
+                // Render under each item
+                decorated.forEach(it => {
+                    const el = document.getElementById(`pred-${it.symbol}`);
+                    if (!el) return;
+                    const pctStr = isNaN(it._pct) ? '-' : `${it._pct>=0?'+':''}${it._pct.toFixed(1)}%`;
+                    const cls = isNaN(it._pct) ? 'text-muted' : (it._pct>=0 ? 'text-success' : 'text-danger');
+                    const p1 = it.predictions?.['1d'];
+                    const p3 = it.predictions?.['3d'];
+                    const p7 = it.predictions?.['7d'];
+                    const p14 = it.predictions?.['14d'];
+                    const p30 = it.predictions?.['30d'];
+                    const f = (v)=> typeof v==='number'? '₺'+v.toFixed(2): '-';
+                    el.innerHTML = `
+                        <span class="me-3">1G: <strong>${f(p1)}</strong></span>
+                        <span class="me-3">3G: <strong>${f(p3)}</strong></span>
+                        <span class="me-3">7G: <strong>${f(p7)}</strong></span>
+                        <span class="me-3">14G: <strong>${f(p14)}</strong></span>
+                        <span class="me-3">30G: <strong>${f(p30)}</strong></span>
+                        <span class="ms-2 ${cls}">Seçili ufuk ${horizon.toUpperCase()}: ${pctStr}</span>
+                        <span class="badge bg-light text-dark ms-2">${(it.model||'none').toUpperCase()}</span>
+                    `;
+                });
+            } catch (e) { /* ignore */ }
         }
     </script>
 </body>

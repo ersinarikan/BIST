@@ -9,6 +9,8 @@ import shutil
 import requests
 from datetime import datetime
 from advanced_collector import AdvancedBISTCollector
+import os
+import pandas as pd
 
 # ML System imports
 try:
@@ -49,8 +51,13 @@ class BISTSchedulerDaemon:
         self.is_running = False
         self.scheduler_thread = None
         
-        # WebSocket broadcasting
-        self.websocket_url = "http://localhost:5000"
+        # WebSocket/API base URL (from env or config)
+        try:
+            from config import config as _cfg
+            default_api = getattr(_cfg['default'], 'BIST_API_URL', 'http://localhost:5000')
+        except Exception:
+            default_api = 'http://localhost:5000'
+        self.websocket_url = os.getenv('BIST_API_URL', default_api)
         
         # Write current PID to file
         self._write_pid()
@@ -58,6 +65,125 @@ class BISTSchedulerDaemon:
         # Graceful shutdown
         signal.signal(signal.SIGTERM, self.signal_handler)
         signal.signal(signal.SIGINT, self.signal_handler)
+
+    def _get_stock_dataframe(self, symbol: str):
+        """Fetch OHLCV dataframe for a stock from PostgreSQL (lower-case columns)."""
+        try:
+            from app import app
+            with app.app_context():
+                from models import Stock, StockPrice
+                stock = Stock.query.filter_by(symbol=symbol).first()
+                if not stock:
+                    return None
+                prices = StockPrice.query.filter_by(stock_id=stock.id)\
+                    .order_by(StockPrice.date.asc()).all()
+                if not prices:
+                    return None
+                rows = []
+                for p in prices:
+                    rows.append({
+                        'date': p.date,
+                        'open': float(p.open_price),
+                        'high': float(p.high_price),
+                        'low': float(p.low_price),
+                        'close': float(p.close_price),
+                        'volume': int(p.volume),
+                    })
+                df = pd.DataFrame(rows)
+                if df.empty:
+                    return None
+                df['date'] = pd.to_datetime(df['date'])
+                df.set_index('date', inplace=True)
+                return df
+        except Exception as e:
+            logging.getLogger(__name__).error(f"DF fetch error {symbol}: {e}")
+            return None
+
+    def run_bulk_predictions_all(self) -> dict | bool:
+        """Train and generate 1/3/7/14/30d predictions for ALL active stocks.
+
+        - Uses basic ML for all symbols by default (fast, on-the-fly training if needed)
+        - If ENABLE_ENHANCED_ML=true, also trains enhanced models and adds ENH predictions
+        - Persists results to /opt/bist-pattern/logs/ml_bulk_predictions.json
+        """
+        try:
+            self.log_and_broadcast('INFO', '🤖 ML bulk predictions starting...', 'ml')
+            from app import app
+            with app.app_context():
+                from models import Stock
+                symbols = [s.symbol for s in Stock.query.filter_by(is_active=True).all()]
+
+            # ML systems (lazy import)
+            basic = None
+            try:
+                from ml_prediction_system import get_ml_prediction_system
+                basic = get_ml_prediction_system()
+            except Exception:
+                basic = None
+
+            use_enhanced = str(os.getenv('ENABLE_ENHANCED_ML', 'false')).lower() in ('1', 'true', 'yes')
+            enhanced = None
+            if use_enhanced:
+                try:
+                    from enhanced_ml_system import get_enhanced_ml_system
+                    enhanced = get_enhanced_ml_system()
+                except Exception:
+                    enhanced = None
+
+            results: dict = {'timestamp': datetime.now().isoformat(), 'predictions': {}}
+            processed = 0
+            for sym in symbols:
+                try:
+                    df = self.run_safe_get_df(sym)
+                    if df is None or len(df) < 50:
+                        continue
+                    out_sym: dict = {}
+                    # Basic predictions (always)
+                    if basic is not None:
+                        try:
+                            preds = basic.predict_prices(sym, df, None) or {}
+                            out_sym['basic'] = preds
+                        except Exception:
+                            pass
+                    # Enhanced (optional)
+                    if enhanced is not None and len(df) >= 200:
+                        try:
+                            enhanced.train_enhanced_models(sym, df)
+                            ep = enhanced.predict_enhanced(sym, df) or {}
+                            out_sym['enhanced'] = ep
+                        except Exception:
+                            pass
+                    if out_sym:
+                        results['predictions'][sym] = out_sym
+                        processed += 1
+                    # polite small sleep to reduce DB/CPU spikes
+                    time.sleep(0.01)
+                except Exception:
+                    continue
+
+            # Persist
+            try:
+                log_dir = os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+                os.makedirs(log_dir, exist_ok=True)
+                fpath = os.path.join(log_dir, 'ml_bulk_predictions.json')
+                import json
+                with open(fpath, 'w') as wf:
+                    json.dump(results, wf)
+            except Exception:
+                pass
+
+            self.log_and_broadcast('SUCCESS', f'✅ ML bulk predictions completed: {processed} symbols', 'ml')
+            return results
+        except Exception as e:
+            self.log_and_broadcast('ERROR', f'ML bulk predictions error: {e}', 'ml')
+            return False
+
+    # Safe wrapper for dataframe fetch to keep loop robust
+    def run_safe_get_df(self, symbol: str):
+        try:
+            return self._get_stock_dataframe(symbol)
+        except Exception:
+            return None
 
     def _check_singleton(self):
         """PID file kontrolü ile singleton pattern"""
@@ -108,10 +234,46 @@ class BISTSchedulerDaemon:
                 'category': category
             }
             # Not: Bu basit bir HTTP request, production'da internal message queue kullanılabilir
+            headers = {}
+            try:
+                from config import config
+                token = config['default'].INTERNAL_API_TOKEN
+                if token:
+                    headers['X-Internal-Token'] = token
+            except Exception:
+                pass
             requests.post(f"{self.websocket_url}/api/internal/broadcast-log", 
-                         json=data, timeout=2)
+                          json=data, headers=headers, timeout=2)
         except Exception as e:
             # Broadcast hataları sessizce geç
+            pass
+
+    def _update_pipeline_status(self, phase: str, state: str, details: dict | None = None):
+        """Persist pipeline phase status to a JSON file for dashboard/REST usage."""
+        try:
+            import json
+            from datetime import datetime
+            status_path = os.path.join(os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs'), 'pipeline_status.json')
+            payload = {
+                'timestamp': datetime.now().isoformat(),
+                'phase': phase,
+                'state': state,
+                'details': details or {}
+            }
+            # Append-friendly structure
+            data = {'history': []}
+            if os.path.exists(status_path):
+                try:
+                    with open(status_path, 'r') as rf:
+                        data = json.load(rf) or data
+                except Exception:
+                    data = {'history': []}
+            data.setdefault('history', []).append(payload)
+            # Keep last 200 entries
+            data['history'] = data['history'][-200:]
+            with open(status_path, 'w') as wf:
+                json.dump(data, wf)
+        except Exception:
             pass
     
     def log_and_broadcast(self, level, message, category='scheduler'):
@@ -150,12 +312,28 @@ class BISTSchedulerDaemon:
     def collect_all_data(self):
         """Tüm hisseler için veri toplama"""
         logger.info("📊 Tam veri toplama başlatılıyor...")
+        self.log_and_broadcast('INFO', '📊 Tam veri toplama başlatılıyor...', 'collector')
         try:
-            result = self.collector.collect_all_stocks_parallel(batch_size=25)
+            self._update_pipeline_status('data_collection', 'start', {})
+            # batch_size=None => collector config'ten (COLLECTOR_BATCH_SIZE) gelsin
+            result = self.collector.collect_all_stocks_parallel(batch_size=None)
             logger.info(f"✅ Tam toplama tamamlandı: {result['success_count']} başarılı, {result['total_records']} kayıt")
+            try:
+                self._update_pipeline_status('data_collection', 'end', result or {})
+            except Exception:
+                pass
+            try:
+                self.log_and_broadcast('SUCCESS', f"✅ Veri toplama tamamlandı: {result.get('success_count',0)} başarılı, {result.get('total_records',0)} kayıt", 'collector')
+            except Exception:
+                pass
             return result
         except Exception as e:
             logger.error(f"❌ Tam toplama hatası: {e}")
+            self._update_pipeline_status('data_collection', 'error', {'error': str(e)})
+            try:
+                self.log_and_broadcast('ERROR', f"❌ Veri toplama hatası: {e}", 'collector')
+            except Exception:
+                pass
             return None
 
     def check_model_performance(self, symbol):
@@ -319,6 +497,15 @@ class BISTSchedulerDaemon:
                 emoji = status_emoji.get(system_status['status'], '❓')
                 logger.info(f"  {emoji} {system_name}: {system_status['status']}")
             
+            # Write status to a file for the API to read
+            try:
+                import json
+                status_path = os.path.join(os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs'), 'health_status.json')
+                with open(status_path, 'w') as f:
+                    json.dump(health_status, f)
+            except Exception as e:
+                logger.error(f"❌ Sağlık durumu dosyaya yazılamadı: {e}")
+
             return health_status
             
         except Exception as e:
@@ -328,14 +515,17 @@ class BISTSchedulerDaemon:
     def run_ai_analysis_batch(self):
         """Toplu AI analizi - Her 30 dakikada TÜM hisseler için 5 katmanlı analiz"""
         try:
-            logger.info("🧠 Toplu AI analizi başlatılıyor - TÜM 606 HISSE...")
+            self.log_and_broadcast('INFO', "🧠 Toplu AI analizi başlatılıyor - TÜM hisseler...", 'ai_analysis')
+            self._update_pipeline_status('ai_analysis', 'start', {})
             
-            # TÜM aktif hisseleri database'den al
-            from models import Stock
-            all_stocks = Stock.query.filter_by(is_active=True).all()
+            # TÜM aktif hisseleri database'den al (Flask app context gerekli)
+            from app import app
+            with app.app_context():
+                from models import Stock
+                all_stocks = Stock.query.filter_by(is_active=True).all()
             all_symbols = [stock.symbol for stock in all_stocks]
             
-            logger.info(f"📊 Analiz edilecek hisse sayısı: {len(all_symbols)}")
+            self.log_and_broadcast('INFO', f"📊 Analiz edilecek hisse sayısı: {len(all_symbols)}", 'ai_analysis')
             
             analyzed_count = 0
             signal_count = 0
@@ -350,7 +540,7 @@ class BISTSchedulerDaemon:
                 end_idx = min(start_idx + batch_size, len(all_symbols))
                 batch_symbols = all_symbols[start_idx:end_idx]
                 
-                logger.info(f"🔄 Batch {batch_num + 1}/{total_batches}: {len(batch_symbols)} hisse analiz ediliyor...")
+                self.log_and_broadcast('INFO', f"🔄 Batch {batch_num + 1}/{total_batches}: {len(batch_symbols)} hisse analiz ediliyor...", 'ai_analysis')
                 
                 for symbol in batch_symbols:
                     try:
@@ -359,7 +549,7 @@ class BISTSchedulerDaemon:
                             from pattern_detector import HybridPatternDetector
                             detector = HybridPatternDetector()
                         except ImportError:
-                            logger.warning("⚠️ Pattern detector import edilemedi")
+                            self.log_and_broadcast('WARNING', "⚠️ Pattern detector import edilemedi", 'ai_analysis')
                             failed_count += 1
                             continue
                         
@@ -376,31 +566,33 @@ class BISTSchedulerDaemon:
                             
                             if confidence >= 0.6 and signal_type in ['BULLISH', 'BEARISH']:
                                 signal_count += 1
-                                logger.info(f"🎯 Sinyal: {symbol} - {signal_type} ({confidence:.1%})")
+                                self.log_and_broadcast('INFO', f"🎯 Sinyal: {symbol} - {signal_type} ({confidence:.0%})", 'ai_analysis')
                                 
                                 # Kullanıcılara watchlist bazlı sinyal gönder
                                 try:
                                     self.broadcast_signal_to_users(symbol, analysis_result)
                                 except Exception as e:
-                                    logger.warning(f"User signal broadcast hatası: {e}")
+                                    self.log_and_broadcast('WARNING', f"User signal broadcast hatası: {e}", 'ai_analysis')
                                 
                                 # Simulation engine'e sinyal gönder (eğer aktif simulation varsa)
                                 try:
                                     self.process_simulation_signal(symbol, analysis_result)
                                 except Exception as e:
-                                    logger.warning(f"Simulation signal hatası: {e}")
+                                    self.log_and_broadcast('WARNING', f"Simulation signal hatası: {e}", 'ai_analysis')
                         else:
                             failed_count += 1
                         
                     except Exception as e:
-                        logger.error(f"❌ {symbol} analiz hatası: {e}")
+                        self.log_and_broadcast('ERROR', f"❌ {symbol} analiz hatası: {e}", 'ai_analysis')
                         failed_count += 1
                 
                 # Batch tamamlandı, kısa ara ver
                 import time
                 time.sleep(2)  # 2 saniye ara
             
-            logger.info(f"✅ AI analizi tamamlandı: {analyzed_count}/{len(all_symbols)} başarılı, {signal_count} sinyal, {failed_count} hata")
+            summary = {'analyzed': analyzed_count, 'total': len(all_symbols), 'signals': signal_count, 'failed': failed_count}
+            self._update_pipeline_status('ai_analysis', 'end', summary)
+            self.log_and_broadcast('SUCCESS', f"✅ AI analizi tamamlandı: {analyzed_count}/{len(all_symbols)} başarılı, {signal_count} sinyal, {failed_count} hata", 'ai_analysis')
             
             return {
                 'analyzed': analyzed_count,
@@ -413,27 +605,53 @@ class BISTSchedulerDaemon:
             }
             
         except Exception as e:
-            logger.error(f"❌ Toplu AI analizi hatası: {e}")
+            self._update_pipeline_status('ai_analysis', 'error', {'error': str(e)})
+            self.log_and_broadcast('ERROR', f"❌ Toplu AI analizi hatası: {e}", 'ai_analysis')
             return False
     
     def process_simulation_signal(self, symbol: str, analysis_result: dict):
         """Aktif simulation'lara sinyal gönder"""
         try:
             import requests
-            
+            # Aktif session'lar için app context gerekli
+            from app import app
+            with app.app_context():
+                from models import SimulationSession, Watchlist, Stock
+                active_sessions = SimulationSession.query.filter_by(status='active').all()
+
             overall_signal = analysis_result.get('overall_signal', {})
             confidence = overall_signal.get('confidence', 0)
             signal_type = overall_signal.get('signal', 'NEUTRAL')
             
             # Minimum confidence kontrolü
             if confidence >= 0.6 and signal_type in ['BULLISH', 'BEARISH']:
-                # Simulation engine'e sinyal gönder
-                requests.post('http://localhost:5000/api/simulation/process-signal',
-                             json={
-                                 'symbol': symbol,
-                                 'signal_data': analysis_result
-                             }, timeout=2)
-                logger.info(f"📡 Simulation sinyali gönderildi: {symbol} - {signal_type}")
+                # Her aktif session için simulation engine'e sinyal gönder
+                headers = {}
+                try:
+                    from config import config
+                    token = config['default'].INTERNAL_API_TOKEN
+                    if token:
+                        headers['X-Internal-Token'] = token
+                except Exception:
+                    pass
+                for session in (active_sessions or []):
+                    # Watchlist filtresi: kullanıcı watchlist'inde yoksa atla
+                    try:
+                        with app.app_context():
+                            stock_obj = Stock.query.filter_by(symbol=symbol).first()
+                            user_watch = Watchlist.query.filter_by(user_id=session.user_id, stock_id=stock_obj.id).first() if stock_obj else None
+                        if user_watch is None:
+                            # Kullanıcının watchlist'i yoksa veya sembol ekli değilse bu sinyali atla
+                            continue
+                    except Exception:
+                        pass
+                    requests.post('http://localhost:5000/api/simulation/process-signal',
+                                  json={
+                                      'session_id': session.id,
+                                      'symbol': symbol,
+                                      'signal_data': analysis_result
+                                  }, headers=headers, timeout=2)
+                logger.info(f"📡 Simulation sinyali gönderildi: {symbol} - {signal_type} (sessions: {len(active_sessions or [])})")
                              
         except Exception as e:
             logger.warning(f"Simulation signal hatası: {e}")
@@ -441,17 +659,17 @@ class BISTSchedulerDaemon:
     def broadcast_signal_to_users(self, symbol: str, analysis_result: dict):
         """Kullanıcılara watchlist bazlı sinyal gönder"""
         try:
-            from models import Watchlist, User, Stock
-            
-            # Bu hisseyi watchlist'inde olan kullanıcıları bul
-            stock = Stock.query.filter_by(symbol=symbol).first()
-            if not stock:
-                return
-            
-            watchlist_users = Watchlist.query.filter_by(
-                stock_id=stock.id,
-                alert_enabled=True
-            ).all()
+            from app import app
+            with app.app_context():
+                from models import Watchlist, Stock
+                # Bu hisseyi watchlist'inde olan kullanıcıları bul
+                stock = Stock.query.filter_by(symbol=symbol).first()
+                if not stock:
+                    return
+                watchlist_users = Watchlist.query.filter_by(
+                    stock_id=stock.id,
+                    alert_enabled=True
+                ).all()
             
             if not watchlist_users:
                 return
@@ -476,11 +694,19 @@ class BISTSchedulerDaemon:
                     
                     # WebSocket ile kullanıcıya özel oda
                     import requests
+                    headers = {}
+                    try:
+                        from config import config
+                        token = config['default'].INTERNAL_API_TOKEN
+                        if token:
+                            headers['X-Internal-Token'] = token
+                    except Exception:
+                        pass
                     requests.post('http://localhost:5000/api/internal/broadcast-user-signal',
-                                 json={
-                                     'user_id': user_id,
-                                     'signal_data': signal_data
-                                 }, timeout=2)
+                                  json={
+                                      'user_id': user_id,
+                                      'signal_data': signal_data
+                                  }, headers=headers, timeout=2)
                     
                     logger.info(f"📡 User {user_id} için {symbol} sinyali gönderildi")
                     
@@ -509,27 +735,79 @@ class BISTSchedulerDaemon:
 
         logger.info("🚀 BIST Scheduler Daemon başlatılıyor...")
 
-                    # Zamanlama kuralları - Real-time trading için optimize edildi
-            schedule.every(15).minutes.do(self.collect_all_data)       # Her 15 dakikada TÜM hisseler
-            schedule.every().day.at("09:30").do(self.collect_all_data)  # Borsa açılış - tüm hisseler
-            schedule.every().day.at("12:00").do(self.collect_all_data)  # Öğle - tüm hisseler
-            schedule.every().day.at("18:00").do(self.collect_all_data)  # Akşam - tüm hisseler
-            schedule.every().sunday.at("02:00").do(self.collect_all_data)    # Hafta sonu bakım
-            
-            # AI Analysis jobs - 5 Katmanlı Analiz TÜM HİSSELER İÇİN
-            schedule.every(30).minutes.do(self.run_ai_analysis_batch)  # Her 30 dakikada TÜM 606 hisse
-            
-            # ML Training jobs
-            schedule.every().day.at("20:00").do(self.auto_model_retraining)  # Günlük model eğitimi
-            
-            # Health Check jobs
-            schedule.every(15).minutes.do(self.system_health_check)  # Her 15 dakikada health check
+        # Zamanlama kuralları veya sürekli döngü modu
+        PIPELINE_MODE = os.getenv('PIPELINE_MODE', 'SCHEDULED').upper()
+        # Sık periyotlarda: öncelikli semboller → ardından analiz (hafif pipeline)
+        def run_pipeline_priority():
+            try:
+                self.collect_priority_data()
+            finally:
+                try:
+                    self.run_ai_analysis_batch()
+                except Exception:
+                    pass
+            # Bulk ML predictions after AI analysis
+            try:
+                self.run_bulk_predictions_all()
+            except Exception:
+                pass
+        
+        # Gün içinde 3 kez ve pazar gecesi: tam koleksiyon → ardından analiz (tam pipeline)
+        def run_pipeline_full():
+            try:
+                self.collect_all_data()
+            finally:
+                try:
+                    self.run_ai_analysis_batch()
+                except Exception:
+                    pass
+                # Bulk ML predictions after AI analysis
+                try:
+                    self.run_bulk_predictions_all()
+                except Exception:
+                    pass
+        
+        if PIPELINE_MODE == 'CONTINUOUS_FULL':
+            self.log_and_broadcast('INFO', '🌀 Continuous full pipeline mode', 'scheduler')
+        else:
+            # Öncelik pipeline'ı 30 dakikada bir
+            schedule.every(30).minutes.do(run_pipeline_priority)
+            # Tam pipeline belirli saatlerde
+            schedule.every().day.at("09:30").do(run_pipeline_full)
+            schedule.every().day.at("12:00").do(run_pipeline_full)
+            schedule.every().day.at("18:00").do(run_pipeline_full)
+            schedule.every().sunday.at("02:00").do(run_pipeline_full)
+        
+        # ML Training jobs
+        schedule.every().day.at("20:00").do(self.auto_model_retraining)  # Günlük model eğitimi
+        
+        # Health Check jobs
+        schedule.every(15).minutes.do(self.system_health_check)  # Her 15 dakikada health check
 
-        # İlk veriyi topla - TÜM hisseler
-        logger.info("🔄 İlk veri toplama işlemi - TÜM 606 hisse...")
-        self.collect_all_data()
+        # İlk başlangıç: mod'a göre tetikleme
+        if PIPELINE_MODE == 'CONTINUOUS_FULL':
+            # RUNNING flag'i thread başlamadan önce set edilmeli; aksi halde döngü hiç çalışmaz
+            self.is_running = True
+            def run_continuous_full():
+                sleep_seconds = int(float(os.getenv('FULL_CYCLE_SLEEP_SECONDS', '0')))
+                while self.is_running:
+                    try:
+                        run_pipeline_full()
+                    except Exception as e:
+                        self.log_and_broadcast('ERROR', f'Continuous pipeline error: {e}', 'scheduler')
+                    if sleep_seconds > 0:
+                        time.sleep(sleep_seconds)
+            # Ayrı bir pipeline thread'i tutalım; schedule thread'i ile karışmasın
+            self.pipeline_thread = threading.Thread(target=run_continuous_full, daemon=True)
+            self.pipeline_thread.start()
+        else:
+            logger.info("🔄 İlk pipeline: Öncelikli hisseler + analiz")
+            try:
+                run_pipeline_priority()
+            except Exception:
+                pass
 
-        self.is_running = True
+        # Schedule çalıştıran thread
         self.scheduler_thread = threading.Thread(target=self.run_scheduler, daemon=True)
         self.scheduler_thread.start()
         

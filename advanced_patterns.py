@@ -1,336 +1,162 @@
 """
-Gelişmiş Teknik Analiz Formasyonları
-Head & Shoulders, Cup & Handle, Double Top/Bottom, Fibonacci
+Advanced Pattern Detector
+- Simple heuristics for classic patterns: DOUBLE_TOP, DOUBLE_BOTTOM, HEAD_AND_SHOULDERS, INVERSE_HEAD_AND_SHOULDERS
+- Designed to be lightweight and safe in preprod
 """
+
+from datetime import datetime
+from typing import List, Dict
 
 import numpy as np
 import pandas as pd
-from scipy.signal import find_peaks, find_peaks_cwt
-from scipy.stats import linregress
-import logging
 
-logger = logging.getLogger(__name__)
 
 class AdvancedPatternDetector:
-    def __init__(self):
-        self.min_data_points = 30  # Minimum veri noktası
-        
-    def detect_head_and_shoulders(self, highs, lows, closes, dates=None):
-        """Head and Shoulders (OBO) pattern detection"""
-        if len(highs) < self.min_data_points:
-            return None
-            
+    """Lightweight detector providing a few common TA patterns.
+
+    Methods return a list of pattern dicts with at least:
+      - pattern: str
+      - signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
+      - confidence: float (0..1)
+      - source: 'ADVANCED_TA'
+    """
+
+    def __init__(self) -> None:
+        pass
+
+    # ------------- Public API -------------
+    def analyze_all_patterns(self, data: pd.DataFrame) -> List[Dict]:
         try:
-            # Peak detection (tepeler)
-            peaks, peak_properties = find_peaks(highs, distance=5, prominence=np.std(highs)*0.5)
-            
-            if len(peaks) < 3:
-                return None
-            
-            # Son 3 önemli tepe
-            recent_peaks = peaks[-3:] if len(peaks) >= 3 else peaks
-            peak_values = highs[recent_peaks]
-            peak_dates = recent_peaks
-            
-            # OBO pattern kontrolleri
-            left_shoulder = peak_values[0]
-            head = peak_values[1] 
-            right_shoulder = peak_values[2]
-            
-            # Head en yüksek olmalı
-            if head <= max(left_shoulder, right_shoulder):
-                return None
-                
-            # Shoulder'lar birbirine yakın olmalı (±5% tolerance)
-            shoulder_diff = abs(left_shoulder - right_shoulder) / max(left_shoulder, right_shoulder)
-            if shoulder_diff > 0.15:  # %15'ten fazla fark varsa geçersiz
-                return None
-            
-            # Head, shoulder'lardan en az %8 yüksek olmalı
-            min_shoulder = min(left_shoulder, right_shoulder)
-            head_advantage = (head - min_shoulder) / min_shoulder
-            if head_advantage < 0.08:
-                return None
-            
-            # Neckline (boyun çizgisi) hesaplama
-            # İki shoulder arasındaki minimum değerleri bul
-            left_valley_idx = np.argmin(lows[recent_peaks[0]:recent_peaks[1]]) + recent_peaks[0]
-            right_valley_idx = np.argmin(lows[recent_peaks[1]:recent_peaks[2]]) + recent_peaks[1]
-            
-            neckline_level = (lows[left_valley_idx] + lows[right_valley_idx]) / 2
-            current_price = closes[-1]
-            
-            # Pattern strength hesaplama
-            pattern_height = head - neckline_level
-            price_position = (current_price - neckline_level) / pattern_height
-            
-            # Sinyal belirleme
-            signal = "BEARISH"  # OBO genelde düşüş sinyali
-            confidence = min(0.9, 0.6 + head_advantage)  # %60-90 arası güven
-            
-            # Neckline kırılımı kontrolü
-            if current_price < neckline_level * 0.98:  # %2 tolerance ile kırılım
-                signal_strength = 85 + (head_advantage * 100)
-            else:
-                signal_strength = 65 + (head_advantage * 50)
-            
-            return {
-                'pattern': 'HEAD_AND_SHOULDERS',
-                'signal': signal,
-                'confidence': confidence,
-                'strength': min(100, signal_strength),
-                'neckline': neckline_level,
-                'head_price': head,
-                'left_shoulder': left_shoulder,
-                'right_shoulder': right_shoulder,
-                'current_position': price_position,
-                'target_price': neckline_level - pattern_height,  # Projeksiyon
-                'stop_loss': head * 1.02,
-                'pattern_points': {
-                    'peaks': recent_peaks.tolist(),
-                    'valleys': [left_valley_idx, right_valley_idx]
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"Head & Shoulders detection error: {e}")
-            return None
-    
-    def detect_double_top(self, highs, lows, closes):
-        """Double Top (Çift Tepe) pattern detection"""
-        if len(highs) < self.min_data_points:
-            return None
-            
-        try:
-            peaks, _ = find_peaks(highs, distance=10, prominence=np.std(highs)*0.3)
-            
-            if len(peaks) < 2:
-                return None
-            
-            # Son iki tepe
-            recent_peaks = peaks[-2:]
-            peak1_price = highs[recent_peaks[0]]
-            peak2_price = highs[recent_peaks[1]]
-            
-            # Tepeler birbirine yakın olmalı (±3% tolerance)
-            price_diff = abs(peak1_price - peak2_price) / max(peak1_price, peak2_price)
-            if price_diff > 0.05:
-                return None
-            
-            # Aradaki valle (dip)
-            valley_start = recent_peaks[0]
-            valley_end = recent_peaks[1]
-            valley_idx = np.argmin(lows[valley_start:valley_end]) + valley_start
-            valley_price = lows[valley_idx]
-            
-            # Valle, tepelerden en az %5 düşük olmalı
-            min_peak = min(peak1_price, peak2_price)
-            valley_depth = (min_peak - valley_price) / min_peak
-            if valley_depth < 0.05:
-                return None
-            
-            current_price = closes[-1]
-            resistance_level = (peak1_price + peak2_price) / 2
-            
-            return {
-                'pattern': 'DOUBLE_TOP',
-                'signal': 'BEARISH',
-                'confidence': 0.7 + (valley_depth * 2),
-                'strength': 70 + (valley_depth * 200),
-                'resistance': resistance_level,
-                'support': valley_price,
-                'target_price': valley_price - (resistance_level - valley_price),
-                'stop_loss': resistance_level * 1.02,
-                'pattern_points': {
-                    'peaks': recent_peaks.tolist(),
-                    'valley': valley_idx
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"Double Top detection error: {e}")
-            return None
-            
-    def detect_cup_and_handle(self, highs, lows, closes):
-        """Cup and Handle pattern detection"""
-        if len(closes) < 50:  # Cup için daha fazla veri gerek
-            return None
-            
-        try:
-            # Cup detection (U şekli)
-            mid_point = len(closes) // 2
-            left_high = np.max(highs[:mid_point//2])
-            right_high = np.max(highs[-mid_point//2:])
-            cup_bottom = np.min(lows[mid_point//2:-mid_point//2])
-            
-            # Cup depth (en az %12 olmalı)
-            cup_high = (left_high + right_high) / 2
-            cup_depth = (cup_high - cup_bottom) / cup_high
-            if cup_depth < 0.12:
-                return None
-            
-            # Handle detection (son %25'lik kısım)
-            handle_start = int(len(closes) * 0.75)
-            handle_data = closes[handle_start:]
-            
-            if len(handle_data) < 10:
-                return None
-            
-            handle_high = np.max(handle_data)
-            handle_low = np.min(handle_data)
-            handle_depth = (handle_high - handle_low) / handle_high
-            
-            # Handle depth %1-8 arası olmalı
-            if handle_depth < 0.01 or handle_depth > 0.08:
-                return None
-            
-            current_price = closes[-1]
-            breakout_level = handle_high * 1.01  # %1 breakout
-            
-            signal = "BULLISH" if current_price > breakout_level else "NEUTRAL"
-            
-            return {
-                'pattern': 'CUP_AND_HANDLE',
-                'signal': signal,
-                'confidence': 0.8 if signal == "BULLISH" else 0.6,
-                'strength': 80 if signal == "BULLISH" else 60,
-                'cup_depth': cup_depth,
-                'handle_depth': handle_depth,
-                'breakout_level': breakout_level,
-                'target_price': breakout_level + (cup_high - cup_bottom),
-                'stop_loss': handle_low * 0.98
-            }
-            
-        except Exception as e:
-            logger.error(f"Cup and Handle detection error: {e}")
-            return None
-    
-    def detect_ascending_triangle(self, highs, lows, closes):
-        """Ascending Triangle (Yükselen Üçgen) pattern"""
-        if len(closes) < self.min_data_points:
-            return None
-            
-        try:
-            # Resistance line (yatay direnc)
-            peaks, _ = find_peaks(highs, distance=5)
-            if len(peaks) < 3:
-                return None
-            
-            recent_peaks = peaks[-3:]
-            peak_prices = highs[recent_peaks]
-            
-            # Peaks arasındaki varyasyon %2'den az olmalı (yatay direnç)
-            peak_std = np.std(peak_prices) / np.mean(peak_prices)
-            if peak_std > 0.02:
-                return None
-            
-            # Support line (yükselen destek)
-            valleys, _ = find_peaks(-lows, distance=5)
-            if len(valleys) < 2:
-                return None
-            
-            recent_valleys = valleys[-2:]
-            valley_prices = lows[recent_valleys]
-            valley_trend = (valley_prices[-1] - valley_prices[0]) / valley_prices[0]
-            
-            # Destek çizgisi yükseliyorsa
-            if valley_trend < 0.02:  # En az %2 yükseliş
-                return None
-            
-            resistance_level = np.mean(peak_prices)
-            current_price = closes[-1]
-            
-            # Breakout kontrolü
-            breakout = current_price > resistance_level * 1.005  # %0.5 breakout
-            
-            return {
-                'pattern': 'ASCENDING_TRIANGLE',
-                'signal': 'BULLISH' if breakout else 'NEUTRAL',
-                'confidence': 0.75 if breakout else 0.6,
-                'strength': 75 if breakout else 60,
-                'resistance': resistance_level,
-                'support_trend': valley_trend,
-                'target_price': resistance_level * (1 + valley_trend),
-                'stop_loss': recent_valleys[-1] * 0.98
-            }
-            
-        except Exception as e:
-            logger.error(f"Ascending Triangle detection error: {e}")
-            return None
-    
-    def fibonacci_retracement(self, highs, lows, trend_direction="up"):
-        """Fibonacci Retracement levels"""
-        try:
-            if trend_direction == "up":
-                swing_low = np.min(lows)
-                swing_high = np.max(highs)
-            else:
-                swing_high = np.min(lows)
-                swing_low = np.max(highs)
-            
-            diff = swing_high - swing_low
-            
-            fib_levels = {
-                '0%': swing_high,
-                '23.6%': swing_high - (0.236 * diff),
-                '38.2%': swing_high - (0.382 * diff),
-                '50%': swing_high - (0.5 * diff),
-                '61.8%': swing_high - (0.618 * diff),
-                '78.6%': swing_high - (0.786 * diff),
-                '100%': swing_low
-            }
-            
-            return fib_levels
-            
-        except Exception as e:
-            logger.error(f"Fibonacci calculation error: {e}")
-            return None
-    
-    def analyze_all_patterns(self, data):
-        """Tüm pattern'leri analiz et"""
-        if len(data) < self.min_data_points:
-            return []
-        
-        try:
-            highs = np.array(data['high'])
-            lows = np.array(data['low'])
-            closes = np.array(data['close'])
-            
-            patterns = []
-            
-            # Head & Shoulders
-            hs_pattern = self.detect_head_and_shoulders(highs, lows, closes)
-            if hs_pattern:
-                patterns.append(hs_pattern)
-            
-            # Double Top
-            dt_pattern = self.detect_double_top(highs, lows, closes)
-            if dt_pattern:
-                patterns.append(dt_pattern)
-            
-            # Cup & Handle
-            ch_pattern = self.detect_cup_and_handle(highs, lows, closes)
-            if ch_pattern:
-                patterns.append(ch_pattern)
-            
-            # Ascending Triangle
-            at_pattern = self.detect_ascending_triangle(highs, lows, closes)
-            if at_pattern:
-                patterns.append(at_pattern)
-            
-            # Fibonacci levels
-            fib_up = self.fibonacci_retracement(highs, lows, "up")
-            fib_down = self.fibonacci_retracement(highs, lows, "down")
-            
-            if fib_up:
-                patterns.append({
-                    'pattern': 'FIBONACCI_UP',
-                    'levels': fib_up,
-                    'current_price': closes[-1]
-                })
-            
+            df = self._normalize_ohlcv(data)
+            if len(df) < 30:
+                return []
+
+            patterns: List[Dict] = []
+            patterns.extend(self._detect_double_top_bottom(df))
+            patterns.extend(self._detect_head_shoulders(df))
+
+            # Cap list size
+            if len(patterns) > 8:
+                patterns = sorted(patterns, key=lambda p: p.get('confidence', 0), reverse=True)[:8]
             return patterns
-            
-        except Exception as e:
-            logger.error(f"Pattern analysis error: {e}")
+        except Exception:
             return []
+
+    # ------------- Internal helpers -------------
+    def _normalize_ohlcv(self, data: pd.DataFrame) -> pd.DataFrame:
+        df = data.copy()
+        # Accept both Open/High/Low/Close/Volume and lower-case variants
+        rename_map = {}
+        if 'Open' in df.columns: rename_map['Open'] = 'open'
+        if 'High' in df.columns: rename_map['High'] = 'high'
+        if 'Low' in df.columns: rename_map['Low'] = 'low'
+        if 'Close' in df.columns: rename_map['Close'] = 'close'
+        if 'Volume' in df.columns: rename_map['Volume'] = 'volume'
+        df = df.rename(columns=rename_map)
+        return df
+
+    def _detect_double_top_bottom(self, df: pd.DataFrame) -> List[Dict]:
+        # Very simple peak/trough detection using rolling windows
+        prices = df['close'].values.astype(float)
+        window = 5
+        patterns: List[Dict] = []
+
+        # Find local maxima/minima
+        highs = (df['high'].rolling(window).max()).values
+        lows = (df['low'].rolling(window).min()).values
+
+        try:
+            # Double Top: two highs within small range separated by a dip
+            # Heuristic: last 30 bars
+            last = min(len(df), 60)
+            segment = prices[-last:]
+            if len(segment) >= 20:
+                max_idx = np.argmax(segment)
+                max_val = segment[max_idx]
+                # Search second top before or after
+                tolerance = max_val * 0.01  # 1%
+                for j in range(max(0, max_idx - 15), min(len(segment), max_idx + 15)):
+                    if j == max_idx:
+                        continue
+                    if abs(segment[j] - max_val) <= tolerance:
+                        # ensure a dip between peaks
+                        left, right = sorted([j, max_idx])
+                        valley = np.min(segment[left:right]) if right - left > 2 else max_val
+                        if valley < max_val * 0.985:  # at least 1.5% dip
+                            conf = min(0.9, 0.6 + float((max_val - valley) / max_val) * 5)
+                            patterns.append({
+                                'pattern': 'DOUBLE_TOP',
+                                'signal': 'BEARISH',
+                                'confidence': float(conf),
+                                'source': 'ADVANCED_TA'
+                            })
+                            break
+                # Double Bottom: mirror logic
+                min_idx = np.argmin(segment)
+                min_val = segment[min_idx]
+                tolerance_b = min_val * 0.01 if min_val != 0 else 0.01
+                for j in range(max(0, min_idx - 15), min(len(segment), min_idx + 15)):
+                    if j == min_idx:
+                        continue
+                    if abs(segment[j] - min_val) <= tolerance_b:
+                        left, right = sorted([j, min_idx])
+                        peak = np.max(segment[left:right]) if right - left > 2 else min_val
+                        if peak > min_val * 1.015:
+                            conf = min(0.9, 0.6 + float((peak - min_val) / (abs(min_val) + 1e-8)) * 5)
+                            patterns.append({
+                                'pattern': 'DOUBLE_BOTTOM',
+                                'signal': 'BULLISH',
+                                'confidence': float(conf),
+                                'source': 'ADVANCED_TA'
+                            })
+                            break
+        except Exception:
+            pass
+
+        return patterns
+
+    def _detect_head_shoulders(self, df: pd.DataFrame) -> List[Dict]:
+        patterns: List[Dict] = []
+        close = df['close'].values.astype(float)
+        if len(close) < 30:
+            return patterns
+        try:
+            # Extremely simple H&S detection using three-peak shape on last ~50 bars
+            segment = close[-50:]
+            peaks_idx = self._find_peaks(segment, distance=3)
+            if len(peaks_idx) >= 3:
+                # pick three consecutive peaks
+                for i in range(len(peaks_idx) - 2):
+                    a, b, c = peaks_idx[i], peaks_idx[i + 1], peaks_idx[i + 2]
+                    left, head, right = segment[a], segment[b], segment[c]
+                    if head > left * 1.01 and head > right * 1.01 and abs(left - right) / max(left, 1e-8) < 0.03:
+                        # Head & Shoulders
+                        conf = min(0.9, 0.55 + float((head - (left + right) / 2) / (head + 1e-8)) * 5)
+                        patterns.append({
+                            'pattern': 'HEAD_AND_SHOULDERS',
+                            'signal': 'BEARISH',
+                            'confidence': float(conf),
+                            'source': 'ADVANCED_TA'
+                        })
+                        break
+                    if head < left * 0.99 and head < right * 0.99 and abs(left - right) / max(left, 1e-8) < 0.03:
+                        # Inverse H&S
+                        conf = min(0.9, 0.55 + float(((left + right) / 2 - head) / (abs(head) + 1e-8)) * 5)
+                        patterns.append({
+                            'pattern': 'INVERSE_HEAD_AND_SHOULDERS',
+                            'signal': 'BULLISH',
+                            'confidence': float(conf),
+                            'source': 'ADVANCED_TA'
+                        })
+                        break
+        except Exception:
+            pass
+        return patterns
+            
+    def _find_peaks(self, array: np.ndarray, distance: int = 3) -> List[int]:
+        idx: List[int] = []
+        for i in range(distance, len(array) - distance):
+            window = array[i - distance:i + distance + 1]
+            if array[i] == window.max() and (window.argmax() == distance):
+                idx.append(i)
+        return idx

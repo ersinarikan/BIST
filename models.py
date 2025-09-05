@@ -38,6 +38,9 @@ class User(UserMixin, db.Model):
     is_premium = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_login = db.Column(db.DateTime, nullable=True)
+    # RBAC / Security
+    role = db.Column(db.String(20), nullable=False, default='user', index=True)
+    last_login_ip = db.Column(db.String(45), nullable=True)
     
     # Settings
     timezone = db.Column(db.String(50), default='Europe/Istanbul')
@@ -88,6 +91,7 @@ class User(UserMixin, db.Model):
             'provider': self.provider,
             'email_verified': self.email_verified,
             'is_premium': self.is_premium,
+            'role': self.role,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'last_login': self.last_login.isoformat() if self.last_login else None
         }
@@ -300,7 +304,7 @@ class SimulationTrade(db.Model):
             'id': self.id,
             'symbol': self.stock.symbol,
             'trade_type': self.trade_type,
-            'quantity': self.quantity,
+            'quantity': float(self.quantity),
             'price': float(self.price),
             'total_amount': float(self.total_amount),
             'signal_source': self.signal_source,

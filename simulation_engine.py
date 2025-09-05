@@ -70,7 +70,13 @@ class SimulationEngine:
             confidence = overall_signal.get('confidence', 0)
             signal_type = overall_signal.get('signal', 'NEUTRAL')
             
-            if confidence < 0.6:  # %60'ın altındaki sinyalleri ignore et
+            # Minimum güven eşiği (env ile ayarlanabilir)
+            try:
+                import os
+                min_conf = float(os.getenv('MIN_SIGNAL_CONFIDENCE', '0.6'))
+            except Exception:
+                min_conf = 0.6
+            if confidence < min_conf:  # altındaki sinyalleri ignore et
                 logger.info(f"📊 Düşük confidence signal ignore edildi: {symbol} - {confidence:.2%}")
                 return None
             
@@ -312,8 +318,8 @@ class SimulationEngine:
                 'profit_loss': float(trade.profit_loss) if trade.profit_loss else None
             }
             
-            # Admin room'a broadcast et
-            socketio.emit('simulation_trade', trade_data, room='admin_room')
+            # Admin room'a broadcast et (uygulamada 'admin' kullanılıyor)
+            socketio.emit('simulation_trade', trade_data, room='admin')
             logger.info(f"📡 Trade broadcast sent: {trade.trade_type} {stock.symbol}")
             
         except Exception as e:

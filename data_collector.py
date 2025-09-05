@@ -123,7 +123,10 @@ class BISTDataCollector:
             return None
     
     def save_to_database(self, symbol_data):
-        """Veriyi veritabanına kaydet"""
+        """Veriyi veritabanına kaydet
+        - Tarih zaten varsa ve bugün ise upsert (gün içi tazeleme) uygula
+        - Aksi halde yeni kayıt ekle
+        """
         try:
             if not DATABASE_AVAILABLE:
                 logger.warning("Veritabanı mevcut değil, dosyaya kaydediliyor")
@@ -148,19 +151,21 @@ class BISTDataCollector:
                     db.session.add(stock)
                     db.session.commit()
                 
-                # Mevcut fiyat verilerini kontrol et
-                existing_dates = {
-                    price.date for price in 
-                    StockPrice.query.filter_by(stock_id=stock.id).all()
-                }
+                # Mevcut fiyat verilerini kontrol et (date -> record)
+                existing_map = {}
+                for price in StockPrice.query.filter_by(stock_id=stock.id).all():
+                    existing_map[price.date] = price
                 
-                                # Yeni verileri ekle
+                # Yeni/updated verileri ekle
                 new_count = 0
+                update_count = 0
+                today = datetime.now().date()
                 for data_point in symbol_data:
-                    if data_point['date'] not in existing_dates:
+                    dp_date = data_point['date']
+                    if dp_date not in existing_map:
                         price = StockPrice(
                             stock_id=stock.id,
-                            date=data_point['date'],
+                            date=dp_date,
                             open_price=data_point['open'],
                             high_price=data_point['high'],
                             low_price=data_point['low'],
@@ -169,11 +174,21 @@ class BISTDataCollector:
                         )
                         db.session.add(price)
                         new_count += 1
+                    else:
+                        # Gün içi upsert: bugün için mevcut kaydı güncelle
+                        if dp_date == today:
+                            rec = existing_map[dp_date]
+                            rec.open_price = data_point['open']
+                            rec.high_price = data_point['high']
+                            rec.low_price = data_point['low']
+                            rec.close_price = data_point['close']
+                            rec.volume = data_point['volume']
+                            update_count += 1
 
                 # Batch commit - performans için tek seferde commit
-                if new_count > 0:
+                if new_count > 0 or update_count > 0:
                     db.session.commit()
-                    logger.info(f"💾 {symbol}: {new_count} yeni veri veritabanına kaydedildi")
+                    logger.info(f"💾 {symbol}: {new_count} yeni, {update_count} güncellendi")
                 else:
                     logger.info(f"ℹ️ {symbol}: Yeni veri bulunamadı")
                 return True
@@ -286,6 +301,32 @@ class BISTDataCollector:
                         'close': float(row['Close']),
                         'volume': int(row['Volume']) if row['Volume'] > 0 else 0
                     })
+                # Gün içi dakika verisinden bugünün barını tazele (varsa)
+                try:
+                    intraday = ticker.history(period="1d", interval="1m")
+                    if not intraday.empty:
+                        # Tarih olarak bugünü kullan (tz'siz)
+                        intraday.index = intraday.index.tz_localize(None)
+                        today_date = datetime.now().date()
+                        today_rows = intraday[intraday.index.date == today_date]
+                        if not today_rows.empty:
+                            agg_open = float(today_rows['Open'].iloc[0])
+                            agg_high = float(today_rows['High'].max())
+                            agg_low = float(today_rows['Low'].min())
+                            agg_close = float(today_rows['Close'].iloc[-1])
+                            agg_volume = int(today_rows['Volume'].sum()) if 'Volume' in today_rows else 0
+                            # processed_data'da bugünü bul ve güncelle; yoksa ekle
+                            replaced = False
+                            for dp in processed_data:
+                                if dp['date'] == today_date:
+                                    dp.update({'open': agg_open, 'high': agg_high, 'low': agg_low, 'close': agg_close, 'volume': agg_volume})
+                                    replaced = True
+                                    break
+                            if not replaced:
+                                processed_data.append({'symbol': symbol, 'date': today_date, 'open': agg_open, 'high': agg_high, 'low': agg_low, 'close': agg_close, 'volume': agg_volume})
+                            logger.info(f"⏱️ {symbol}: 1m intraday ile bugünün barı güncellendi")
+                except Exception as _intra_err:
+                    logger.debug(f"Intraday aggregation skipped for {symbol}: {_intra_err}")
                 
                 success = self.save_to_database(processed_data)
                 logger.info(f"🔄 {symbol} güncellendi ({len(processed_data)} gün)")

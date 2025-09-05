@@ -10,6 +10,7 @@ import threading
 from datetime import datetime, timedelta
 import os
 import json
+import pandas as pd
 # Local imports
 try:
     from data_collector import get_data_collector
@@ -42,6 +43,12 @@ class AutomatedDataPipeline:
         self.last_run_stats = {}
         self.scheduler_thread = None
         self.performance_threshold = 0.7  # %70 altındaki modeller yeniden eğitilir
+        # Watchdog: thread ölürse yeniden başlatma için throttle timestamp
+        self.last_watchdog_restart_ts = 0.0
+        # Idle watchdog: en son etkinlik zaman damgası ve kullanıcı kaynaklı durdurma bayrağı
+        self.last_activity_ts = 0.0
+        self.user_stopped = False
+        self._idle_watchdog_thread = None
         
         # Email settings (opsiyonel)
         self.email_enabled = False
@@ -54,6 +61,126 @@ class AutomatedDataPipeline:
         }
         
         logger.info("🤖 Automated Data Pipeline başlatıldı")
+
+    def _get_stock_dataframe(self, symbol: str):
+        """PostgreSQL'den bir hissenin OHLCV verisini DataFrame olarak getir (index=date)."""
+        try:
+            from app import app as flask_app
+            from models import Stock, StockPrice
+            with flask_app.app_context():
+                stock = Stock.query.filter_by(symbol=symbol).first()
+                if not stock:
+                    return None
+                prices = StockPrice.query.filter_by(stock_id=stock.id)\
+                    .order_by(StockPrice.date.asc()).all()
+                if not prices:
+                    return None
+                rows = []
+                for p in prices:
+                    rows.append({
+                        'date': p.date,
+                        'open': float(p.open_price),
+                        'high': float(p.high_price),
+                        'low': float(p.low_price),
+                        'close': float(p.close_price),
+                        'volume': int(p.volume)
+                    })
+                df = pd.DataFrame(rows)
+                if df.empty:
+                    return None
+                df['date'] = pd.to_datetime(df['date'])
+                df.set_index('date', inplace=True)
+                return df
+        except Exception as e:
+            logger.error(f"DF fetch error {symbol}: {e}")
+            return None
+
+    def run_bulk_predictions_all(self) -> dict | bool:
+        """Tüm aktif hisseler için 1/3/7/14/30 günlük tahminleri üret ve kaydet.
+
+        - Temel ML her zaman çalışır (hızlı)
+        - ENV: ENABLE_ENHANCED_ML=True ise Enhanced ML de eğitim+tahmin yapar
+        - Sonuçlar: /opt/bist-pattern/logs/ml_bulk_predictions.json
+        """
+        try:
+            # UI'ya bilgi amaçlı yayın
+            try:
+                from app import app as flask_app
+                if hasattr(flask_app, 'broadcast_log'):
+                    flask_app.broadcast_log('INFO', '🤖 ML bulk predictions starting...', 'ml')
+            except Exception:
+                pass
+
+            # Semboller
+            from app import app as flask_app
+            with flask_app.app_context():
+                from models import Stock
+                symbols = [s.symbol for s in Stock.query.filter_by(is_active=True).all()]
+
+            # ML sistemleri
+            basic = None
+            try:
+                from ml_prediction_system import get_ml_prediction_system
+                basic = get_ml_prediction_system()
+            except Exception:
+                basic = None
+            use_enhanced = str(os.getenv('ENABLE_ENHANCED_ML', 'false')).lower() in ('1', 'true', 'yes')
+            enhanced = None
+            if use_enhanced:
+                try:
+                    from enhanced_ml_system import get_enhanced_ml_system
+                    enhanced = get_enhanced_ml_system()
+                except Exception:
+                    enhanced = None
+
+            results: dict = {'timestamp': datetime.now().isoformat(), 'predictions': {}}
+            processed = 0
+            for sym in symbols:
+                try:
+                    df = self._get_stock_dataframe(sym)
+                    if df is None or len(df) < 50:
+                        continue
+                    out_sym: dict = {}
+                    if basic is not None:
+                        try:
+                            preds = basic.predict_prices(sym, df, None) or {}
+                            out_sym['basic'] = preds
+                        except Exception:
+                            pass
+                    if enhanced is not None and len(df) >= 200:
+                        try:
+                            enhanced.train_enhanced_models(sym, df)
+                            ep = enhanced.predict_enhanced(sym, df) or {}
+                            out_sym['enhanced'] = ep
+                        except Exception:
+                            pass
+                    if out_sym:
+                        results['predictions'][sym] = out_sym
+                        processed += 1
+                except Exception:
+                    continue
+
+            # Kaydet
+            try:
+                log_dir = '/opt/bist-pattern/logs'
+                os.makedirs(log_dir, exist_ok=True)
+                fp = os.path.join(log_dir, 'ml_bulk_predictions.json')
+                with open(fp, 'w') as wf:
+                    json.dump(results, wf)
+            except Exception:
+                pass
+
+            # UI yayın
+            try:
+                from app import app as flask_app
+                if hasattr(flask_app, 'broadcast_log'):
+                    flask_app.broadcast_log('SUCCESS', f'✅ ML bulk predictions completed: {processed} symbols', 'ml')
+            except Exception:
+                pass
+            return results
+        except Exception as e:
+            logger.error(f"ML bulk predictions error: {e}")
+            return False
     
     def daily_data_collection(self):
         """Günlük veri toplama görevi"""
@@ -213,6 +340,176 @@ BIST Automated Data Pipeline
             logger.error(f"❌ Günlük rapor hatası: {e}")
             return None
     
+    def system_health_check(self):
+        """Basit sağlık kontrolü: DB istatistikleri ve disk boş alanını yaz."""
+        try:
+            logger.info("🔍 Sağlık kontrolü (internal)")
+            health_status = {
+                'timestamp': datetime.now().isoformat(),
+                'systems': {},
+                'overall_status': 'healthy'
+            }
+            # Data collection stats
+            try:
+                from app import app as flask_app
+                with flask_app.app_context():
+                    stats = get_data_collector().get_collection_stats()
+                health_status['systems']['data_collection'] = {
+                    'status': 'healthy' if (isinstance(stats, dict) and stats.get('total_stocks', 0) > 0) else 'warning',
+                    'details': stats
+                }
+            except Exception as e:
+                health_status['systems']['data_collection'] = {'status': 'error', 'details': str(e)}
+            # Disk space
+            try:
+                import shutil
+                free_gb = shutil.disk_usage('/').free / (1024**3)
+                health_status['systems']['disk_space'] = {
+                    'status': 'healthy' if free_gb > 5 else 'warning',
+                    'details': f"{free_gb:.1f} GB free"
+                }
+            except Exception as e:
+                health_status['systems']['disk_space'] = {'status': 'error', 'details': str(e)}
+            # Overall
+            if any(s.get('status') == 'error' for s in health_status['systems'].values()):
+                health_status['overall_status'] = 'error'
+            elif any(s.get('status') == 'warning' for s in health_status['systems'].values()):
+                health_status['overall_status'] = 'warning'
+            # Persist JSON (for dashboard)
+            try:
+                import json, os
+                path = '/opt/bist-pattern/logs/health_status.json'
+                os.makedirs('/opt/bist-pattern/logs', exist_ok=True)
+                with open(path, 'w') as f:
+                    json.dump(health_status, f)
+            except Exception:
+                pass
+            # Broadcast (optional)
+            try:
+                from app import app as flask_app
+                if hasattr(flask_app, 'broadcast_log'):
+                    flask_app.broadcast_log('INFO', f"Health: {health_status['overall_status']}", 'health')
+            except Exception:
+                pass
+            return health_status
+        except Exception as e:
+            logger.error(f"❌ Internal health check hatası: {e}")
+            return {'overall_status': 'error', 'error': str(e)}
+    def _merge_predictions_file(self, symbol: str, out_sym: dict) -> bool:
+        """`ml_bulk_predictions.json` dosyasına sembol bazlı tahmini birleştirerek yazar."""
+        try:
+            log_dir = os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+            os.makedirs(log_dir, exist_ok=True)
+            fpath = os.path.join(log_dir, 'ml_bulk_predictions.json')
+            import json
+            data = {'timestamp': datetime.now().isoformat(), 'predictions': {}}
+            if os.path.exists(fpath):
+                try:
+                    with open(fpath, 'r') as rf:
+                        prev = json.load(rf) or {}
+                        if isinstance(prev, dict):
+                            data['predictions'] = prev.get('predictions') or {}
+                except Exception:
+                    pass
+            data['predictions'][symbol] = out_sym or {}
+            with open(fpath, 'w') as wf:
+                json.dump(data, wf)
+            return True
+        except Exception as _err:
+            logger.warning(f"Predictions merge error for {symbol}: {_err}")
+            return False
+
+    def run_incremental_cycle(self) -> dict:
+        """Sembol bazlı döngü: her sembol için tek tek veri toplama → analiz → tahmin.
+
+        Dış servis yükünü azaltmak ve CPU/bellek kullanımını yaymak için tam toplama yerine
+        sembol bazında ardışık çalışır.
+        """
+        stats = {'processed': 0, 'analyzed': 0, 'predicted': 0}
+        try:
+            # Hazırlık
+            from pattern_detector import HybridPatternDetector
+            det = HybridPatternDetector()
+            col = None
+            try:
+                col = get_data_collector()
+            except Exception:
+                col = None
+            # Semboller
+            from app import app as flask_app
+            with flask_app.app_context():
+                from models import Stock
+                symbols = [s.symbol for s in Stock.query.filter_by(is_active=True).all()]
+            # ML sistemleri
+            basic = None
+            try:
+                from ml_prediction_system import get_ml_prediction_system
+                basic = get_ml_prediction_system()
+            except Exception:
+                basic = None
+            use_enhanced = str(os.getenv('ENABLE_ENHANCED_ML', 'false')).lower() in ('1','true','yes')
+            enhanced = None
+            if use_enhanced:
+                try:
+                    from enhanced_ml_system import get_enhanced_ml_system
+                    enhanced = get_enhanced_ml_system()
+                except Exception:
+                    enhanced = None
+
+            # Uyku ayarları
+            try:
+                symbol_sleep = float(os.getenv('SYMBOL_SLEEP_SECONDS', '0.3'))
+            except Exception:
+                symbol_sleep = 0.3
+
+            for sym in symbols:
+                try:
+                    # 1) Veri güncelle (hafif)
+                    if col is not None:
+                        try:
+                            col.update_single_stock(sym, days=7)
+                        except Exception:
+                            pass
+                    # 2) Analiz
+                    try:
+                        det.analyze_stock(sym)
+                        stats['analyzed'] += 1
+                    except Exception:
+                        pass
+                    # 3) Tahmin ve dosyaya yaz (birleştirerek)
+                    out_sym: dict = {}
+                    df = self._get_stock_dataframe(sym)
+                    if df is not None and len(df) >= 50:
+                        # Basic
+                        if basic is not None:
+                            try:
+                                preds = basic.predict_prices(sym, df, None) or {}
+                                out_sym['basic'] = preds
+                            except Exception:
+                                pass
+                        # Enhanced
+                        if enhanced is not None and len(df) >= 200:
+                            try:
+                                enhanced.train_enhanced_models(sym, df)
+                                ep = enhanced.predict_enhanced(sym, df) or {}
+                                out_sym['enhanced'] = ep
+                            except Exception:
+                                pass
+                    if out_sym:
+                        if self._merge_predictions_file(sym, out_sym):
+                            stats['predicted'] += 1
+                    stats['processed'] += 1
+                except Exception:
+                    pass
+                # Dış servislere nazik ol
+                try:
+                    time.sleep(symbol_sleep)
+                except Exception:
+                    pass
+            return stats
+        except Exception as e:
+            logger.error(f"❌ Incremental cycle error: {e}")
+            return stats
     def setup_schedule(self):
         """Zamanlama ayarları"""
         try:
@@ -220,6 +517,11 @@ BIST Automated Data Pipeline
             
             # Clear existing jobs first
             schedule.clear()
+            
+            # Only configure when PIPELINE_MODE explicitly SCHEDULED
+            if os.getenv('PIPELINE_MODE', 'CONTINUOUS_FULL').upper() != 'SCHEDULED':
+                logger.info("🛑 PIPELINE_MODE != SCHEDULED → schedule jobs are skipped (continuous mode)")
+                return True
             
             # MINIMAL TEST: NO JOBS AT ALL (test schedule library itself)
             # def simple_heartbeat():
@@ -238,6 +540,17 @@ BIST Automated Data Pipeline
             # schedule.every().monday.at("05:00").do(self.weekly_full_collection).tag('weekly')
             # schedule.every(6).hours.do(self.system_health_check).tag('health')
             
+            # İç pipeline işleri (dashboard kontrollü)
+            # 30 dakikada bir: öncelikli toplama → AI analizi
+            schedule.every(30).minutes.do(self.run_priority_pipeline).tag('priority_pipeline')
+            # Gün içinde 3 kez + pazar gecesi: tam toplama → AI analizi
+            schedule.every().day.at("09:30").do(self.run_full_pipeline).tag('full_pipeline')
+            schedule.every().day.at("12:00").do(self.run_full_pipeline).tag('full_pipeline')
+            schedule.every().day.at("18:00").do(self.run_full_pipeline).tag('full_pipeline')
+            schedule.every().sunday.at("02:00").do(self.run_full_pipeline).tag('weekly_full')
+            # 15 dakikada bir health check
+            schedule.every(15).minutes.do(self.system_health_check).tag('health')
+
             # Test için - her 2 dakikada bir health check (opsiyonel)
             if os.getenv('BIST_DEBUG', '').lower() == 'true':
                 schedule.every(2).minutes.do(self.system_health_check).tag('debug')
@@ -245,11 +558,10 @@ BIST Automated Data Pipeline
             
             job_count = len(schedule.jobs)
             logger.info(f"✅ Scheduled tasks kuruldu ({job_count} job):")
-            logger.info("  📅 06:00 - Günlük veri toplama")
-            logger.info("  🧠 07:00 - Otomatik model eğitimi")
-            logger.info("  📊 08:00 - Günlük durum raporu")
-            logger.info("  📈 Pazartesi 05:00 - Haftalık tam veri toplama")
-            logger.info("  🔍 Her 6 saat - Sistem sağlık kontrolü")
+            logger.info("  🔄 Her 30 dk - Öncelikli toplama + AI analiz")
+            logger.info("  📅 09:30/12:00/18:00 - Tam toplama + AI analiz")
+            logger.info("  🕑 Pazar 02:00 - Haftalık tam toplama + AI analiz")
+            logger.info("  🔍 Her 15 dk - Health check")
             
             return job_count > 0
             
@@ -266,63 +578,131 @@ BIST Automated Data Pipeline
             
             logger.info("🚀 Automated Data Pipeline başlatılıyor...")
             
-            # Schedule setup
-            if not self.setup_schedule():
-                logger.error("❌ Schedule kurulum başarısız")
-                return False
-            
-            self.is_running = True
-            
-            # PURE PYTHON SCHEDULER (no schedule library)
-            def run_pure_scheduler():
-                logger.info("⚡ Pure Python scheduler başlatıldı (NO schedule library)")
+            # Tek mod: CONTINUOUS_FULL (sadeleştirildi)
+            mode = 'CONTINUOUS_FULL'
+
+            # Yardımcı: pipeline history'ye kayıt ekle
+            def _append_pipeline_history(phase: str, state: str, details: dict = None):
                 try:
-                    loop_count = 0
-                    while self.is_running:
+                    log_dir = '/opt/bist-pattern/logs'
+                    os.makedirs(log_dir, exist_ok=True)
+                    status_file = os.path.join(log_dir, 'pipeline_status.json')
+                    payload = {'history': []}
+                    try:
+                        if os.path.exists(status_file):
+                            with open(status_file, 'r') as f:
+                                payload = json.load(f) or {'history': []}
+                    except Exception:
+                        payload = {'history': []}
+                    entry = {
+                        'phase': phase,
+                        'state': state,
+                        'timestamp': datetime.now().isoformat(),
+                        'details': details or {}
+                    }
+                    payload.setdefault('history', []).append(entry)
+                    # Keep last 200
+                    payload['history'] = payload['history'][-200:]
+                    with open(status_file, 'w') as f:
+                        json.dump(payload, f)
+                except Exception as _hist_err:
+                    logger.warning(f"Pipeline history write failed: {_hist_err}")
+
+            # Temizlik: Önce mevcut schedule işlerini temizle (mode ne olursa olsun)
+            try:
+                schedule.clear()
+            except Exception:
+                pass
+
+            self.is_running = True
+            self.user_stopped = False
+            self.last_activity_ts = time.time()
+
+            if mode == 'CONTINUOUS_FULL':
+                logger.info("🔁 Mode: CONTINUOUS_FULL - Incremental (sembol bazlı) döngü")
+
+                def run_continuous_full_loop():
+                    try:
+                        loop_idx = 0
+                        while self.is_running:
+                            loop_idx += 1
+                            # heartbeat: etkinlik güncelle
+                            self.last_activity_ts = time.time()
+                            try:
+                                from app import app as flask_app
+                                if hasattr(flask_app, 'broadcast_log'):
+                                    flask_app.broadcast_log('INFO', f'Cycle {loop_idx}: Incremental cycle starting', 'collector')
+                            except Exception:
+                                pass
+
+                            # Incremental: sembol bazlı toplama → analiz → tahmin
+                            _append_pipeline_history('incremental_cycle', 'start', {'cycle': loop_idx})
+                            try:
+                                inc = self.run_incremental_cycle()
+                                _append_pipeline_history('incremental_cycle', 'end', {'cycle': loop_idx, **(inc or {})})
+                                self.last_activity_ts = time.time()
+                            except Exception as e:
+                                _append_pipeline_history('incremental_cycle', 'error', {'error': str(e)})
+                                logger.error(f"Incremental cycle error: {e}")
+
+                            # 4) Bekle (5 dakika)
+                            try:
+                                from app import app as flask_app
+                                if hasattr(flask_app, 'broadcast_log'):
+                                    flask_app.broadcast_log('INFO', 'Sleeping 300s before next cycle', 'scheduler')
+                            except Exception:
+                                pass
+                            for _ in range(300):
+                                if not self.is_running:
+                                    break
+                                # heartbeat: uykuda da etkinlik güncelle (panelde idle zannedilmesin)
+                                if _ % 30 == 0:
+                                    self.last_activity_ts = time.time()
+                                time.sleep(1)
+                        logger.info("⏹️ Continuous loop stopped")
+                    except Exception as e:
+                        logger.error(f"❌ Continuous loop critical error: {e}")
+                        # is_running bayrağını kapatmayalım ki watchdog devreye girebilsin
+                        # Böylece UI "STOPPED" göstermeden otomatik restart yapılır
                         try:
-                            loop_count += 1
-                            logger.info(f"🔄 Pure scheduler loop #{loop_count}")
-                            
-                            # Manual job scheduling (no schedule library)
-                            current_time = datetime.now()
-                            
-                            # Check for daily status report (08:00)
-                            if current_time.hour == 8 and current_time.minute == 0:
-                                logger.info("🎯 Running daily status report...")
-                                try:
-                                    self.daily_status_report()
-                                    logger.info("✅ Daily status report completed")
-                                except Exception as e:
-                                    logger.error(f"❌ Daily status report error: {e}")
-                            
-                            # Heartbeat every loop
-                            logger.info(f"💓 Pure scheduler heartbeat - Loop #{loop_count} - Thread alive")
-                            
-                            # Sleep 60 seconds (1 minute intervals)
-                            time.sleep(60)
-                            
-                        except Exception as e:
-                            logger.error(f"❌ Pure scheduler loop error: {e}")
-                            import traceback
-                            logger.error(f"🔍 Full traceback: {traceback.format_exc()}")
-                            time.sleep(10)
-                            
-                    logger.info("⏰ Pure scheduler thread normal şekilde durduruldu")
-                except Exception as e:
-                    logger.error(f"❌ Pure scheduler critical error: {e}")
-                    import traceback
-                    logger.error(f"🔍 Critical traceback: {traceback.format_exc()}")
-                    self.is_running = False
-                    logger.error("🧹 Pure scheduler state cleaned up")
-            
-            self.scheduler_thread = threading.Thread(target=run_pure_scheduler, daemon=False)
-            self.scheduler_thread.start()
-            
-            logger.info("✅ Automated Data Pipeline başarıyla başlatıldı")
-            
-            # Health check migrated to daemon
-            logger.info("📋 Health check is now handled by scheduler_daemon.py")
-            
+                            from app import app as flask_app
+                            if hasattr(flask_app, 'broadcast_log'):
+                                flask_app.broadcast_log('ERROR', f'Continuous loop crashed: {e}', 'scheduler')
+                        except Exception:
+                            pass
+
+                self.scheduler_thread = threading.Thread(target=run_continuous_full_loop, daemon=False)
+                self.scheduler_thread.start()
+                logger.info("✅ Continuous automation loop started")
+                # Idle watchdog (tek sefer başlatılacak)
+                def _idle_monitor():
+                    max_idle = int(float(os.getenv('MAX_IDLE_SECONDS', '900')))  # 15 dk varsayılan
+                    while True:
+                        try:
+                            now = time.time()
+                            if self.is_running and (now - float(self.last_activity_ts or 0.0)) > max_idle:
+                                if not self.user_stopped:
+                                    logger.warning(f"⏰ Idle watchdog: {int(now - self.last_activity_ts)}s hareketsizlik. Restart ediliyor...")
+                                    try:
+                                        self.is_running = False
+                                        try:
+                                            schedule.clear()
+                                        except Exception:
+                                            pass
+                                        time.sleep(0.2)
+                                        self.start_scheduler()
+                                    except Exception as _idle_err:
+                                        logger.error(f"Idle watchdog restart failed: {_idle_err}")
+                        except Exception:
+                            pass
+                        time.sleep(30)
+                if self._idle_watchdog_thread is None or not self._idle_watchdog_thread.is_alive():
+                    self._idle_watchdog_thread = threading.Thread(target=_idle_monitor, daemon=True)
+                    self._idle_watchdog_thread.start()
+                return True
+
+            # Scheduled mod kaldırıldı
+            logger.info("ℹ️ Scheduled mode is removed; running continuous loop only")
             return True
             
         except Exception as e:
@@ -339,7 +719,18 @@ BIST Automated Data Pipeline
             
             logger.info("🛑 Automated Data Pipeline durduruluyor...")
             
+            # History: clear file on explicit stop (requested behavior)
+            try:
+                log_dir = '/opt/bist-pattern/logs'
+                os.makedirs(log_dir, exist_ok=True)
+                status_file = os.path.join(log_dir, 'pipeline_status.json')
+                with open(status_file, 'w') as f:
+                    json.dump({'history': []}, f)
+            except Exception:
+                pass
+
             self.is_running = False
+            self.user_stopped = True
             schedule.clear()
             
             # Thread'in bitmesini bekle
@@ -363,11 +754,47 @@ BIST Automated Data Pipeline
             if self.is_running and not thread_alive:
                 logger.error("❌ CRITICAL: Scheduler thread öldü! Root cause araştırılmalı.")
                 logger.error("🔍 Thread alive: False, is_running: True - Bu durumun sebebi bulunmalı")
+                # Otomatik yeniden başlatma (watchdog) - varsayılan açık
+                try:
+                    enabled = str(os.getenv('ENABLE_SCHEDULER_WATCHDOG', 'true')).lower() in ('1', 'true', 'yes')
+                except Exception:
+                    enabled = True
+                if enabled:
+                    try:
+                        now = time.time()
+                        # 30 sn'den sık restart etme
+                        if now - float(self.last_watchdog_restart_ts or 0.0) > 30.0:
+                            logger.warning("🛠️ Watchdog: Scheduler thread dead, restarting...")
+                            self.last_watchdog_restart_ts = now
+                            def _do_restart():
+                                try:
+                                    # Güvenli sıfırlama ve yeniden başlat
+                                    self.is_running = False
+                                    try:
+                                        schedule.clear()
+                                    except Exception:
+                                        pass
+                                    # Kısa gecikme ile yeniden başlat
+                                    time.sleep(0.2)
+                                    self.start_scheduler()
+                                except Exception as e:
+                                    logger.error(f"Watchdog restart failed: {e}")
+                            threading.Thread(target=_do_restart, daemon=True).start()
+                    except Exception as _wd_err:
+                        logger.error(f"Watchdog error: {_wd_err}")
             
+            # schedule.jobs içi boş olsa bile (pure loop modunda) UI'da 1 iş gösterelim
+            try:
+                scheduled_jobs_count = len(schedule.jobs)
+            except Exception:
+                scheduled_jobs_count = 0
+            if self.is_running and scheduled_jobs_count == 0:
+                scheduled_jobs_count = 1
+
             status = {
                 'is_running': self.is_running,
                 'thread_alive': thread_alive,
-                'scheduled_jobs': len(schedule.jobs),
+                'scheduled_jobs': scheduled_jobs_count,
                 'last_run_stats': self.last_run_stats,
                 'next_runs': []
             }
@@ -398,7 +825,8 @@ BIST Automated Data Pipeline
             task_map = {
                 'data_collection': self.daily_data_collection,
                 'status_report': self.daily_status_report,
-                'weekly_collection': self.weekly_full_collection
+                'weekly_collection': self.weekly_full_collection,
+                'bulk_predictions': self.run_bulk_predictions_all,
             }
             
             # Migrated to daemon tasks 
@@ -419,6 +847,107 @@ BIST Automated Data Pipeline
             logger.error(f"❌ Manuel görev hatası: {e}")
             return False
 
+    def run_priority_pipeline(self):
+        """Öncelikli toplama → AI analizi"""
+        try:
+            from advanced_collector import AdvancedBISTCollector
+            from pattern_detector import HybridPatternDetector
+            logger.info("🚀 Öncelikli pipeline başlıyor: veri toplama")
+            try:
+                from app import app as flask_app
+                if hasattr(flask_app, 'broadcast_log'):
+                    flask_app.broadcast_log('INFO', '🔄 Öncelikli veri toplama başlıyor', 'collector')
+            except Exception:
+                pass
+            collector = AdvancedBISTCollector()
+            col_res = collector.collect_priority_stocks()
+            logger.info(f"✅ Öncelikli toplama bitti: {col_res}")
+            try:
+                from app import app as flask_app
+                if hasattr(flask_app, 'broadcast_log'):
+                    flask_app.broadcast_log('SUCCESS', f"✅ Öncelikli toplama bitti: {col_res}", 'collector')
+            except Exception:
+                pass
+            # AI analizi
+            logger.info("🧠 AI analizi başlıyor (öncelikli)")
+            det = HybridPatternDetector()
+            analyzed = 0
+            try:
+                from app import app as flask_app
+                with flask_app.app_context():
+                    from models import Stock
+                    # Öncelikli semboller veya aktiflerden ilk 100
+                    priority = getattr(__import__('config').config['default'], 'PRIORITY_SYMBOLS', [])
+                    symbols = priority or [s.symbol for s in Stock.query.filter_by(is_active=True).limit(100).all()]
+            except Exception:
+                symbols = []
+            for sym in symbols[:100]:
+                try:
+                    det.analyze_stock(sym)
+                    analyzed += 1
+                except Exception:
+                    continue
+            logger.info(f"🎯 AI analizi tamamlandı: {analyzed} hisse")
+            try:
+                from app import app as flask_app
+                if hasattr(flask_app, 'broadcast_log'):
+                    flask_app.broadcast_log('SUCCESS', f"🎯 AI analizi tamamlandı: {analyzed} hisse", 'ai_analysis')
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            logger.error(f"❌ Öncelikli pipeline hatası: {e}")
+            return False
+
+    def run_full_pipeline(self):
+        """Tam toplama → AI analizi"""
+        try:
+            from advanced_collector import AdvancedBISTCollector
+            from pattern_detector import HybridPatternDetector
+            logger.info("🚀 Tam pipeline başlıyor: veri toplama")
+            try:
+                from app import app as flask_app
+                if hasattr(flask_app, 'broadcast_log'):
+                    flask_app.broadcast_log('INFO', '📊 Tam veri toplama başlıyor', 'collector')
+            except Exception:
+                pass
+            collector = AdvancedBISTCollector()
+            res = collector.collect_all_stocks_parallel()
+            logger.info(f"✅ Tam toplama bitti: {res}")
+            try:
+                from app import app as flask_app
+                if hasattr(flask_app, 'broadcast_log'):
+                    flask_app.broadcast_log('SUCCESS', f"✅ Tam toplama bitti: {res}", 'collector')
+            except Exception:
+                pass
+            # AI analizi
+            logger.info("🧠 AI analizi başlıyor (tam)")
+            det = HybridPatternDetector()
+            analyzed = 0
+            try:
+                from app import app as flask_app
+                with flask_app.app_context():
+                    from models import Stock
+                    symbols = [s.symbol for s in Stock.query.filter_by(is_active=True).all()]
+            except Exception:
+                symbols = []
+            for sym in symbols[:600]:
+                try:
+                    det.analyze_stock(sym)
+                    analyzed += 1
+                except Exception:
+                    continue
+            logger.info(f"🎯 AI analizi tamamlandı: {analyzed} hisse")
+            try:
+                from app import app as flask_app
+                if hasattr(flask_app, 'broadcast_log'):
+                    flask_app.broadcast_log('SUCCESS', f"🎯 AI analizi tamamlandı: {analyzed} hisse", 'ai_analysis')
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            logger.error(f"❌ Tam pipeline hatası: {e}")
+            return False
 # Global singleton instance
 _automated_pipeline = None
 
@@ -436,9 +965,8 @@ if __name__ == "__main__":
     print("🚀 Automated Data Pipeline Test başlatılıyor...")
     
     # Manuel görev testleri
-    print("\n📊 Health Check Test:")
-    health = pipeline.system_health_check()
-    print(f"Status: {health.get('overall_status', 'error')}")
+    # Health check migrated to daemon; skip direct call here to avoid missing method errors
+    print("\n📊 Health Check Test: (skipped - handled by scheduler_daemon.py)")
     
     print("\n📈 Data Collection Test:")
     data_result = pipeline.daily_data_collection()

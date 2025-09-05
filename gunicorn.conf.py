@@ -4,23 +4,25 @@ Gunicorn Configuration for BIST Pattern Detection
 import multiprocessing
 
 # Server socket
-bind = "0.0.0.0:5000"
+bind = "127.0.0.1:5000"
 backlog = 2048
 
 # Worker processes (Single worker for automation state consistency and WebSocket support)
 workers = 1
-worker_class = "eventlet"  # WebSocket support için eventlet kullan
+worker_class = "gevent"  # Eventlet crash'lerini önlemek için gevent kullan
 worker_connections = 1000
-timeout = 120  # WebSocket bağlantıları için daha uzun timeout
-keepalive = 2
+# Uzun süren toplama/analizlerde worker'ın timeout ile öldürülmesini
+# önlemek için süreyi artırıyoruz
+timeout = 600
+keepalive = 30
 
-# Restart workers after this many requests, to prevent memory leaks
-max_requests = 1000
-max_requests_jitter = 50
+# Otomatik worker yeniden başlatmayı kapat (in-process scheduler state korunur)
+max_requests = 0
+max_requests_jitter = 0
 
-# Logging
-accesslog = "/opt/bist-pattern/logs/gunicorn_access.log"
-errorlog = "/opt/bist-pattern/logs/gunicorn_error.log"
+# Logging (stdout/stderr: systemd-journal'a yönlendirilir)
+accesslog = "-"
+errorlog = "-"
 loglevel = "info"
 access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s"'
 
@@ -32,10 +34,11 @@ daemon = False
 pidfile = "/opt/bist-pattern/gunicorn.pid"
 
 # User and group
-user = "root"
-group = "root"
+user = "www-data"
+group = "www-data"
 
 # Environment
 raw_env = [
     "FLASK_ENV=production",
+    "PIPELINE_MODE=CONTINUOUS_FULL",
 ]

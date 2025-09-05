@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 import warnings
 import logging
 from models import db, Stock, StockPrice
+from app import app
+from config import config
 warnings.filterwarnings('ignore')
 
 logger = logging.getLogger(__name__)
@@ -37,11 +39,22 @@ except ImportError:
     ML_PREDICTION_AVAILABLE = False
     logger.warning("⚠️ ML Prediction modülü yüklenemedi")
 
+# Enhanced ML Prediction sistemi (opsiyonel)
+try:
+    from enhanced_ml_system import get_enhanced_ml_system
+    ENHANCED_ML_AVAILABLE = True
+except ImportError:
+    ENHANCED_ML_AVAILABLE = False
+    logger.warning("⚠️ Enhanced ML Prediction modülü yüklenemedi")
+
 class HybridPatternDetector:
     def __init__(self):
         # Cache sistemi (5 dakika TTL)
         self.cache = {}
-        self.cache_ttl = 300  # 5 dakika saniye
+        try:
+            self.cache_ttl = int(getattr(config['default'], 'PATTERN_CACHE_TTL', 300))
+        except Exception:
+            self.cache_ttl = 300
         
         # Gelişmiş pattern detector
         if ADVANCED_PATTERNS_AVAILABLE:
@@ -60,6 +73,15 @@ class HybridPatternDetector:
             self.ml_predictor = get_ml_prediction_system()
         else:
             self.ml_predictor = None
+        
+        # Enhanced ML Prediction system (optional)
+        if ENHANCED_ML_AVAILABLE:
+            try:
+                self.enhanced_ml = get_enhanced_ml_system()
+            except Exception:
+                self.enhanced_ml = None
+        else:
+            self.enhanced_ml = None
             
         logger.info("🤖 Hybrid Pattern Detector başlatıldı")
     
@@ -105,19 +127,26 @@ class HybridPatternDetector:
         else:
             return 'NEUTRAL'
     
-    def get_stock_data(self, symbol, days=60):
+    def get_stock_data(self, symbol, days=None):
         """PostgreSQL'den hisse verilerini al"""
         try:
-            # Stock ID'yi bul
-            stock = Stock.query.filter_by(symbol=symbol.upper()).first()
-            if not stock:
-                logger.warning(f"Hisse bulunamadı: {symbol}")
-                return None
-            
-            # Son N günlük veriyi al
-            prices = StockPrice.query.filter_by(stock_id=stock.id)\
-                        .order_by(StockPrice.date.desc())\
-                        .limit(days).all()
+            # Default days from config
+            try:
+                default_days = int(getattr(config['default'], 'PATTERN_DATA_DAYS', 365))
+            except Exception:
+                default_days = 365
+            days = days or default_days
+            with app.app_context():
+                # Stock ID'yi bul
+                stock = Stock.query.filter_by(symbol=symbol.upper()).first()
+                if not stock:
+                    logger.warning(f"Hisse bulunamadı: {symbol}")
+                    return None
+                
+                # Son N günlük veriyi al
+                prices = StockPrice.query.filter_by(stock_id=stock.id)\
+                            .order_by(StockPrice.date.desc())\
+                            .limit(days).all()
             
             if not prices:
                 logger.warning(f"Fiyat verisi bulunamadı: {symbol}")
@@ -246,6 +275,13 @@ class HybridPatternDetector:
     def analyze_stock(self, symbol):
         """Hisse analizi yap"""
         try:
+            try:
+                # Progress broadcast: analysis start (best-effort)
+                from app import app as flask_app
+                if hasattr(flask_app, 'broadcast_log'):
+                    flask_app.broadcast_log('INFO', f'🧠 AI analiz başlıyor: {symbol}', 'ai_analysis')
+            except Exception:
+                pass
             # Cache kontrolü - TTL ile
             cache_key = f"{symbol}_{datetime.now().strftime('%Y%m%d_%H%M')}"
             current_time = datetime.now().timestamp()
@@ -317,6 +353,66 @@ class HybridPatternDetector:
                 except Exception as e:
                     logger.error(f"Visual pattern analysis hatası: {e}")
             
+            # ML predictions (optional) and integrate into patterns as signals
+            ml_predictions = None
+            enhanced_predictions = None
+            try:
+                if self.ml_predictor and ML_PREDICTION_AVAILABLE:
+                    ml_predictions = self.ml_predictor.predict_prices(symbol, data, None) or {}
+                    current_px = float(data['close'].iloc[-1])
+                    horizon_weights = {
+                        '1d': 0.70,
+                        '3d': 0.60,
+                        '7d': 0.55,
+                        '14d': 0.50,
+                        '30d': 0.45,
+                    }
+                    for h_key, base_w in horizon_weights.items():
+                        pred_obj = ml_predictions.get(h_key) or {}
+                        pred_px = pred_obj.get('price') or pred_obj.get('prediction') or pred_obj.get('target')
+                        if isinstance(pred_px, (int, float)) and current_px > 0:
+                            delta_pct = (float(pred_px) - current_px) / current_px
+                            if abs(delta_pct) >= 0.003:  # 0.3% altı gürültü say
+                                conf_scale = min(1.0, abs(delta_pct) / 0.05)  # ~%5 hareketle tavan
+                                confidence = max(0.3, min(0.9, base_w * conf_scale))
+                                patterns.append({
+                                    'pattern': f'ML_{h_key.upper()}',
+                                    'signal': 'BULLISH' if delta_pct > 0 else 'BEARISH',
+                                    'confidence': confidence,
+                                    'strength': int(confidence * 100),
+                                    'source': 'ML_PREDICTOR',
+                                    'delta_pct': float(delta_pct)
+                                })
+            except Exception as e:
+                logger.error(f"ML prediction integration hatası {symbol}: {e}")
+
+            # Enhanced ML predictions (optional) and integrate as stronger signals
+            try:
+                if hasattr(self, 'enhanced_ml') and self.enhanced_ml and ENHANCED_ML_AVAILABLE:
+                    enh = self.enhanced_ml.predict_enhanced(symbol, data)
+                    if isinstance(enh, dict) and enh:
+                        enhanced_predictions = enh
+                        current_px = float(data['close'].iloc[-1])
+                        # enhanced_ml.predict_enhanced returns a dict keyed by horizons directly
+                        pred_map = enh if isinstance(enh, dict) else {}
+                        for h_key, pred_obj in pred_map.items():
+                            pred_px = pred_obj.get('ensemble_prediction')
+                            conf_val = float(pred_obj.get('confidence', 0) or 0)
+                            if isinstance(pred_px, (int, float)) and current_px > 0:
+                                delta_pct = (float(pred_px) - current_px) / current_px
+                                if abs(delta_pct) >= 0.003:
+                                    confidence = max(0.35, min(0.95, conf_val))
+                                    patterns.append({
+                                        'pattern': f'ENH_{h_key.upper()}',
+                                        'signal': 'BULLISH' if delta_pct > 0 else 'BEARISH',
+                                        'confidence': confidence,
+                                        'strength': int(confidence * 100),
+                                        'source': 'ENHANCED_ML',
+                                        'delta_pct': float(delta_pct)
+                                    })
+            except Exception as e:
+                logger.error(f"Enhanced ML prediction integration hatası {symbol}: {e}")
+
             # Overall signal generation
             overall_signal = self.generate_overall_signal(indicators, patterns)
             
@@ -342,8 +438,19 @@ class HybridPatternDetector:
                 'indicators': convert_numpy_types(indicators),
                 'patterns': convert_numpy_types(patterns),
                 'overall_signal': convert_numpy_types(overall_signal),
-                'data_points': int(len(data))
+                'data_points': int(len(data)),
+                'ml_predictions': ml_predictions or {},
+                'enhanced_predictions': enhanced_predictions or {}
             }
+            try:
+                # Progress broadcast: analysis end (best-effort)
+                from app import app as flask_app
+                if hasattr(flask_app, 'broadcast_log'):
+                    sig = result['overall_signal'].get('signal','?')
+                    conf = int(round(float(result['overall_signal'].get('confidence',0))*100))
+                    flask_app.broadcast_log('SUCCESS', f'🎯 {symbol} AI: {sig} (%{conf})', 'ai_analysis')
+            except Exception:
+                pass
             
             # Cache'e TTL ile kaydet
             self.cache[cache_key] = {
@@ -355,6 +462,15 @@ class HybridPatternDetector:
             if len(self.cache) > 100:
                 self._cleanup_cache()
             
+            # Opsiyonel: overall sinyali canlı loga yaz (dashboard için)
+            try:
+                from app import app as flask_app
+                overall = (result or {}).get('overall_signal') or {}
+                if overall and hasattr(flask_app, 'broadcast_log'):
+                    flask_app.broadcast_log('INFO', f"{symbol}: {overall.get('signal','?')} ({overall.get('confidence',0):.2f})", 'ai_analysis')
+            except Exception:
+                pass
+
             return result
             
         except Exception as e:

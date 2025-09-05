@@ -31,7 +31,7 @@
         let isConnected = false;
         
         function initializeWebSocket() {
-            socket = io();
+            socket = io({ path: '/socket.io' });
             
             socket.on('connect', function() {
                 isConnected = true;
@@ -163,6 +163,11 @@
             max-height: 300px;
             overflow-y: auto;
         }
+        /* Recent tasks panel: fixed height with scroll to avoid page growing infinitely */
+        #recent-tasks {
+            max-height: 420px;
+            overflow-y: auto;
+        }
         
         .navbar-brand {
             font-weight: bold;
@@ -211,7 +216,7 @@
                         <div class="col-md-3">
                             <div class="metric-card text-center" style="background: linear-gradient(45deg, #f093fb 0%, #f5576c 100%);">
                                 <div class="metric-value" id="scheduled-jobs">--</div>
-                                <div class="metric-label">Scheduled Jobs</div>
+                                <div class="metric-label" id="jobs-label">Scheduled Jobs</div>
                     </div>
                 </div>
                 <div class="col-md-3">
@@ -237,45 +242,53 @@
                 <div class="dashboard-card p-4 h-100" style="background: white; border: 2px solid #e9ecef; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
                     <h4><i class="fas fa-heartbeat me-2 text-success"></i>System Health</h4>
                     <div id="health-status" class="mt-3">
-                        <div class="d-flex align-items-center mb-3 p-3 rounded" style="background: #f8f9fa; border-left: 4px solid #28a745;">
-                            <i class="fas fa-server me-3 text-primary"></i>
-                            <div class="flex-grow-1">
-                                <div class="fw-bold">Overall Status</div>
-                                <small class="text-muted">System Integration</small>
+                        <!-- Modern card layout (Overall, Automation, Flask, DB, WebSocket) -->
+                        <div class="row g-3">
+                            <div class="col-12">
+                                <div class="p-3 rounded d-flex justify-content-between align-items-center" style="background:#f8fff9;border:1px solid #e2f3e7;">
+                                    <div>
+                                        <div class="fw-bold">Overall Status</div>
+                                        <small class="text-muted">System Integration</small>
+                                    </div>
+                                    <span class="badge bg-success" id="overall-status">MIGRATED</span>
+                                </div>
                             </div>
-                            <span class="badge bg-success" id="overall-status">MIGRATED</span>
-                        </div>
-                        <div class="d-flex align-items-center mb-3 p-3 rounded" style="background: #f8f9fa; border-left: 4px solid #17a2b8;">
-                            <i class="fas fa-robot me-3 text-info"></i>
-                            <div class="flex-grow-1">
-                                <div class="fw-bold">Automation Engine</div>
-                                <small class="text-muted">Background Processing</small>
+                            <div class="col-12">
+                                <div class="p-3 rounded d-flex justify-content-between align-items-center" style="background:#f6fbff;border:1px solid #e3f0fb;">
+                                    <div>
+                                        <div class="fw-bold">Automation Engine</div>
+                                        <small class="text-muted">Background Processing</small>
+                                    </div>
+                                    <span class="badge bg-info" id="automation-status">active</span>
+                                </div>
                             </div>
-                            <span class="badge bg-info" id="automation-status">active</span>
-                        </div>
-                        <div class="d-flex align-items-center mb-3 p-3 rounded" style="background: #f8f9fa; border-left: 4px solid #6c757d;">
-                            <i class="fas fa-flask me-3 text-secondary"></i>
-                            <div class="flex-grow-1">
-                                <div class="fw-bold">Flask API</div>
-                                <small class="text-muted">Web Service</small>
+                            <div class="col-12">
+                                <div class="p-3 rounded d-flex justify-content-between align-items-center" style="background:#fffaf6;border:1px solid #fde8d9;">
+                                    <div>
+                                        <div class="fw-bold">Flask API</div>
+                                        <small class="text-muted">Web Service</small>
+                                    </div>
+                                    <span class="badge bg-success" id="flask-status">healthy</span>
+                                </div>
                             </div>
-                            <span class="badge bg-success" id="flask-status">healthy</span>
-                        </div>
-                        <div class="d-flex align-items-center mb-3 p-3 rounded" style="background: #f8f9fa; border-left: 4px solid #ffc107;">
-                            <i class="fas fa-database me-3 text-warning"></i>
-                            <div class="flex-grow-1">
-                                <div class="fw-bold">Database</div>
-                                <small class="text-muted">PostgreSQL Connection</small>
+                            <div class="col-12">
+                                <div class="p-3 rounded d-flex justify-content-between align-items-center" style="background:#fdf9ff;border:1px solid #efe3fb;">
+                                    <div>
+                                        <div class="fw-bold">Database</div>
+                                        <small class="text-muted">PostgreSQL Connection</small>
+                                    </div>
+                                    <span class="badge bg-success" id="db-status">connected</span>
+                                </div>
                             </div>
-                            <span class="badge bg-success" id="db-status">connected</span>
-                        </div>
-                        <div class="d-flex align-items-center p-3 rounded" style="background: #f8f9fa; border-left: 4px solid #dc3545;">
-                            <i class="fas fa-wifi me-3 text-danger"></i>
-                            <div class="flex-grow-1">
-                                <div class="fw-bold">WebSocket</div>
-                                <small class="text-muted">Real-time Updates</small>
+                            <div class="col-12">
+                                <div class="p-3 rounded d-flex justify-content-between align-items-center" style="background:#f9fdff;border:1px solid #e3f7ff;">
+                                    <div>
+                                        <div class="fw-bold">WebSocket</div>
+                                        <small class="text-muted">Real-time Updates</small>
+                                    </div>
+                                    <span class="badge bg-success" id="websocket-status">connected</span>
+                                </div>
                             </div>
-                            <span class="badge bg-success" id="websocket-status">connected</span>
                         </div>
                     </div>
                 </div>
@@ -400,7 +413,10 @@
             <!-- Recent Tasks -->
             <div class="col-lg-4 mb-4">
                 <div class="dashboard-card p-4">
-                    <h4><i class="fas fa-tasks me-2"></i>Recent Tasks</h4>
+                    <h4>
+                        <i class="fas fa-tasks me-2"></i>Recent Tasks
+                        <span id="current-phase-badge" class="badge bg-secondary ms-2" title="Current pipeline phase">IDLE</span>
+                    </h4>
                     <div id="recent-tasks" class="mt-3">
                         <div class="text-center">
                             <div class="spinner-border spinner-border-sm" role="status"></div>
@@ -489,14 +505,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Get automation status with retry logic
                 let automationData;
                 try {
-                    const automationResponse = await fetch('/api/automation/status');
+                    const automationResponse = await fetch('/api/automation/status?source=internal&cache=1');
                     if (!automationResponse.ok) throw new Error('Automation API failed');
                     automationData = await automationResponse.json();
                 } catch (error) {
                     console.warn('Automation status fetch failed, retrying...', error);
                     // Retry after 1 second
                     await new Promise(resolve => setTimeout(resolve, 1000));
-                    const automationResponse = await fetch('/api/automation/status');
+                    const automationResponse = await fetch('/api/automation/status?source=internal&cache=1');
                     automationData = await automationResponse.json();
                 }
                 
@@ -505,7 +521,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     // Ensure status exists and has valid data
                     if (status && typeof status.is_running === 'boolean') {
                         const currentStatus = status.is_running ? 'RUNNING' : 'STOPPED';
-                        const currentJobs = status.scheduled_jobs || 0;
+                        const currentJobs = (automationData.mode === 'CONTINUOUS_FULL') ? 'Continuous (5m)' : (status.scheduled_jobs || 0);
                         
                         // Only update if different to prevent flickering
                         const statusElement = document.getElementById('automation-status');
@@ -543,10 +559,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 updateHealthStatus(healthData);
                 updatePerformanceChart(healthData);
                 
-                // Update Recent Tasks
-                await updateRecentTasks();
+            // Update Recent Tasks & dynamic pipeline info
+            await updateRecentTasks();
+            await updatePipelineInfo();
                 
-                addLog('INFO', 'Dashboard updated successfully');
+                // Başarılı güncelleme log'unu 60 saniyede bir yaz (spam önleme)
+                if (!window.__lastOKLog || (Date.now() - window.__lastOKLog) > 60000) {
+                    addLog('INFO', 'Dashboard updated successfully');
+                    window.__lastOKLog = Date.now();
+                }
         
     } catch (error) {
                 console.error('Dashboard update error:', error);
@@ -557,51 +578,47 @@ document.addEventListener('DOMContentLoaded', function() {
         // Update health status display
         function updateHealthStatus(healthData) {
             const healthContainer = document.getElementById('health-status');
-            
-            if (healthData.health_check) {
-                const health = healthData.health_check;
-                const overall = health.overall_status;
-                const systems = health.systems || {};
-                
-                const statusEmoji = {
-                    'healthy': '✅',
-                    'warning': '⚠️',
-                    'error': '❌'
-                };
-                
-                const statusClass = {
-                    'healthy': 'status-healthy',
-                    'warning': 'status-warning',
-                    'error': 'status-error'
-                };
-                
-                let html = `
-                    <div class="mb-3">
-                        <h5>${statusEmoji[overall] || '❓'} Overall Status: 
-                            <span class="${statusClass[overall] || 'status-unknown'}">${overall.toUpperCase()}</span>
-                        </h5>
-                    </div>
-                    <div class="row">
-                `;
-                
-                Object.entries(systems).forEach(([system, info]) => {
-                    const status = info.status;
-                    html += `
-                        <div class="col-md-6 mb-2">
-                            <div class="d-flex align-items-center">
-                                <span class="me-2">${statusEmoji[status] || '❓'}</span>
-                                <strong>${system.replace('_', ' ').toUpperCase()}:</strong>
-                                <span class="ms-2 ${statusClass[status] || 'status-unknown'}">${status}</span>
-                            </div>
-                        </div>
-                    `;
-                });
-                
-                html += '</div>';
-                healthContainer.innerHTML = html;
-            } else {
+            if (!healthData.health_check) {
                 healthContainer.innerHTML = '<div class="alert alert-warning">Health data not available</div>';
+                return;
             }
+            const health = healthData.health_check;
+            const systems = health.systems || {};
+            const overall = (health.overall_status || 'unknown').toLowerCase();
+            const badge = (s) => s === 'healthy' ? 'success' : (s === 'warning' ? 'warning' : (s === 'connected' ? 'success' : 'danger'));
+
+            // Build modern card layout consistently with static HTML above
+            const card = (title, subtitle, id, statusKey) => {
+                const val = (statusKey && systems[statusKey]) ? (systems[statusKey].status || 'unknown') : (systems[title] && systems[title].status) || 'unknown';
+                return `
+                <div class="col-12">
+                    <div class="p-3 rounded d-flex justify-content-between align-items-center" style="background:#f8f9fa;border:1px solid #e9ecef;">
+                        <div>
+                            <div class="fw-bold">${title}</div>
+                            <small class="text-muted">${subtitle}</small>
+                        </div>
+                        <span class="badge bg-${badge(val)}" id="${id}">${val}</span>
+                    </div>
+                </div>`;
+            };
+
+            const html = `
+            <div class="row g-3">
+                <div class="col-12">
+                    <div class="p-3 rounded d-flex justify-content-between align-items-center" style="background:#f8fff9;border:1px solid #e2f3e7;">
+                        <div>
+                            <div class="fw-bold">Overall Status</div>
+                            <small class="text-muted">System Integration</small>
+                        </div>
+                        <span class="badge bg-${overall==='healthy'?'success':overall==='warning'?'warning':'danger'}" id="overall-status">${overall.toUpperCase()}</span>
+                    </div>
+                </div>
+                ${card('Automation Engine','Background Processing','automation-status','automation_engine')}
+                ${card('Flask API','Web Service','flask-status','flask_api')}
+                ${card('Database','PostgreSQL Connection','db-status','database')}
+                ${card('WebSocket','Real-time Updates','websocket-status','websocket')}
+            </div>`;
+            healthContainer.innerHTML = html;
         }
 
         // Update performance chart
@@ -645,9 +662,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 const tasksContainer = document.getElementById('recent-tasks');
                 
                 if (data.status === 'success' && data.tasks && data.tasks.length > 0) {
+                    const MAX_TASKS_DISPLAY = 5;
+                    const tasksToRender = data.tasks.slice(0, MAX_TASKS_DISPLAY);
                     let html = '';
                     
-                    data.tasks.forEach(task => {
+                    tasksToRender.forEach(task => {
                         const statusClass = {
                             'completed': 'text-success',
                             'running': 'text-primary',
@@ -678,6 +697,14 @@ document.addEventListener('DOMContentLoaded', function() {
                             </div>
                         `;
                     });
+
+                    if (data.tasks.length > MAX_TASKS_DISPLAY) {
+                        html += `
+                            <div class="text-center text-muted small pb-1">
+                                Showing ${MAX_TASKS_DISPLAY}/${data.tasks.length}. Panel kaydırılabilir.
+                            </div>
+                        `;
+                    }
                     
                     tasksContainer.innerHTML = html;
                     console.log('✅ Recent Tasks updated successfully');
@@ -703,13 +730,68 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
 
+        // Dynamic pipeline info (header metrics)
+        async function updatePipelineInfo() {
+            try {
+                // Read current automation status first to avoid stale phase display
+                const statusRes = await fetch('/api/automation/status');
+                const statusJson = statusRes.ok ? await statusRes.json() : null;
+                let isRunning = false;
+                if (statusJson) {
+                    const container = statusJson.automation ? statusJson.automation : statusJson;
+                    const sched = (container && (container.scheduler_status || container.internal)) || {};
+                    isRunning = !!(sched && sched.is_running);
+                }
+
+                const res = await fetch('/api/automation/pipeline-history');
+                if (!res.ok) return;
+                const data = await res.json();
+                const hist = (data.history || []);
+                // Update Current Phase badge from last history entry
+                const badge = document.getElementById('current-phase-badge');
+                if (badge) {
+                    let label = 'IDLE', cls = 'bg-secondary';
+                    if (isRunning && hist.length > 0) {
+                        // Find most recent 'start' entry to decide the phase reliably
+                        let lastStart = null;
+                        for (let i = hist.length - 1; i >= 0; i--) {
+                            if (hist[i].state === 'start' && (hist[i].phase === 'data_collection' || hist[i].phase === 'ai_analysis')) {
+                                lastStart = hist[i];
+                                break;
+                            }
+                        }
+                        const phase = lastStart ? (lastStart.phase || '') : '';
+                        const state = lastStart ? 'start' : '';
+                        if (state === 'start') {
+                            if (phase === 'data_collection') { label = 'Collecting'; cls = 'bg-info'; }
+                            else if (phase === 'ai_analysis') { label = 'Analyzing'; cls = 'bg-primary'; }
+                            else { label = 'Running'; cls = 'bg-primary'; }
+                        } else if (state === 'end') {
+                            label = 'Idle'; cls = 'bg-success';
+                        } else if (state === 'error') {
+                            label = 'Error'; cls = 'bg-danger';
+                        }
+                    } else if (!isRunning) {
+                        label = 'Idle';
+                        cls = 'bg-secondary';
+                    }
+                    badge.textContent = label.toUpperCase();
+                    badge.className = `badge ${cls} ms-2`;
+                }
+                // Intentionally do not mirror pipeline history as log here to avoid misleading entries
+            } catch (e) { /* ignore */ }
+        }
+
         // Automation control functions
         async function startAutomation() {
             try {
                 addLog('INFO', 'Starting automation...');
                 const response = await fetch('/api/automation/start', { method: 'POST' });
-                const data = await response.json();
-                addLog('SUCCESS', `Automation: ${data.message}`);
+                let data;
+                try { data = await response.json(); } catch (_) { data = { status: 'error', message: `HTTP ${response.status}` }; }
+                const okStatuses = ['started', 'already_running'];
+                const logType = (response.ok && okStatuses.includes(String(data.status))) ? 'SUCCESS' : 'ERROR';
+                addLog(logType, `Automation: ${data.message || data.status || 'Unknown response'}`);
                 updateDashboard();
             } catch (error) {
                 addLog('ERROR', `Start automation failed: ${error.message}`);
@@ -720,8 +802,11 @@ document.addEventListener('DOMContentLoaded', function() {
             try {
                 addLog('INFO', 'Stopping automation...');
                 const response = await fetch('/api/automation/stop', { method: 'POST' });
-                const data = await response.json();
-                addLog('WARNING', `Automation: ${data.message}`);
+                let data;
+                try { data = await response.json(); } catch (_) { data = { status: 'error', message: `HTTP ${response.status}` }; }
+                const okStatuses = ['stopped', 'already_stopped'];
+                const logType = (response.ok && okStatuses.includes(String(data.status))) ? 'SUCCESS' : 'ERROR';
+                addLog(logType, `Automation: ${data.message || data.status || 'Unknown response'}`);
                 updateDashboard();
             } catch (error) {
                 addLog('ERROR', `Stop automation failed: ${error.message}`);
@@ -779,21 +864,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Start live updates
         function startLiveUpdates() {
-            // Update every 10 seconds
-            setInterval(updateDashboard, 10000);
-            
-            // Add random log entries for demo (remove in production)
-            setInterval(() => {
-                const demoLogs = [
-                    'System heartbeat OK',
-                    'Scheduled task check completed',
-                    'Data collection in progress',
-                    'ML model performance within limits',
-                    'Health check passed'
-                ];
-                const randomLog = demoLogs[Math.floor(Math.random() * demoLogs.length)];
-                addLog('INFO', randomLog);
-            }, 15000);
+            // Reduce frequency to avoid log spam
+            setInterval(updateDashboard, 15000);
         }
 
         // Initialize everything when page loads
@@ -804,12 +876,13 @@ document.addEventListener('DOMContentLoaded', function() {
             // Load initial dashboard data
             updateDashboard();
             
-            // Start live updates (reduced frequency with WebSocket)
-            // Update every 30 seconds instead of 10
-            setInterval(() => {
-                updateDashboard();
-                updateRecentTasks(); // Recent tasks'ı da güncelle
-            }, 15000); // Her 15 saniyede bir
+            // Periodik güncelleme: tek interval (20 sn)
+            if (!window.__dashInterval) {
+                window.__dashInterval = setInterval(() => {
+                    updateDashboard();
+                    updateRecentTasks();
+                }, 20000);
+            }
             
             addLog('INFO', '🚀 BIST Dashboard initialized with WebSocket support');
             
@@ -973,8 +1046,15 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('sim-trades').textContent = session.total_trades;
             document.getElementById('sim-winrate').textContent = `${session.win_rate.toFixed(1)}%`;
             
-            // Calculate runtime (use server-provided runtime_hours)
-            const runtimeHours = status.runtime_hours || 0;
+            // Calculate runtime from session times
+            let runtimeHours = 0;
+            try {
+                const start = new Date(session.start_time);
+                const end = session.end_time ? new Date(session.end_time) : new Date();
+                runtimeHours = Math.max(0, (end - start) / 3600000);
+            } catch (e) {
+                runtimeHours = 0;
+            }
             let runtimeText;
             if (runtimeHours < 1) {
                 const runtimeMinutes = Math.floor(runtimeHours * 60);

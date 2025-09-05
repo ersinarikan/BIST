@@ -5,6 +5,7 @@ XGBoost, LightGBM, CatBoost ile gelişmiş tahmin modelleri
 
 import numpy as np
 import pandas as pd
+import os
 from datetime import datetime, timedelta
 import logging
 from sklearn.model_selection import train_test_split, TimeSeriesSplit
@@ -62,6 +63,29 @@ class EnhancedMLSystem:
         if BASE_ML_AVAILABLE:
             self.base_ml = MLPredictionSystem()
         
+        # CatBoost çalışma dizini (write permission hatalarını önlemek için)
+        try:
+            self.catboost_train_dir = os.getenv('CATBOOST_TRAIN_DIR', '/opt/bist-pattern/.cache/catboost')
+            os.makedirs(self.catboost_train_dir, exist_ok=True)
+        except Exception:
+            # Son çare: tmp dizini
+            self.catboost_train_dir = '/tmp/catboost_info'
+            try:
+                os.makedirs(self.catboost_train_dir, exist_ok=True)
+            except Exception:
+                pass
+
+        # Model kayıt dizini (yazılabilir)
+        try:
+            self.model_directory = os.getenv('ML_MODEL_PATH', '/opt/bist-pattern/.cache/enhanced_ml_models')
+            os.makedirs(self.model_directory, exist_ok=True)
+        except Exception:
+            try:
+                self.model_directory = 'enhanced_ml_models'
+                os.makedirs(self.model_directory, exist_ok=True)
+            except Exception:
+                pass
+
         logger.info("🧠 Enhanced ML System başlatıldı")
         logger.info(f"📊 XGBoost: {XGBOOST_AVAILABLE}")
         logger.info(f"📊 LightGBM: {LIGHTGBM_AVAILABLE}")
@@ -451,7 +475,9 @@ class EnhancedMLSystem:
                             depth=6,
                             learning_rate=0.1,
                             random_seed=42,
-                            verbose=False
+                            allow_writing_files=False,
+                            train_dir=self.catboost_train_dir,
+                            logging_level='Silent'
                         )
                         
                         # Cross-validation
@@ -606,7 +632,17 @@ class EnhancedMLSystem:
             top_features = {}
             
             for horizon in self.prediction_horizons:
-                key = f"{symbol}_{horizon}d_{model_type[:3]}"
+                # Normalize model_type mapping: 'xgboost'->'xgb', 'lightgbm'->'lgb', 'catboost'->'cat'
+                mt = model_type.lower()
+                if mt.startswith('xgboost') or mt == 'xgb':
+                    short = 'xgb'
+                elif mt.startswith('lightgbm') or mt == 'lgb':
+                    short = 'lgb'
+                elif mt.startswith('catboost') or mt == 'cat':
+                    short = 'cat'
+                else:
+                    short = mt[:3]
+                key = f"{symbol}_{horizon}d_{short}"
                 if key in self.feature_importance:
                     importance = self.feature_importance[key]
                     sorted_features = sorted(importance.items(), key=lambda x: x[1], reverse=True)
