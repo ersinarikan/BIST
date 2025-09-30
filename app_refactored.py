@@ -166,7 +166,7 @@ def create_app(config_name='default'):
     
     # Login Manager (use the globally initialized instance)
     login_manager.init_app(app)
-    login_manager.login_view = 'auth.login'  # Updated for blueprint routing
+    login_manager.login_view = 'login'
 
     # RBAC helpers
     def is_admin(user) -> bool:
@@ -291,89 +291,41 @@ def create_app(config_name='default'):
             pass
 
     # ==========================================
-    # BLUEPRINT REGISTRATION  
+    # BLUEPRINT REGISTRATION
     # ==========================================
-    # All HTTP routes moved to blueprints for better modularity
+    # Register all blueprints (routes moved to blueprints for modularity)
     try:
         from bist_pattern.blueprints.register_all import register_all_blueprints
         register_all_blueprints(app, csrf)
         logger.info("✅ All blueprints registered successfully")
     except Exception as e:
-        logger.error(f"❌ Blueprint registration error: {e}")
+        logger.error(f"❌ Blueprint registration failed: {e}")
+    
+    # Register pattern analysis blueprint (if exists in /opt/bist-pattern/blueprints)
+    try:
+        from blueprints import api_patterns
+        if hasattr(api_patterns, 'api_patterns'):
+            app.register_blueprint(api_patterns.api_patterns)
+            logger.info("✅ Pattern analysis blueprint registered")
+    except Exception:
+        pass
+    
+    # Register ML blueprints (if exists)
+    try:
+        from blueprints import api_ml
+        if hasattr(api_ml, 'bp'):
+            app.register_blueprint(api_ml.bp)
+            logger.info("✅ ML blueprint registered")
+    except Exception:
+        pass
 
 
     # ==========================================
-    # REALTIME WEBSOCKET HANDLERS
+    # WEBSOCKET EVENT HANDLERS
     # ==========================================
+    # Note: Most routes moved to blueprints
+    # Socket.IO events remain here for real-time functionality
 
-    @socketio.on('connect')
-    def handle_connect(auth):
-        logger.info(f"🔗 Client connected: {request.sid}")
-        emit('status', {
-            'message': 'Connected to BIST AI System', 
-            'timestamp': datetime.now().isoformat(),
-            'connection_id': request.sid
-        })
-    
-    @socketio.on('disconnect')
-    def handle_disconnect():
-        logger.info(f"❌ Client disconnected: {request.sid}")
-    
-    @socketio.on('join_admin')
-    def handle_join_admin():
-        join_room('admin')
-        logger.info(f"👤 Client joined admin room: {request.sid}")
-        emit('room_joined', {'room': 'admin', 'message': 'Admin dashboard connected'})
-    
-    @socketio.on('join_user')
-    def handle_join_user(data):
-        user_id = data.get('user_id', 'anonymous')
-        join_room(f'user_{user_id}')
-        logger.info(f"👤 Client joined user room: {request.sid} -> user_{user_id}")
-        emit('room_joined', {'room': f'user_{user_id}', 'message': 'User interface connected'})
-    
-    @socketio.on('subscribe_stock')
-    def handle_subscribe_stock(data):
-        symbol = data.get('symbol', '').upper()
-        if symbol:
-            join_room(f'stock_{symbol}')
-            logger.info(f"📈 Client subscribed to {symbol}: {request.sid}")
-            emit('subscription_confirmed', {'symbol': symbol, 'message': f'Subscribed to {symbol} updates'})
-    
-    @socketio.on('unsubscribe_stock')
-    def handle_unsubscribe_stock(data):
-        symbol = data.get('symbol', '').upper()
-        if symbol:
-            leave_room(f'stock_{symbol}')
-            logger.info(f"📉 Client unsubscribed from {symbol}: {request.sid}")
-            emit('subscription_removed', {'symbol': symbol, 'message': f'Unsubscribed from {symbol}'})
-    
-    @socketio.on('request_pattern_analysis')
-    def handle_pattern_request(data):
-        symbol = data.get('symbol', '').upper()
-        if symbol:
-            try:
-                result = get_pattern_detector().analyze_stock(symbol)
-                # Send to requesting client
-                emit('pattern_analysis', {
-                    'symbol': symbol,
-                    'data': result,
-                    'timestamp': datetime.now().isoformat()
-                })
-                
-                # Also broadcast to stock room for other subscribers
-                socketio.emit('pattern_analysis', {
-                    'symbol': symbol,
-                    'data': result,
-                    'timestamp': datetime.now().isoformat()
-                }, room=f'stock_{symbol}')  # type: ignore[call-arg]
-                
-                logger.info(f"📊 Pattern analysis sent for {symbol} to {request.sid} and stock room")
-            except Exception as e:
-                emit('error', {'message': f'Pattern analysis failed for {symbol}: {str(e)}'})
-                logger.error(f"Pattern analysis error for {symbol}: {e}")
-    
-    # Real-time log broadcasting function
     def broadcast_log(level, message, category='system'):
         socketio.emit('log_update', {
             'level': level,
@@ -386,6 +338,15 @@ def create_app(config_name='default'):
     app.socketio = socketio
     app.broadcast_log = broadcast_log
     
+    return app
+
+# Duplike flag tanımlamaları kaldırıldı - bunlar artık module başında tanımlı
+
+# Global pattern detector instance
+_pattern_detector = None
+
+
+
     return app
 
 # Duplike flag tanımlamaları kaldırıldı - bunlar artık module başında tanımlı

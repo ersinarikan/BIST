@@ -32,8 +32,17 @@ def register_all_blueprints(app: Any, csrf: Any) -> None:
     _try_register('bist_pattern.blueprints.api_simulation')
     _try_register('bist_pattern.blueprints.api_automation')
     _try_register('bist_pattern.blueprints.api_health')
-    # Web
+    # Web pages
     _try_register('bist_pattern.blueprints.web')
+    _try_register('bist_pattern.blueprints.admin_dashboard')
+    
+    # Additional API modules (from /opt/bist-pattern/blueprints and api_modules)
+    _try_register('blueprints.api_patterns')
+    _try_register('blueprints.api_ml')
+    _try_register('bist_pattern.api_modules.stocks')
+    _try_register('bist_pattern.api_modules.automation')
+    _try_register('bist_pattern.api_modules.watchlist')
+    _try_register('bist_pattern.api_modules.dashboard')
 
     # CSRF exemptions for internal and auth endpoints
     try:
