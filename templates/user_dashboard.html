@@ -977,12 +977,10 @@
                 if (el) {
                     el.addEventListener('change', () => { 
                         try { 
-                            updateWatchlistPredictions(); 
-                            // ⚡ FIX: Tahmin ufku değişince pattern analysis'i de yeniden yükle
-                            if (id === 'pred-sort-horizon') {
-                                console.log('🔄 Tahmin ufku değişti, pattern analysis yenileniyor...');
-                                loadBatchPatternAnalysis();
-                            }
+                            // ⚡ OPTIMIZED: Only refresh predictions (instant!)
+                            // Pattern analysis is loaded once on page load (batch API)
+                            // No need to reload patterns when changing horizon filter
+                            updateWatchlistPredictions(true);  // force=true for instant refresh
                         } catch (e) {
                             console.error('Filter change error:', e);
                         } 
