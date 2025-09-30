@@ -533,8 +533,9 @@ class HybridPatternDetector:
                     flask_app.broadcast_log('INFO', f'🧠 AI analiz başlıyor: {symbol}', 'ai_analysis')  # type: ignore[attr-defined]
             except Exception:
                 pass
-            # Cache kontrolü - TTL ile
-            cache_key = f"{symbol}_{datetime.now().strftime('%Y%m%d_%H%M')}"
+            # ✅ FIX: Cache key symbol-based (not minute-based!)
+            # Automation results should be reused by user requests
+            cache_key = symbol  # Simple, effective!
             current_time = datetime.now().timestamp()
             
             # Cache'de var mı ve TTL süresi geçmemiş mi?
