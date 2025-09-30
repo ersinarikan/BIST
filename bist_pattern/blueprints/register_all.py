@@ -43,6 +43,9 @@ def register_all_blueprints(app: Any, csrf: Any) -> None:
     _try_register('bist_pattern.api_modules.automation')
     _try_register('bist_pattern.api_modules.watchlist')
     _try_register('bist_pattern.api_modules.dashboard')
+    
+    # High-performance batch API (NEW!)
+    _try_register('bist_pattern.blueprints.api_batch')
 
     # CSRF exemptions for internal and auth endpoints
     try:
