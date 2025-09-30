@@ -712,11 +712,22 @@ class EnhancedMLSystem:
                         weights = [info['confidence'] for info in model_predictions.values()]
                         predictions_list = [info['prediction'] for info in model_predictions.values()]
                         
-                        # If all stored scores are zero (e.g., loaded models without metrics),
-                        # fallback to equal-weight averaging to avoid empty predictions.
+                        # ✨ IMPROVED: Performance-based weighting + disagreement penalty
                         if sum(weights) > 0:
                             ensemble_pred = np.average(predictions_list, weights=weights)
                             avg_confidence = np.mean(weights)
+                            
+                            # ✨ NEW: Reduce confidence if models disagree significantly
+                            if len(predictions_list) > 1:
+                                pred_std = np.std(predictions_list)
+                                pred_mean = np.mean(predictions_list)
+                                disagreement_ratio = pred_std / max(abs(pred_mean), 1e-8)
+                                
+                                # Penalize confidence if disagreement > 5%
+                                if disagreement_ratio > 0.05:
+                                    disagreement_penalty = min(0.3, disagreement_ratio * 2)
+                                    avg_confidence = max(0.25, avg_confidence * (1 - disagreement_penalty))
+                                    logger.debug(f"{symbol} {horizon}d: Model disagreement {disagreement_ratio*100:.1f}%, confidence adjusted to {avg_confidence:.2f}")
                         else:
                             ensemble_pred = float(np.mean(predictions_list))
                             # conservative default confidence
