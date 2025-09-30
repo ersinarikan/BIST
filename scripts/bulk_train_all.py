@@ -51,6 +51,20 @@ with app.app_context():
                 skipped += 1
                 continue
 
+            # ✨ IMPROVED: Use ml_coordinator logic (like automation)
+            # Only train if model is old, missing, or needs update
+            if mlc:
+                # Check training gate (age, cooldown, completeness)
+                try:
+                    ok_gate, reason = mlc.evaluate_training_gate(sym, len(df))
+                    if not ok_gate:
+                        skipped += 1
+                        if i % 50 == 0:
+                            print(f"  [{i}] {sym}: Skipped ({reason})")
+                        continue
+                except Exception:
+                    pass  # If gate check fails, proceed with training
+
             try:
                 if ml:
                     res = ml.train_models(sym, df)
@@ -67,9 +81,14 @@ with app.app_context():
                 except Exception:
                     pass
 
-            # Enhanced ML (persisted to disk)
+            # Enhanced ML (persisted to disk) - use coordinator logic
             try:
-                if enh:
+                if enh and mlc:
+                    # Use coordinator's smart training (respects cooldown, age)
+                    res_enh = mlc.train_enhanced_model_if_needed(sym, df)
+                    ok_enh += 1 if res_enh else 0
+                elif enh:
+                    # Fallback: direct training (old behavior)
                     res_enh = enh.train_enhanced_models(sym, df)
                     ok_enh += 1 if res_enh else 0
                 else:
