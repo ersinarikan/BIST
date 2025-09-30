@@ -408,8 +408,8 @@
                 console.log('❌ WebSocket disconnected');
                 updateConnectionStatus(false);
                 notifyThrottled('error', '❌ Bağlantı kesildi');
-                // Try to reconnect analysis queue via REST after delay
-                setTimeout(() => { try { startAnalysisQueue(); } catch (e) {} }, 1500);
+                // ⚡ REMOVED: Old queue system - using batch API now
+                // setTimeout(() => { try { startAnalysisQueue(); } catch (e) {} }, 1500);
             });
 
             socket.on('connect_error', function(err) {
@@ -441,8 +441,8 @@
                         handlePatternUpdate(data);
                     }
                 } catch (e) { /* ignore */ }
-                // Next batch when a symbol is done
-                try { if (data && data.symbol && isWatched(data.symbol)) scheduleNextBatch(); } catch (e) {}
+                // ⚡ REMOVED: Old queue system - using batch API now
+                // try { if (data && data.symbol && isWatched(data.symbol)) scheduleNextBatch(); } catch (e) {}
                 try { lastPatternTs = Math.floor(Date.now()/1000); if (data && data.symbol && isWatched(data.symbol)) completedSymbols.add(data.symbol); } catch (e) { /* ignore */ }
             });
             
@@ -1464,6 +1464,9 @@
             } catch (e) { /* ignore */ }
         }
 
+        // ⚡ DEPRECATED: Old queue system - replaced by batch API
+        // Kept for reference but not used anymore
+        /*
         function startAnalysisQueue() {
             if (analysisTimer) clearInterval(analysisTimer);
             analysisTimer = setInterval(() => {
@@ -1479,7 +1482,7 @@
                 } else {
                     batch.forEach(sym => { try { fetchPattern(sym); } catch (e) {} });
                 }
-            }, 1500); // 1.5s aralıklarla 2 sembol (performans için optimize edildi)
+            }, 1500);
 
             if (watchdogTimer) clearInterval(watchdogTimer);
             watchdogTimer = setInterval(() => {
@@ -1499,7 +1502,6 @@
         }
 
         function scheduleNextBatch() {
-            // Trigger immediate next small batch when one completes
             try {
                 if (pendingSymbols.length > 0 && socket && socket.connected) {
                     const batch = pendingSymbols.splice(0, analysisBatchSize);
@@ -1510,8 +1512,9 @@
                         }
                     });
                 }
-            } catch (e) { /* ignore */ }
+            } catch (e) {}
         }
+        */
 
         // ⭐ EKLENEN: Live signals handler function
         function handleLiveSignal(data) {
