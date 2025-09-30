@@ -13,10 +13,6 @@ logger = logging.getLogger(__name__)
 
 bp = Blueprint('api_batch', __name__, url_prefix='/api/batch')
 
-# ⚡ Simple in-memory cache for batch results
-_batch_cache = {}
-_CACHE_TTL = 300  # 5 minutes
-
 
 def register(app):
     """Register batch API blueprint"""
@@ -44,36 +40,16 @@ def register(app):
             detector = get_pattern_detector()
             
             results = {}
-            cache_hits = 0
-            cache_misses = 0
             
             for symbol in symbols:
                 try:
                     sym = str(symbol).upper().strip()
                     if sym:
-                        # ⚡ FIX: Use module-level cache
-                        cache_key = f"pattern_{sym}"
-                        now = time.time()
-                        
-                        # Check cache
-                        if cache_key in _batch_cache:
-                            entry = _batch_cache[cache_key]
-                            age = now - entry.get('ts', 0)
-                            if age < _CACHE_TTL:
-                                results[sym] = entry['data']
-                                cache_hits += 1
-                                continue
-                        
-                        # Cache miss - do fresh analysis
+                        # ⚡ FIX: Use pattern_detector's internal cache (automation results!)
+                        # pattern_detector.analyze_stock() already has cache mechanism
+                        # If automation analyzed this symbol, cache hit will be instant!
                         analysis = detector.analyze_stock(sym)
                         results[sym] = analysis
-                        cache_misses += 1
-                        
-                        # Store in cache
-                        _batch_cache[cache_key] = {
-                            'data': analysis,
-                            'ts': now
-                        }
                             
                 except Exception as e:
                     logger.error(f"Batch analysis error for {symbol}: {e}")
@@ -83,17 +59,15 @@ def register(app):
                         'error': str(e)
                     }
             
-            # Log cache efficiency
-            if cache_hits + cache_misses > 0:
-                hit_rate = (cache_hits / (cache_hits + cache_misses)) * 100
-                logger.info(f"⚡ Batch pattern API: {len(results)} symbols, cache {cache_hits}/{cache_hits+cache_misses} ({hit_rate:.0f}%)")
+            # ✅ pattern_detector.analyze_stock() internally uses cache
+            # If automation cycle analyzed these symbols, they will be cache hits!
+            # No need for separate batch cache - automation results are reused
+            logger.info(f"⚡ Batch pattern API: {len(results)} symbols analyzed (automation cache reused)")
             
             return jsonify({
                 'status': 'success',
                 'results': results,
                 'count': len(results),
-                'cache_hits': cache_hits,
-                'cache_misses': cache_misses,
                 'timestamp': datetime.now().isoformat()
             })
             
