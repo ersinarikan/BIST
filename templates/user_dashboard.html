@@ -1611,13 +1611,29 @@
                 
                 // Convert batch results to watchlist format
                 const results = data.results || {};
+                let debugCount = 0;
                 const items = watchedStocks.map(ws => {
-                    const preds = results[ws.symbol];
+                    const result = results[ws.symbol];
+                    const preds = result?.predictions || {};
+                    const current = result?.current_price || ws.price || 0;
+                    
+                    // ⚡ DEBUG: Log first 3 symbols
+                    if (debugCount < 3) {
+                        console.log(`📊 ${ws.symbol}:`, {
+                            predictions: preds,
+                            current: current,
+                            hasResult: !!result,
+                            predsType: typeof preds,
+                            predsKeys: Object.keys(preds)
+                        });
+                        debugCount++;
+                    }
+                    
                     return {
                         symbol: ws.symbol,
-                        current_price: ws.price || 0,
-                        predictions: preds?.predictions || {},
-                        overall_signal: preds?.overall_signal || {}
+                        current_price: current,
+                        predictions: preds,  // Should be {1d: 50.14, 7d: 51.00, ...}
+                        overall_signal: result?.overall_signal || {}
                     };
                 });
                 lastPredFetchTs = Date.now() / 1000;
@@ -1663,6 +1679,7 @@
                 });
 
                 // Render under each item
+                let renderDebugCount = 0;
                 decorated.forEach(it => {
                     const el = document.getElementById(`pred-${it.symbol}`);
                     if (!el) return;
@@ -1675,6 +1692,12 @@
                     const p14 = it.predictions?.['14d'];
                     const p30 = it.predictions?.['30d'];
                     const f = (v)=> typeof v==='number'? '₺'+v.toFixed(2): '-';
+                    
+                    // ⚡ DEBUG: Log first 2 renders
+                    if (renderDebugCount < 2) {
+                        console.log(`🎨 Render ${it.symbol}:`, {p1, p3, p7, p14, p30, chosenPct, pctStr});
+                        renderDebugCount++;
+                    }
                     el.innerHTML = `
                         <span class="me-3">1G: <strong>${f(p1)}</strong></span>
                         <span class="me-3">3G: <strong>${f(p3)}</strong></span>
