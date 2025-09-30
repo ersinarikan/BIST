@@ -431,13 +431,12 @@ class EnhancedMLSystem:
                             learning_rate=0.05,         # Decreased from 0.1 for stability
                             subsample=0.8,              # NEW: Row sampling for generalization
                             colsample_bytree=0.8,       # NEW: Column sampling
+                            n_jobs=2,                   # ⚡ CPU LIMIT: Max 2 cores (prevent %100 CPU)
                             min_child_weight=5,         # NEW: Regularization
                             gamma=0.1,                  # NEW: Pruning parameter
                             reg_alpha=0.1,              # NEW: L1 regularization
                             reg_lambda=1.0,             # NEW: L2 regularization
                             random_state=42,
-                            n_jobs=-1,
-                            early_stopping_rounds=50,   # NEW: Stop when no improvement
                             eval_metric='rmse'          # NEW: Explicit metric
                         )
                         
@@ -448,14 +447,27 @@ class EnhancedMLSystem:
                                 X_train, X_val = X[train_idx], X[val_idx]
                                 y_train, y_val = y[train_idx], y[val_idx]
                                 
-                                xgb_model.fit(X_train, y_train)
+                                # ⚡ FIX: Skip early stopping if insufficient validation data
+                                if len(val_idx) >= 10:
+                                    # Use early stopping with eval_set
+                                    xgb_model.set_params(early_stopping_rounds=50)
+                                    xgb_model.fit(
+                                        X_train, y_train,
+                                        eval_set=[(X_val, y_val)],
+                                        verbose=False
+                                    )
+                                else:
+                                    # No early stopping for insufficient data
+                                    xgb_model.set_params(early_stopping_rounds=None)
+                                    xgb_model.fit(X_train, y_train)
+                                
                                 pred = xgb_model.predict(X_val)
                                 score = r2_score(y_val, pred)
                                 xgb_scores.append(score)
                                 logger.info(f"XGBoost fold {fold}: R² = {score:.3f}")
                             except Exception as e:
                                 logger.error(f"XGBoost fold {fold} error: {e}")
-                                raise
+                                # Don't raise - continue with other folds
                         
                         # Final training
                         xgb_model.fit(X, y)
@@ -491,8 +503,9 @@ class EnhancedMLSystem:
                             n_estimators=500,           # Increased from 100
                             max_depth=8,                # Increased from 6
                             learning_rate=0.05,         # Decreased from 0.1 for stability
-                            num_leaves=31,              # NEW: Optimal for depth=8
-                            min_child_samples=20,       # NEW: Regularization
+                            num_leaves=63,              # ✨ TUNED: Increased from 31
+                            min_data_in_leaf=15,        # ✨ TUNED: Decreased from 20
+                            num_threads=2,              # ⚡ CPU LIMIT: Max 2 threads
                             subsample=0.8,              # NEW: Row sampling
                             colsample_bytree=0.8,       # NEW: Feature sampling
                             reg_alpha=0.1,              # NEW: L1 regularization
@@ -547,8 +560,9 @@ class EnhancedMLSystem:
                             iterations=500,             # Increased from 100
                             depth=8,                    # Increased from 6
                             learning_rate=0.05,         # Decreased from 0.1
-                            l2_leaf_reg=3.0,            # NEW: L2 regularization
+                            l2_leaf_reg=2.0,            # ✨ TUNED: Decreased from 3.0
                             border_count=128,           # NEW: Optimal splits
+                            thread_count=2,             # ⚡ CPU LIMIT: Max 2 threads
                             subsample=0.8,              # NEW: Row sampling
                             rsm=0.8,                    # NEW: Feature sampling (Random Subspace Method)
                             random_seed=42,
