@@ -248,28 +248,31 @@ def register(app):
                             out['14d'] = _pick_num(val)
                         elif k in ('30d', 'd30', 'thirty_day', 'day30', '30day'):
                             out['30d'] = _pick_num(val)
-                detector = get_pattern_detector()
+                return out
+            
+            # ✅ FIX: Indent corrected - this was outside _normalize_predictions!
+            detector = get_pattern_detector()
+            basic = {}
+            enhanced = {}
+            try:
+                basic_fn = getattr(detector, 'get_basic_predictions', None)
+                if callable(basic_fn):
+                    basic = basic_fn(symbol, stock_data) or {}
+            except Exception:
                 basic = {}
+            try:
+                enhanced_fn = getattr(detector, 'get_enhanced_predictions', None)
+                if callable(enhanced_fn):
+                    enhanced = enhanced_fn(symbol, stock_data) or {}
+            except Exception:
                 enhanced = {}
-                try:
-                    basic_fn = getattr(detector, 'get_basic_predictions', None)
-                    if callable(basic_fn):
-                        basic = basic_fn(symbol, stock_data) or {}
-                except Exception:
-                    basic = {}
-                try:
-                    enhanced_fn = getattr(detector, 'get_enhanced_predictions', None)
-                    if callable(enhanced_fn):
-                        enhanced = enhanced_fn(symbol, stock_data) or {}
-                except Exception:
-                    enhanced = {}
-                merged = {}
-                merged.update(_normalize_predictions(basic, stock_data))
-                merged.update(_normalize_predictions(enhanced, stock_data))
-                return merged
-
-            preds = _normalize_predictions({}, stock_data)
-            return jsonify({'status': 'success', 'symbol': symbol, 'predictions': preds})
+            
+            # ✅ FIX: Actually use basic and enhanced predictions!
+            merged = {}
+            merged.update(_normalize_predictions(basic, stock_data['close'].iloc[-1] if hasattr(stock_data, 'iloc') else 0))
+            merged.update(_normalize_predictions(enhanced, stock_data['close'].iloc[-1] if hasattr(stock_data, 'iloc') else 0))
+            
+            return jsonify({'status': 'success', 'symbol': symbol, 'predictions': merged})
         except Exception as e:
             return jsonify({'status': 'error', 'message': str(e)}), 500
 
