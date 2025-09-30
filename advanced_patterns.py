@@ -1,13 +1,25 @@
 """
 Advanced Pattern Detector
-- Simple heuristics for classic patterns: DOUBLE_TOP, DOUBLE_BOTTOM, HEAD_AND_SHOULDERS, INVERSE_HEAD_AND_SHOULDERS
-- Designed to be lightweight and safe in preprod
+- Classic TA patterns: DOUBLE_TOP, DOUBLE_BOTTOM, HEAD_AND_SHOULDERS, INVERSE_HEAD_AND_SHOULDERS
+- TA-Lib candlestick patterns (60+ patterns)
+- Enhanced with professional pattern recognition
 """
 
 from typing import List, Dict
+import logging
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+# TA-Lib for professional pattern recognition
+try:
+    import talib
+    TALIB_AVAILABLE = True
+except ImportError:
+    TALIB_AVAILABLE = False
+    logger.warning("⚠️ TA-Lib not available - using heuristics only")
 
 
 class AdvancedPatternDetector:
@@ -31,18 +43,25 @@ class AdvancedPatternDetector:
                 return []
 
             patterns: List[Dict] = []
+            
+            # Classic TA patterns (heuristic-based)
             patterns.extend(self._detect_double_top_bottom(df))
             patterns.extend(self._detect_head_shoulders(df))
+            
+            # ✨ NEW: TA-Lib candlestick patterns (60+ professional patterns)
+            if TALIB_AVAILABLE:
+                patterns.extend(self._detect_talib_patterns(df))
 
-            # Cap list size
-            if len(patterns) > 8:
+            # Cap list size and prioritize by confidence
+            if len(patterns) > 12:  # Increased from 8 to accommodate TA-Lib patterns
                 patterns = sorted(
                     patterns,
                     key=lambda p: p.get('confidence', 0),
                     reverse=True,
-                )[:8]
+                )[:12]
             return patterns
-        except Exception:
+        except Exception as e:
+            logger.error(f"Pattern analysis error: {e}")
             return []
 
     # ------------- Internal helpers -------------
@@ -192,3 +211,98 @@ class AdvancedPatternDetector:
             if array[i] == window.max() and (window.argmax() == distance):
                 idx.append(i)
         return idx
+    
+    def _detect_talib_patterns(self, df: pd.DataFrame) -> List[Dict]:
+        """
+        Detect candlestick patterns using TA-Lib
+        
+        TA-Lib provides 60+ professional candlestick pattern recognition functions.
+        Each returns integer values:
+        - 100: Bullish pattern
+        - -100: Bearish pattern
+        - 0: No pattern
+        """
+        if not TALIB_AVAILABLE:
+            return []
+        
+        patterns: List[Dict] = []
+        
+        try:
+            # Extract OHLC arrays
+            open_prices = df['open'].values.astype(float)
+            high_prices = df['high'].values.astype(float)
+            low_prices = df['low'].values.astype(float)
+            close_prices = df['close'].values.astype(float)
+            
+            # Check if we have enough data
+            if len(close_prices) < 10:
+                return []
+            
+            # Key reversal patterns (high confidence)
+            talib_patterns_high_priority = {
+                'HAMMER': (talib.CDLHAMMER, 'BULLISH', 0.75),
+                'SHOOTING_STAR': (talib.CDLSHOOTINGSTAR, 'BEARISH', 0.75),
+                'DOJI': (talib.CDLDOJI, 'NEUTRAL', 0.60),
+                'ENGULFING_BULLISH': (talib.CDLENGULFING, 'BULLISH', 0.80),  # Positive values
+                'MORNING_STAR': (talib.CDLMORNINGSTAR, 'BULLISH', 0.85),
+                'EVENING_STAR': (talib.CDLEVENINGSTAR, 'BEARISH', 0.85),
+                'PIERCING_LINE': (talib.CDLPIERCING, 'BULLISH', 0.70),
+                'DARK_CLOUD_COVER': (talib.CDLDARKCLOUDCOVER, 'BEARISH', 0.70),
+                'THREE_WHITE_SOLDIERS': (talib.CDL3WHITESOLDIERS, 'BULLISH', 0.85),
+                'THREE_BLACK_CROWS': (talib.CDL3BLACKCROWS, 'BEARISH', 0.85),
+            }
+            
+            # Medium priority patterns
+            talib_patterns_medium = {
+                'HANGING_MAN': (talib.CDLHANGINGMAN, 'BEARISH', 0.65),
+                'INVERTED_HAMMER': (talib.CDLINVERTEDHAMMER, 'BULLISH', 0.65),
+                'HARAMI': (talib.CDLHARAMI, 'NEUTRAL', 0.60),
+                'HARAMI_CROSS': (talib.CDLHARAMICROSS, 'NEUTRAL', 0.65),
+                'MARUBOZU': (talib.CDLMARUBOZU, 'NEUTRAL', 0.60),
+            }
+            
+            # Combine all patterns
+            all_talib_patterns = {**talib_patterns_high_priority, **talib_patterns_medium}
+            
+            for pattern_name, (func, default_signal, base_conf) in all_talib_patterns.items():
+                try:
+                    result = func(open_prices, high_prices, low_prices, close_prices)
+                    
+                    # Check last few candles for pattern
+                    for i in range(max(0, len(result) - 5), len(result)):
+                        value = result[i]
+                        
+                        if value != 0:  # Pattern detected
+                            # Determine signal
+                            if pattern_name in ['ENGULFING_BULLISH']:
+                                signal = 'BULLISH' if value > 0 else 'BEARISH'
+                            elif default_signal == 'NEUTRAL':
+                                # For neutral patterns, check if bullish or bearish
+                                signal = 'BULLISH' if value > 0 else 'BEARISH'
+                            else:
+                                signal = default_signal
+                            
+                            # Adjust confidence based on pattern strength
+                            confidence = base_conf * (abs(value) / 100.0)
+                            confidence = float(np.clip(confidence, 0.5, 0.95))
+                            
+                            patterns.append({
+                                'pattern': pattern_name,
+                                'signal': signal,
+                                'confidence': confidence,
+                                'source': 'ADVANCED_TA',
+                                'detection_method': 'talib',
+                                'strength': abs(value)
+                            })
+                            break  # Only report first occurrence
+                            
+                except Exception as e:
+                    logger.debug(f"TA-Lib {pattern_name} error: {e}")
+                    continue
+            
+            logger.info(f"✅ TA-Lib detected {len(patterns)} candlestick patterns")
+            
+        except Exception as e:
+            logger.error(f"TA-Lib pattern detection error: {e}")
+        
+        return patterns
