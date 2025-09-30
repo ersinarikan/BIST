@@ -634,6 +634,9 @@
             socket.emit('request_pattern_analysis', {symbol});
             renderWatchlist();
             
+            // ⚡ FIX: Refresh predictions after render
+            setTimeout(() => updateWatchlistPredictions(true), 100);
+            
             // Close modal
             const modal = bootstrap.Modal.getInstance(document.getElementById('addStockModal'));
             modal.hide();
@@ -686,7 +689,19 @@
                 return;
             }
             
-            container.innerHTML = watchedStocks.map(stock => `
+            // ⚡ FIX: Preserve existing predictions before re-render!
+            const existingPreds = {};
+            watchedStocks.forEach(s => {
+                const el = document.getElementById(`pred-${s.symbol}`);
+                if (el && el.innerHTML && !el.innerHTML.includes('yükleniyor')) {
+                    existingPreds[s.symbol] = el.innerHTML;
+                }
+            });
+            
+            container.innerHTML = watchedStocks.map(stock => {
+                // Use preserved content if exists, otherwise show loading
+                const predContent = existingPreds[stock.symbol] || 'Tahminler yükleniyor...';
+                return `
                 <div class="stock-item" id="stock-${stock.symbol}">
                     <div class="d-flex justify-content-between align-items-center">
                         <div>
@@ -706,11 +721,11 @@
                         </div>
                     </div>
                     <div id="pred-${stock.symbol}" class="mt-2 small text-muted">
-                        Tahminler yükleniyor...
+                        ${predContent}
                     </div>
                     <div id="patt-${stock.symbol}" class="mt-2"></div>
                 </div>
-            `).join('');
+            `}).join('');
 
             // Mevcut analiz önbelleğinden rozetleri geri yükle (re-render sonrası kaybolmasın)
             try { hydratePatternsFromCache(); } catch (e) { /* ignore */ }
@@ -721,19 +736,15 @@
                     loadPredictions(watchedStocks[0].symbol);
                 }
             } catch (e) { /* ignore */ }
-            
-            // ⚡ FIX: Update predictions for ALL symbols after render!
-            try {
+
+            // ⚡ FIX: Update predictions for ALL symbols (preserved from cache!)
+            // Since we now preserve existing pred content, this won't overwrite unnecessarily
+            try { 
                 console.log('🔄 Calling updateWatchlistPredictions() after renderWatchlist...');
-                setTimeout(() => {
-                    updateWatchlistPredictions(true);  // force=true for immediate fetch
-                }, 500);  // Wait 500ms for DOM to be ready
-            } catch (e) {
+                updateWatchlistPredictions(); 
+            } catch (e) { 
                 console.error('❌ updateWatchlistPredictions error:', e);
             }
-
-            // Watchlist tahminlerini toplu getir ve öğelere işle
-            try { updateWatchlistPredictions(); } catch (e) { /* ignore */ }
 
             // ⚡ OPTIMIZED: Use batch API instead of individual requests
             try {
