@@ -124,15 +124,21 @@ def register(app):
                         horizon_preds = {}
                         try:
                             enhanced = pred_result.get('enhanced', {})
+                            logger.debug(f"Enhanced ML for {sym}: {type(enhanced)}, keys: {list(enhanced.keys()) if isinstance(enhanced, dict) else 'N/A'}")
+                            
                             if enhanced and isinstance(enhanced, dict):
-                                # Enhanced ML format: {horizon: {price, confidence, ...}}
+                                # Enhanced ML format: {horizon: {ensemble_prediction, confidence, ...}}
                                 for h in ['1d', '3d', '7d', '14d', '30d']:
                                     if h in enhanced:
-                                        price = enhanced[h].get('price') if isinstance(enhanced[h], dict) else None
+                                        h_data = enhanced[h]
+                                        # ⚡ FIX: Key is 'ensemble_prediction', not 'price'!
+                                        price = h_data.get('ensemble_prediction') if isinstance(h_data, dict) else None
                                         if price:
-                                            horizon_preds[h] = price
-                        except Exception:
-                            pass
+                                            horizon_preds[h] = float(price)
+                            
+                            logger.debug(f"Extracted predictions for {sym}: {list(horizon_preds.keys())}")
+                        except Exception as e:
+                            logger.error(f"Prediction extraction error for {sym}: {e}")
                         
                         results[sym] = {
                             'status': 'success',
