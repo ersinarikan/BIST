@@ -7,10 +7,15 @@ Reduces N+1 problem significantly
 from flask import Blueprint, jsonify, request
 import logging
 from datetime import datetime
+import time
 
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('api_batch', __name__, url_prefix='/api/batch')
+
+# ⚡ Simple in-memory cache for batch results
+_batch_cache = {}
+_CACHE_TTL = 300  # 5 minutes
 
 
 def register(app):
@@ -39,13 +44,37 @@ def register(app):
             detector = get_pattern_detector()
             
             results = {}
+            cache_hits = 0
+            cache_misses = 0
+            
             for symbol in symbols:
                 try:
                     sym = str(symbol).upper().strip()
                     if sym:
-                        # Use cached result if available (fast=1)
+                        # ⚡ FIX: Use module-level cache
+                        cache_key = f"pattern_{sym}"
+                        now = time.time()
+                        
+                        # Check cache
+                        if cache_key in _batch_cache:
+                            entry = _batch_cache[cache_key]
+                            age = now - entry.get('ts', 0)
+                            if age < _CACHE_TTL:
+                                results[sym] = entry['data']
+                                cache_hits += 1
+                                continue
+                        
+                        # Cache miss - do fresh analysis
                         analysis = detector.analyze_stock(sym)
                         results[sym] = analysis
+                        cache_misses += 1
+                        
+                        # Store in cache
+                        _batch_cache[cache_key] = {
+                            'data': analysis,
+                            'ts': now
+                        }
+                            
                 except Exception as e:
                     logger.error(f"Batch analysis error for {symbol}: {e}")
                     results[str(symbol)] = {
@@ -54,10 +83,17 @@ def register(app):
                         'error': str(e)
                     }
             
+            # Log cache efficiency
+            if cache_hits + cache_misses > 0:
+                hit_rate = (cache_hits / (cache_hits + cache_misses)) * 100
+                logger.info(f"⚡ Batch pattern API: {len(results)} symbols, cache {cache_hits}/{cache_hits+cache_misses} ({hit_rate:.0f}%)")
+            
             return jsonify({
                 'status': 'success',
                 'results': results,
                 'count': len(results),
+                'cache_hits': cache_hits,
+                'cache_misses': cache_misses,
                 'timestamp': datetime.now().isoformat()
             })
             
