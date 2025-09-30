@@ -1596,11 +1596,30 @@
             try {
                 const nowTs = Date.now() / 1000;
                 if (!force && (nowTs - lastPredFetchTs < 5)) return; // throttle 5sn (force ile bypass)
-                const url = force ? '/api/watchlist/predictions?cache=0' : '/api/watchlist/predictions';
-                const res = await fetch(url, { credentials: 'include' });
+                
+                // ⚡ FIX: Use batch predictions API with localStorage symbols
+                const symbols = watchedStocks.map(s => s.symbol);
+                if (symbols.length === 0) return;
+                
+                const res = await fetch('/api/batch/predictions', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({symbols: symbols})
+                });
                 const data = await res.json();
                 if (!data || data.status !== 'success') return;
-                const items = data.items || [];
+                
+                // Convert batch results to watchlist format
+                const results = data.results || {};
+                const items = watchedStocks.map(ws => {
+                    const preds = results[ws.symbol];
+                    return {
+                        symbol: ws.symbol,
+                        current_price: ws.price || 0,
+                        predictions: preds?.predictions || {},
+                        overall_signal: preds?.overall_signal || {}
+                    };
+                });
                 lastPredFetchTs = Date.now() / 1000;
                 const toPct = (p, base) => {
                     if (typeof p !== 'number' || typeof base !== 'number' || base === 0) return NaN;
