@@ -721,6 +721,16 @@
                     loadPredictions(watchedStocks[0].symbol);
                 }
             } catch (e) { /* ignore */ }
+            
+            // ⚡ FIX: Update predictions for ALL symbols after render!
+            try {
+                console.log('🔄 Calling updateWatchlistPredictions() after renderWatchlist...');
+                setTimeout(() => {
+                    updateWatchlistPredictions(true);  // force=true for immediate fetch
+                }, 500);  // Wait 500ms for DOM to be ready
+            } catch (e) {
+                console.error('❌ updateWatchlistPredictions error:', e);
+            }
 
             // Watchlist tahminlerini toplu getir ve öğelere işle
             try { updateWatchlistPredictions(); } catch (e) { /* ignore */ }
@@ -1690,10 +1700,22 @@
                 });
 
                 // Render under each item
+                console.log(`🔄 Starting render loop for ${decorated.length} items...`);
                 let renderDebugCount = 0;
-                decorated.forEach(it => {
+                let foundCount = 0;
+                let notFoundCount = 0;
+                
+                decorated.forEach((it, idx) => {
+                    if (idx === 0) console.log('🔄 First item in forEach:', it.symbol);
                     const el = document.getElementById(`pred-${it.symbol}`);
-                    if (!el) return;
+                    if (!el) {
+                        notFoundCount++;
+                        if (notFoundCount <= 3) {
+                            console.warn(`⚠️ Element NOT found: pred-${it.symbol}`);
+                        }
+                        return;
+                    }
+                    foundCount++;
                     const chosenPct = (it._unified && typeof it._unified.pct==='number') ? it._unified.pct : it._pct;
                     const pctStr = isNaN(chosenPct) ? '-' : `${chosenPct>=0?'+':''}${chosenPct.toFixed(1)}%`;
                     const cls = isNaN(chosenPct) ? 'text-muted' : (chosenPct>=0 ? 'text-success' : 'text-danger');
@@ -1787,7 +1809,13 @@
                         try { fetchPattern(it.symbol); } catch (e) {}
                     }
                 });
-            } catch (e) { /* ignore */ }
+                
+                // ⚡ DEBUG: Summary
+                console.log(`✅ Render complete: ${foundCount} found, ${notFoundCount} not found`);
+                
+            } catch (e) {
+                console.error('❌ updateWatchlistPredictions CRITICAL ERROR:', e);
+            }
         }
     </script>
 </body>
