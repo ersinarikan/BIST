@@ -353,9 +353,19 @@ class WorkingAutomationPipeline:
                                                         ok, reason = False, 'unknown'
                                                     if ok:
                                                         attempts += 1
+                                                        # Enhanced ML training
                                                         if mlc.train_enhanced_model_if_needed(sym, df):
                                                             successes += 1
                                                             trained |= 1
+                                                        
+                                                        # ⚡ NEW: Basic ML training (on-demand with persistence)
+                                                        try:
+                                                            basic_ml = mlc._get_basic_ml()
+                                                            if basic_ml:
+                                                                # Check if model needs training (age check done in predict)
+                                                                basic_ml.train_models(sym, df)
+                                                        except Exception as e:
+                                                            logger.debug(f"Basic ML training error for {sym}: {e}")
                                                     else:
                                                         skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
                                             except Exception:
