@@ -974,7 +974,20 @@
             // Bind controls
             ['pred-sort-horizon','pred-sort-order','pred-dir','pred-min-abs'].forEach(id => {
                 const el = document.getElementById(id);
-                if (el) el.addEventListener('change', () => { try { updateWatchlistPredictions(); } catch (e) {} });
+                if (el) {
+                    el.addEventListener('change', () => { 
+                        try { 
+                            updateWatchlistPredictions(); 
+                            // ⚡ FIX: Tahmin ufku değişince pattern analysis'i de yeniden yükle
+                            if (id === 'pred-sort-horizon') {
+                                console.log('🔄 Tahmin ufku değişti, pattern analysis yenileniyor...');
+                                loadBatchPatternAnalysis();
+                            }
+                        } catch (e) {
+                            console.error('Filter change error:', e);
+                        } 
+                    });
+                }
                 if (el && el.type === 'range') el.addEventListener('input', () => { try { updateWatchlistPredictions(); } catch (e) {} });
             });
         });
