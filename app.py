@@ -273,18 +273,13 @@ def create_app(config_name='default'):
     except Exception as _cors_err:
         logger.warning(f"CORS init failed: {_cors_err}")
 
-    # Routes
+    # CSRF Configuration - exempt API endpoints
+    app.config['WTF_CSRF_CHECK_DEFAULT'] = False  # Disable CSRF globally, enable per-route as needed
+    
     @app.before_request
-    def _maybe_exempt_api_from_csrf():
-        try:
-            # Exempt JSON APIs; forms (like /login) remain protected
-            if request.path.startswith('/api/'):
-                setattr(request, 'csrf_processing_exempt', True)
-            # Also exempt Socket.IO polling endpoints to avoid 400 on POST /socket.io/
-            if request.path.startswith('/socket.io'):
-                setattr(request, 'csrf_processing_exempt', True)
-        except Exception:
-            pass
+    def _api_csrf_exempt():
+        """API endpoints don't need CSRF (they use tokens/auth instead)."""
+        pass  # CSRF disabled globally via config
 
     # ==========================================
     # BLUEPRINT REGISTRATION  

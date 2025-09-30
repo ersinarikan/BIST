@@ -947,6 +947,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const response = await fetch('/api/automation/start?v=1.1', { 
                     method: 'POST',
                     headers: {
+                        'Content-Type': 'application/json',
                         'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw',
                         'X-Internal-Request': 'true'
                     }
@@ -969,6 +970,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const response = await fetch('/api/automation/stop?v=1.1', { 
                     method: 'POST',
                     headers: {
+                        'Content-Type': 'application/json',
                         'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw',
                         'X-Internal-Request': 'true'
                     }
