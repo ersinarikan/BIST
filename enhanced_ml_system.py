@@ -486,10 +486,17 @@ class EnhancedMLSystem:
                 # 2. LightGBM
                 if LIGHTGBM_AVAILABLE:
                     try:
+                        # ✨ IMPROVED: Optimized hyperparameters (matched with XGBoost quality)
                         lgb_model = lgb.LGBMRegressor(
-                            n_estimators=100,
-                            max_depth=6,
-                            learning_rate=0.1,
+                            n_estimators=500,           # Increased from 100
+                            max_depth=8,                # Increased from 6
+                            learning_rate=0.05,         # Decreased from 0.1 for stability
+                            num_leaves=31,              # NEW: Optimal for depth=8
+                            min_child_samples=20,       # NEW: Regularization
+                            subsample=0.8,              # NEW: Row sampling
+                            colsample_bytree=0.8,       # NEW: Feature sampling
+                            reg_alpha=0.1,              # NEW: L1 regularization
+                            reg_lambda=1.0,             # NEW: L2 regularization
                             random_state=42,
                             n_jobs=-1,
                             verbose=-1
@@ -535,10 +542,15 @@ class EnhancedMLSystem:
                 # 3. CatBoost
                 if CATBOOST_AVAILABLE:
                     try:
+                        # ✨ IMPROVED: Optimized hyperparameters (matched with XGBoost quality)
                         cat_model = cb.CatBoostRegressor(
-                            iterations=100,
-                            depth=6,
-                            learning_rate=0.1,
+                            iterations=500,             # Increased from 100
+                            depth=8,                    # Increased from 6
+                            learning_rate=0.05,         # Decreased from 0.1
+                            l2_leaf_reg=3.0,            # NEW: L2 regularization
+                            border_count=128,           # NEW: Optimal splits
+                            subsample=0.8,              # NEW: Row sampling
+                            rsm=0.8,                    # NEW: Feature sampling (Random Subspace Method)
                             random_seed=42,
                             allow_writing_files=False,
                             train_dir=self.catboost_train_dir,
