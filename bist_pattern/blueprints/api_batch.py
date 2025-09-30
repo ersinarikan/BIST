@@ -40,16 +40,22 @@ def register(app):
             detector = get_pattern_detector()
             
             results = {}
+            cache_used = 0
+            fresh_analysis = 0
             
             for symbol in symbols:
                 try:
                     sym = str(symbol).upper().strip()
                     if sym:
-                        # ⚡ FIX: Use pattern_detector's internal cache (automation results!)
-                        # pattern_detector.analyze_stock() already has cache mechanism
-                        # If automation analyzed this symbol, cache hit will be instant!
-                        analysis = detector.analyze_stock(sym)
+                        # ⚡ OPTIMIZED: Get from cache (instant, no analysis!)
+                        analysis = detector.analyze_stock(sym)  # Uses cache if available
                         results[sym] = analysis
+                        
+                        # Track cache usage
+                        if analysis.get('from_cache'):
+                            cache_used += 1
+                        else:
+                            fresh_analysis += 1
                             
                 except Exception as e:
                     logger.error(f"Batch analysis error for {symbol}: {e}")
@@ -110,43 +116,45 @@ def register(app):
                     if not sym:
                         continue
                     
-                    # Get stock data
-                    stock_data = detector.get_stock_data(sym)
-                    if stock_data is None or len(stock_data) < 50:
-                        results[sym] = {'status': 'insufficient_data'}
+                    # ⚡ OPTIMIZED: Get predictions from pattern analysis (cache + ml_unified!)
+                    # Pattern analysis already has ml_unified with all predictions
+                    # No need to call predict_with_coordination() again (saves veri temizleme!)
+                    analysis = detector.analyze_stock(sym)  # Cache hit if automation analyzed
+                    
+                    if not analysis or analysis.get('status') == 'error':
+                        results[sym] = {'status': 'error'}
                         continue
                     
-                    # Get ML predictions (coordinator handles caching)
-                    pred_result = ml_coord.predict_with_coordination(sym, stock_data)
+                    # Extract predictions from ml_unified (already computed!)
+                    horizon_preds = {}
+                    current_price = analysis.get('current_price', 0)
                     
-                    if pred_result:
-                        # ⚡ FIX: Extract horizon-based predictions from enhanced ML
-                        horizon_preds = {}
-                        try:
-                            enhanced = pred_result.get('enhanced', {})
-                            logger.debug(f"Enhanced ML for {sym}: {type(enhanced)}, keys: {list(enhanced.keys()) if isinstance(enhanced, dict) else 'N/A'}")
-                            
-                            if enhanced and isinstance(enhanced, dict):
-                                # Enhanced ML format: {horizon: {ensemble_prediction, confidence, ...}}
-                                for h in ['1d', '3d', '7d', '14d', '30d']:
-                                    if h in enhanced:
-                                        h_data = enhanced[h]
-                                        # ⚡ FIX: Key is 'ensemble_prediction', not 'price'!
-                                        price = h_data.get('ensemble_prediction') if isinstance(h_data, dict) else None
-                                        if price:
-                                            horizon_preds[h] = float(price)
-                            
-                            logger.debug(f"Extracted predictions for {sym}: {list(horizon_preds.keys())}")
-                        except Exception as e:
-                            logger.error(f"Prediction extraction error for {sym}: {e}")
-                        
-                        results[sym] = {
-                            'status': 'success',
-                            'predictions': horizon_preds,  # Simple {1d: price, 3d: price, ...}
-                            'current_price': float(stock_data['close'].iloc[-1]) if hasattr(stock_data, 'iloc') else 0
-                        }
-                    else:
-                        results[sym] = {'status': 'no_predictions'}
+                    try:
+                        ml_unified = analysis.get('ml_unified', {})
+                        if ml_unified and isinstance(ml_unified, dict):
+                            for h in ['1d', '3d', '7d', '14d', '30d']:
+                                if h in ml_unified:
+                                    h_data = ml_unified[h]
+                                    # Try enhanced first, then basic
+                                    enhanced = h_data.get('enhanced', {}) if isinstance(h_data, dict) else {}
+                                    basic = h_data.get('basic', {}) if isinstance(h_data, dict) else {}
+                                    
+                                    price = None
+                                    if isinstance(enhanced, dict) and 'price' in enhanced:
+                                        price = enhanced['price']
+                                    elif isinstance(basic, dict) and 'price' in basic:
+                                        price = basic['price']
+                                    
+                                    if price and isinstance(price, (int, float)):
+                                        horizon_preds[h] = float(price)
+                    except Exception as e:
+                        logger.error(f"ml_unified extraction error for {sym}: {e}")
+                    
+                    results[sym] = {
+                        'status': 'success',
+                        'predictions': horizon_preds,
+                        'current_price': current_price
+                    }
                         
                 except Exception as e:
                     logger.error(f"Batch prediction error for {symbol}: {e}")
