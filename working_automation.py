@@ -13,6 +13,7 @@ from typing import Dict, Any, List
 import pandas as pd
 
 try:
+    import gevent
     import gevent.lock
     import gevent.event
     GEVENT_AVAILABLE = True
@@ -353,19 +354,35 @@ class WorkingAutomationPipeline:
                                                         ok, reason = False, 'unknown'
                                                     if ok:
                                                         attempts += 1
-                                                        # Enhanced ML training
-                                                        if mlc.train_enhanced_model_if_needed(sym, df):
-                                                            successes += 1
-                                                            trained |= 1
                                                         
-                                                        # ⚡ NEW: Basic ML training (on-demand with persistence)
-                                                        try:
-                                                            basic_ml = mlc._get_basic_ml()
-                                                            if basic_ml:
-                                                                # Check if model needs training (age check done in predict)
-                                                                basic_ml.train_models(sym, df)
-                                                        except Exception as e:
-                                                            logger.debug(f"Basic ML training error for {sym}: {e}")
+                                                        # ⚡ ASYNC: Train in background (non-blocking)
+                                                        def _train_async(symbol, data):
+                                                            """Background training task - non-blocking"""
+                                                            try:
+                                                                # Enhanced ML training
+                                                                result = mlc.train_enhanced_model_if_needed(symbol, data)
+                                                                if result:
+                                                                    logger.info(f"✅ Async training completed: {symbol}")
+                                                                
+                                                                # Basic ML training
+                                                                try:
+                                                                    basic_ml = mlc._get_basic_ml()
+                                                                    if basic_ml:
+                                                                        basic_ml.train_models(symbol, data)
+                                                                except Exception as e:
+                                                                    logger.debug(f"Basic ML training error for {symbol}: {e}")
+                                                            except Exception as e:
+                                                                logger.error(f"Async training error for {symbol}: {e}")
+                                                        
+                                                        # Spawn greenlet (non-blocking)
+                                                        if GEVENT_AVAILABLE:
+                                                            gevent.spawn(_train_async, sym, df)
+                                                            trained |= 1  # Mark as queued
+                                                        else:
+                                                            # Fallback: sync training
+                                                            if mlc.train_enhanced_model_if_needed(sym, df):
+                                                                successes += 1
+                                                                trained |= 1
                                                     else:
                                                         skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
                                             except Exception:
