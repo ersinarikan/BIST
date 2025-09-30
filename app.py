@@ -1,13 +1,12 @@
 import os
-from datetime import datetime, timedelta
-from decimal import Decimal
-from flask import Flask, render_template, jsonify, request, send_from_directory, redirect, url_for, make_response
-from flask_login import LoginManager, login_user, logout_user, current_user, login_required
+from datetime import datetime
+from flask import Flask, jsonify, request, redirect, url_for
+from flask_login import LoginManager, current_user
 from flask_mail import Mail
 from flask_migrate import Migrate
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from config import config
-from models import db, User, Stock, StockPrice
+from models import db, User
 import logging
 import time
 import threading
@@ -226,10 +225,7 @@ def create_app(config_name='default'):
         logger.info(f"OAuth not initialized: {_oauth_err}")
 
     # Security: CSRF, Rate limit, CORS (basic)
-    try:
-        from flask_wtf.csrf import generate_csrf
-    except Exception as _csrf_err:
-        logger.warning(f"CSRF import failed: {_csrf_err}")
+    # CSRF is already initialized via csrf.init_app(app) above
 
     # Limiter already attached via init_app; default limits can be configured via env if needed
 
@@ -305,6 +301,8 @@ def create_app(config_name='default'):
     # ==========================================
     # REALTIME WEBSOCKET HANDLERS
     # ==========================================
+
+
 
     @socketio.on('connect')
     def handle_connect(auth):
