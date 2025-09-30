@@ -2,18 +2,83 @@
 Basic ML Prediction System
 - Provides MLPredictionSystem with simple technical features
 - train_models(symbol, data) and predict_prices(symbol, data, sentiment_score)
+- NOW WITH PERSISTENCE: Models saved to disk and reloaded
 """
 from __future__ import annotations
 
 from typing import Dict, Optional, Any
 from datetime import datetime
 import pandas as pd
+import os
+import logging
+
+# Persistence support
+try:
+    import joblib
+    JOBLIB_AVAILABLE = True
+except ImportError:
+    JOBLIB_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 
 class MLPredictionSystem:
     def __init__(self) -> None:
         self.models: Dict[str, Dict] = {}
         self.prediction_horizons = [1, 3, 7, 14, 30]
+        
+        # Model persistence directory
+        cache_dir = os.getenv('ML_MODEL_PATH', '/opt/bist-pattern/.cache/enhanced_ml_models')
+        self.basic_model_dir = os.path.join(os.path.dirname(cache_dir), 'basic_ml_models')
+        os.makedirs(self.basic_model_dir, exist_ok=True)
+        
+        logger.info(f"📊 Basic ML System initialized (Real ML: True, Persistence: {JOBLIB_AVAILABLE})")
+    
+    def _get_model_path(self, symbol: str) -> str:
+        """Get file path for symbol's model"""
+        return os.path.join(self.basic_model_dir, f"{symbol}_basic_model.pkl")
+    
+    def _load_model_from_disk(self, symbol: str) -> Optional[Dict]:
+        """Load model from disk if exists and not too old"""
+        if not JOBLIB_AVAILABLE:
+            return None
+        
+        model_path = self._get_model_path(symbol)
+        if not os.path.exists(model_path):
+            return None
+        
+        try:
+            # Check age
+            max_age_days = int(os.getenv('ML_MAX_MODEL_AGE_DAYS', '7'))
+            mtime = os.path.getmtime(model_path)
+            age_days = (datetime.now().timestamp() - mtime) / 86400
+            
+            if age_days > max_age_days:
+                logger.debug(f"Basic ML model too old for {symbol}: {age_days:.1f} days")
+                return None
+            
+            # Load model
+            models = joblib.load(model_path)
+            logger.debug(f"✅ Basic ML model loaded from disk for {symbol}")
+            return models
+            
+        except Exception as e:
+            logger.debug(f"Failed to load Basic ML model for {symbol}: {e}")
+            return None
+    
+    def _save_model_to_disk(self, symbol: str, models: Dict) -> bool:
+        """Save model to disk"""
+        if not JOBLIB_AVAILABLE:
+            return False
+        
+        try:
+            model_path = self._get_model_path(symbol)
+            joblib.dump(models, model_path)
+            logger.debug(f"💾 Basic ML model saved to disk for {symbol}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save Basic ML model for {symbol}: {e}")
+            return False
 
     def create_technical_features(self, data: pd.DataFrame) -> pd.DataFrame:
         df = data.copy()
@@ -39,21 +104,40 @@ class MLPredictionSystem:
         return pd.Series(rsi, index=s.index).astype(float)
 
     def train_models(self, symbol: str, data: pd.DataFrame) -> Dict:
+        """Train models for symbol and save to disk"""
         df = self.create_technical_features(data).dropna()
         if len(df) < 50:
             return {}
+        
         models = {}
         for h in self.prediction_horizons:
             models[str(h)] = {'type': 'naive_mean', 'window': max(10, h * 5)}
+        
+        # Store in memory
         self.models[symbol] = models
+        
+        # Save to disk
+        self._save_model_to_disk(symbol, models)
+        
+        logger.info(f"🧠 Basic ML trained for {symbol}")
         return models
 
     def predict_prices(self, symbol: str, data: pd.DataFrame, sentiment_score: Optional[float]) -> Dict[str, Any]:
+        """Predict prices - load from disk or train if needed"""
         df = self.create_technical_features(data).dropna()
         if len(df) == 0:
             return {}
+        
         current = float(df['close'].iloc[-1])
-        models = self.models.get(symbol) or self.train_models(symbol, df)
+        
+        # Try to get models: memory -> disk -> train new
+        models = self.models.get(symbol)
+        if not models:
+            models = self._load_model_from_disk(symbol)
+            if models:
+                self.models[symbol] = models  # Cache in memory
+        if not models:
+            models = self.train_models(symbol, df)
         out: Dict[str, Any] = {}
         # CRITICAL FIX: Dynamic sentiment impact based on signal strength
         # Strong sentiment (>0.7 bullish or <0.3 bearish) has 15% impact
