@@ -725,29 +725,27 @@
             // Watchlist tahminlerini toplu getir ve öğelere işle
             try { updateWatchlistPredictions(); } catch (e) { /* ignore */ }
 
-            // WebSocket üzerinden tüm hisselere abone ol ve anlık analiz iste
+            // ⚡ OPTIMIZED: Use batch API instead of individual requests
             try {
-                // Subscribe all
-                const notHydrated = watchedStocks.filter(s => {
-                    try { return !(window.__analysisBySymbol && window.__analysisBySymbol[s.symbol]); } catch (e) { return true; }
-                });
-                const firstFew = notHydrated.slice(0, 4); // ⭐ 8 → 4 azaltıldı (performans için)
                 if (socket && socket.connected) {
+                    // Just subscribe to all (for live updates)
                     watchedStocks.forEach(s => { socket.emit('subscribe_stock', { symbol: s.symbol }); });
-                    firstFew.forEach(s => {
-                        const sym = s.symbol;
-                        if (!analysisRequested.has(sym)) {
-                            socket.emit('request_pattern_analysis', { symbol: sym });
-                            analysisRequested.add(sym);
-                        }
+                    
+                    // Batch load patterns (if not already cached)
+                    const needsLoad = watchedStocks.filter(s => {
+                        try { return !(window.__analysisBySymbol && window.__analysisBySymbol[s.symbol]); } catch (e) { return true; }
                     });
+                    
+                    if (needsLoad.length > 0) {
+                        console.log('⚡ Batch loading', needsLoad.length, 'symbols...');
+                        loadBatchPatternAnalysis();
+                    } else {
+                        console.log('✅ All symbols already cached');
+                    }
                 } else {
-                    firstFew.forEach(s => { try { fetchPattern(s.symbol); } catch (e) {} });
+                    console.warn('⚠️ WebSocket not connected, using REST fallback');
                 }
-                // Queue remaining symbols without cached analysis
-                pendingSymbols = notHydrated.slice(4).map(s => s.symbol);
-                startAnalysisQueue();
-            } catch (e) { /* ignore */ }
+            } catch (e) { console.error('Load error:', e); }
         }
 
         // Önceden hesaplanmış analizleri kartlara uygula (badge'leri geri getir)
@@ -895,13 +893,56 @@
         }
         
         function subscribeToAllStocks() {
-            // WebSocket bağlandıktan sonra tüm hisselere subscribe ol
+            // ⚡ OPTIMIZED: Only subscribe to WebSocket updates, don't request full analysis
+            // Analysis will be loaded via batch API or from automation cache
             if (socket && socket.connected) {
                 watchedStocks.forEach(stock => {
                     socket.emit('subscribe_stock', {symbol: stock.symbol});
-                    socket.emit('request_pattern_analysis', {symbol: stock.symbol});
+                    // ❌ REMOVED: socket.emit('request_pattern_analysis') - too slow!
                 });
-                console.log('📊 Subscribed to', watchedStocks.length, 'stocks');
+                console.log('📊 Subscribed to', watchedStocks.length, 'stocks (updates only)');
+                
+                // ⚡ NEW: Use batch API for initial load (much faster!)
+                loadBatchPatternAnalysis();
+            }
+        }
+        
+        async function loadBatchPatternAnalysis() {
+            // ⚡ Load all watchlist patterns in single batch request
+            try {
+                const symbols = watchedStocks.map(s => s.symbol);
+                if (symbols.length === 0) return;
+                
+                console.log('⚡ Loading batch pattern analysis for', symbols.length, 'symbols...');
+                
+                const response = await fetch('/api/batch/pattern-analysis', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({symbols: symbols})
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    const results = data.results || {};
+                    
+                    console.log('✅ Batch loaded:', Object.keys(results).length, 'symbols');
+                    
+                    // Process each result
+                    for (const [symbol, analysis] of Object.entries(results)) {
+                        if (analysis && analysis.status === 'success') {
+                            window.__analysisBySymbol[symbol] = analysis;
+                            handlePatternUpdate({symbol: symbol, data: analysis});
+                        }
+                    }
+                } else {
+                    console.warn('⚠️ Batch API failed, falling back to individual requests');
+                    // Fallback: request first few individually
+                    watchedStocks.slice(0, 3).forEach(s => {
+                        socket.emit('request_pattern_analysis', {symbol: s.symbol});
+                    });
+                }
+            } catch (e) {
+                console.error('❌ Batch load error:', e);
             }
         }
         
