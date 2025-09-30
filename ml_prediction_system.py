@@ -48,6 +48,13 @@ class MLPredictionSystem:
         self.scalers: Dict[str, Any] = {}
         self.prediction_horizons = [1, 3, 7, 14, 30]
         self.use_real_ml = SKLEARN_AVAILABLE
+        self.model_cache_dir = os.getenv('BASIC_ML_MODEL_PATH', '/opt/bist-pattern/.cache/basic_ml_models')
+        
+        # Create cache directory
+        try:
+            os.makedirs(self.model_cache_dir, exist_ok=True)
+        except Exception:
+            self.model_cache_dir = None
         
         logger.info(f"📊 Basic ML System initialized (Real ML: {self.use_real_ml})")
 
@@ -141,6 +148,16 @@ class MLPredictionSystem:
             # Fallback to naive method
             return self._train_naive(symbol, data)
         
+        # ✅ FIX: Try to load cached models first
+        try:
+            cached = self._load_cached_models(symbol)
+            if cached:
+                logger.info(f"✅ {symbol}: Loaded cached models ({len(cached)} horizons)")
+                self.models[symbol] = cached
+                return cached
+        except Exception:
+            pass
+        
         try:
             df = self.create_technical_features(data).dropna()
             if len(df) < 100:  # Need sufficient data for ML
@@ -219,6 +236,8 @@ class MLPredictionSystem:
             
             if models:
                 self.models[symbol] = models
+                # ✅ FIX: Save models to disk for reuse
+                self._save_models_to_disk(symbol, models)
                 logger.info(f"✅ {symbol}: {len(models)} models trained successfully")
             
             return models
@@ -335,4 +354,64 @@ def get_ml_prediction_system():
     global _ml_system
     if _ml_system is None:
         _ml_system = MLPredictionSystem()
-    return _ml_system
+    return _ml_system    def _save_models_to_disk(self, symbol: str, models: Dict) -> bool:
+        """Save trained models to disk"""
+        if not self.model_cache_dir or not models:
+            return False
+        
+        try:
+            import joblib
+            for horizon_key, model_data in models.items():
+                if 'model' in model_data and 'scaler' in model_data:
+                    # Save model and scaler
+                    model_path = os.path.join(self.model_cache_dir, f'{symbol}_{horizon_key}_model.pkl')
+                    scaler_path = os.path.join(self.model_cache_dir, f'{symbol}_{horizon_key}_scaler.pkl')
+                    
+                    joblib.dump(model_data['model'], model_path)
+                    joblib.dump(model_data['scaler'], scaler_path)
+            
+            logger.debug(f"💾 {symbol}: Models saved to disk")
+            return True
+        except Exception as e:
+            logger.error(f"Model save error for {symbol}: {e}")
+            return False
+    
+    def _load_cached_models(self, symbol: str) -> Optional[Dict]:
+        """Load cached models from disk"""
+        if not self.model_cache_dir:
+            return None
+        
+        try:
+            import joblib
+            from datetime import datetime, timedelta
+            
+            models = {}
+            for horizon in self.prediction_horizons:
+                horizon_key = f"{horizon}d"
+                model_path = os.path.join(self.model_cache_dir, f'{symbol}_{horizon_key}_model.pkl')
+                scaler_path = os.path.join(self.model_cache_dir, f'{symbol}_{horizon_key}_scaler.pkl')
+                
+                if os.path.exists(model_path) and os.path.exists(scaler_path):
+                    # Check model age (don't use if >7 days old)
+                    model_age_days = (datetime.now() - datetime.fromtimestamp(os.path.getmtime(model_path))).days
+                    if model_age_days > 7:
+                        continue
+                    
+                    model = joblib.load(model_path)
+                    scaler = joblib.load(scaler_path)
+                    
+                    models[horizon_key] = {
+                        'model': model,
+                        'scaler': scaler,
+                        'feature_cols': getattr(model, 'feature_names_in_', []),
+                        'r2_score': 0.5,  # Default
+                        'confidence': 0.6,
+                        'horizon': horizon,
+                        'trained_at': datetime.fromtimestamp(os.path.getmtime(model_path)).isoformat()
+                    }
+            
+            return models if models else None
+            
+        except Exception as e:
+            logger.debug(f"Model load error for {symbol}: {e}")
+            return None
