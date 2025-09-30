@@ -120,9 +120,24 @@ def register(app):
                     pred_result = ml_coord.predict_with_coordination(sym, stock_data)
                     
                     if pred_result:
+                        # ⚡ FIX: Extract horizon-based predictions from enhanced ML
+                        horizon_preds = {}
+                        try:
+                            enhanced = pred_result.get('enhanced', {})
+                            if enhanced and isinstance(enhanced, dict):
+                                # Enhanced ML format: {horizon: {price, confidence, ...}}
+                                for h in ['1d', '3d', '7d', '14d', '30d']:
+                                    if h in enhanced:
+                                        price = enhanced[h].get('price') if isinstance(enhanced[h], dict) else None
+                                        if price:
+                                            horizon_preds[h] = price
+                        except Exception:
+                            pass
+                        
                         results[sym] = {
                             'status': 'success',
-                            'predictions': pred_result
+                            'predictions': horizon_preds,  # Simple {1d: price, 3d: price, ...}
+                            'current_price': float(stock_data['close'].iloc[-1]) if hasattr(stock_data, 'iloc') else 0
                         }
                     else:
                         results[sym] = {'status': 'no_predictions'}
