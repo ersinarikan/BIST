@@ -1642,6 +1642,11 @@
                         overall_signal: result?.overall_signal || {}
                     };
                 });
+                
+                // ⚡ DEBUG: Log final items array
+                console.log(`✅ Items created: ${items.length} total`);
+                console.log('Sample items:', items.slice(0, 2));
+                
                 lastPredFetchTs = Date.now() / 1000;
                 const toPct = (p, base) => {
                     if (typeof p !== 'number' || typeof base !== 'number' || base === 0) return NaN;
