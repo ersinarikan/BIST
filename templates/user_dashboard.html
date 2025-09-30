@@ -1601,13 +1601,19 @@
                 const symbols = watchedStocks.map(s => s.symbol);
                 if (symbols.length === 0) return;
                 
+                console.log('⚡ Fetching batch predictions for', symbols.length, 'symbols...');
                 const res = await fetch('/api/batch/predictions', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({symbols: symbols})
                 });
                 const data = await res.json();
-                if (!data || data.status !== 'success') return;
+                console.log('✅ Batch predictions response:', data);
+                
+                if (!data || data.status !== 'success') {
+                    console.error('❌ Batch predictions failed:', data);
+                    return;
+                }
                 
                 // Convert batch results to watchlist format
                 const results = data.results || {};
