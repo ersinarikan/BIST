@@ -103,10 +103,8 @@ def register(app):
                 }), 400
             
             # Import dependencies
-            from bist_pattern.core.ml_coordinator import get_ml_coordinator
             from app import get_pattern_detector
             
-            ml_coord = get_ml_coordinator()
             detector = get_pattern_detector()
             
             results = {}
@@ -116,9 +114,9 @@ def register(app):
                     if not sym:
                         continue
                     
-                    # ⚡ OPTIMIZED: Get predictions from pattern analysis (cache + ml_unified!)
-                    # Pattern analysis already has ml_unified with all predictions
-                    # No need to call predict_with_coordination() again (saves veri temizleme!)
+                    # ⚡ OPTIMIZED: Get predictions from pattern analysis ml_unified!
+                    # This is INSTANT (cache hit) and includes all predictions already computed!
+                    # NO veri temizleme, NO prediction calculation - just extract!
                     analysis = detector.analyze_stock(sym)  # Cache hit if automation analyzed
                     
                     if not analysis or analysis.get('status') == 'error':
