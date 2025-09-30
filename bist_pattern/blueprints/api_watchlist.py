@@ -132,16 +132,19 @@ def register(app):
             return jsonify({'status': 'error', 'error': str(e)}), 500
 
     @bp.route('/watchlist/predictions')
-    @login_required
     def watchlist_predictions():
         """Kullanıcının watchlist'indeki tüm hisseler için 1/3/7/14/30 günlük tahminleri döndürür.
         Öncelik sırası: Enhanced ML (varsa) → Basic ML (bulk dosyadan) → boş.
         Kaynak: /opt/bist-pattern/logs/ml_bulk_predictions.json
         """
         try:
+            # ⚡ FIX: Use effective user (works for both authenticated and anonymous)
+            user = _get_effective_user()
+            user_id = user.id if user else 'anon'
+            
             # Cache (per-user)
             try:
-                cache_key = f"watchlist_predictions:{getattr(current_user, 'id', 'anon')}"
+                cache_key = f"watchlist_predictions:{user_id}"
                 cached = getattr(app, '_api_cache_get', None)
                 if callable(cached):
                     hit = cached(cache_key)
@@ -152,7 +155,7 @@ def register(app):
 
             # Watchlist sembollerini al
             from models import StockPrice  # local import
-            items = Watchlist.query.filter_by(user_id=current_user.id).all()
+            items = Watchlist.query.filter_by(user_id=user_id).all() if user_id != 'anon' else []
             symbols = [item.stock.symbol for item in items if getattr(item, 'stock', None)]
 
             # Bulk predictions dosyasını yükle
