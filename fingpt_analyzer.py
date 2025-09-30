@@ -19,6 +19,7 @@ except ImportError:
     FINBERT_AVAILABLE = False
     logger.warning("FinBERT dependencies not available. Install with: pip install transformers torch")
 
+
 class FinGPTAnalyzer:
     """FinBERT tabanlı sentiment analysis sistemi"""
     
@@ -26,22 +27,57 @@ class FinGPTAnalyzer:
         self.model = None
         self.tokenizer = None
         self.model_loaded = False
+        self.model_name = None
         
         if FINBERT_AVAILABLE:
             try:
-                # FinBERT modelini yükle
-                model_name = "ProsusAI/finbert"
-                self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-                self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
+                # Türkçe sentiment model tercih et
+                import os
+                use_turkish_model = os.getenv('USE_TURKISH_SENTIMENT', 'True').lower() == 'true'
+                
+                if use_turkish_model:
+                    # Türkçe sentiment modeli (öncelikli) - LOCAL PATH
+                    local_path = "/opt/bist-pattern/cache/huggingface/savasy/bert-base-turkish-sentiment-cased"
+                    if os.path.exists(local_path):
+                        model_name = local_path
+                        logger.info("🇹🇷 Türkçe sentiment modeli yükleniyor (local)...")
+                        self.model_name = "savasy/bert-base-turkish-sentiment-cased"
+                        self.tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+                        self.model = AutoModelForSequenceClassification.from_pretrained(model_name, local_files_only=True)
+                    else:
+                        # Fallback to network
+                        model_name = "savasy/bert-base-turkish-sentiment-cased"
+                        logger.info("🇹🇷 Türkçe sentiment modeli yükleniyor (network)...")
+                        self.model_name = model_name
+                        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+                        self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
+                else:
+                    # İngilizce FinBERT (fallback)
+                    model_name = "ProsusAI/finbert"
+                    logger.info("🇺🇸 FinBERT modeli yükleniyor...")
+                    self.model_name = model_name
+                    self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+                    self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
                 
                 # Evaluation mode
                 self.model.eval()
                 self.model_loaded = True
-                logger.info("FinBERT modeli başarıyla yüklendi")
+                logger.info(f"✅ Sentiment modeli başarıyla yüklendi: {model_name}")
                 
             except Exception as e:
-                logger.error(f"FinBERT model yükleme hatası: {e}")
-                self.model_loaded = False
+                logger.warning(f"⚠️ Türkçe model yükleme hatası, FinBERT'e geçiliyor: {e}")
+                # Fallback to FinBERT
+                try:
+                    model_name = "ProsusAI/finbert"
+                    self.model_name = model_name
+                    self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+                    self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
+                    self.model.eval()
+                    self.model_loaded = True
+                    logger.info("✅ FinBERT fallback modeli yüklendi")
+                except Exception as e2:
+                    logger.error(f"❌ Tüm modeller yükleme hatası: {e2}")
+                    self.model_loaded = False
     
     def analyze_sentiment(self, text):
         """Metindeki sentiment'i analiz et"""
@@ -55,31 +91,88 @@ class FinGPTAnalyzer:
                 }
             
             # Tokenize
-            inputs = self.tokenizer(text, return_tensors="pt", truncation=True, 
-                                   max_length=512, padding=True)
+            if self.tokenizer is None:
+                return {
+                    'sentiment': 'neutral',
+                    'confidence': 0.0,
+                    'scores': {'positive': 0.33, 'negative': 0.33, 'neutral': 0.34},
+                    'status': 'model_unavailable'
+                }
+            inputs = self.tokenizer(
+                text,
+                return_tensors="pt",
+                truncation=True,
+                max_length=512,
+                padding=True,
+            )
             
-            # Prediction
+            # Prediction (guard torch usage)
+            if (not FINBERT_AVAILABLE) or (self.model is None):
+                return {
+                    'sentiment': 'neutral',
+                    'confidence': 0.0,
+                    'scores': {'positive': 0.33, 'negative': 0.33, 'neutral': 0.34},
+                    'status': 'model_unavailable'
+                }
             with torch.no_grad():
                 outputs = self.model(**inputs)
                 predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
             
             # Sonuçları parse et
             scores = predictions[0].tolist()
-            labels = ['positive', 'negative', 'neutral']
             
-            # En yüksek skoru bul
-            max_score_idx = scores.index(max(scores))
-            sentiment = labels[max_score_idx]
-            confidence = max(scores)
-            
+            # Model type'a göre labels belirle ve normalize et
+            if hasattr(self.model, 'config') and hasattr(self.model.config, 'id2label'):
+                raw_labels = list(self.model.config.id2label.values())
+                labels = [str(label_value).lower() for label_value in raw_labels]
+            else:
+                labels = ['positive', 'negative', 'neutral']
+
+            # Pozitif/negatif indekslerini bul
+            def _idx(name: str, default: int) -> int:
+                try:
+                    return labels.index(name)
+                except ValueError:
+                    return default
+
+            if len(scores) >= 3:
+                pos_idx = _idx('positive', 0)
+                neg_idx = _idx('negative', 1)
+                neu_idx = _idx('neutral', 2)
+                pos_score = scores[pos_idx]
+                neg_score = scores[neg_idx]
+                neu_score = scores[neu_idx]
+            else:
+                # 2 sınıflı Türkçe model: neutral yok, 0.0 say
+                # Etiketler 'positive'/'negative' olmayabilir, bu yüzden en yüksek iki skoru pozitif/negatif olarak eşleştir
+                pos_idx = _idx('positive', 1 if len(scores) > 1 else 0)
+                neg_idx = _idx('negative', 0)
+                pos_score = scores[pos_idx]
+                neg_score = scores[neg_idx]
+                neu_score = max(0.0, 1.0 - (pos_score + neg_score))
+
+            # Normalize sentiment etiketi
+            if pos_score >= neg_score and pos_score >= neu_score:
+                sentiment = 'positive'
+                confidence = float(pos_score)
+            elif neg_score >= pos_score and neg_score >= neu_score:
+                sentiment = 'negative'
+                confidence = float(neg_score)
+            else:
+                sentiment = 'neutral'
+                confidence = float(neu_score)
+
+            # Skor sözlüğünü her zaman aynı anahtarlarla döndür
+            scores_dict = {
+                'positive': float(pos_score),
+                'negative': float(neg_score),
+                'neutral': float(neu_score),
+            }
+                
             result = {
                 'sentiment': sentiment,
                 'confidence': confidence,
-                'scores': {
-                    'positive': scores[0],
-                    'negative': scores[1], 
-                    'neutral': scores[2]
-                },
+                'scores': scores_dict,
                 'status': 'success',
                 'timestamp': datetime.now().isoformat()
             }
@@ -100,6 +193,14 @@ class FinGPTAnalyzer:
         """Hisse için haber sentiment'lerini analiz et"""
         try:
             if not news_texts:
+                try:
+                    self._broadcast('INFO', f"FinGPT {symbol}: news=0 overall=neutral conf=0.00 (no_news)", 'news')
+                    try:
+                        logger.info(f"FinGPT {symbol}: news=0 overall=neutral conf=0.00 (no_news)")
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
                 return {
                     'symbol': symbol,
                     'overall_sentiment': 'neutral',
@@ -115,30 +216,30 @@ class FinGPTAnalyzer:
                 sentiments.append(sentiment_result)
             
             # Genel sentiment hesapla
-            positive_count = sum(1 for s in sentiments if s['sentiment'] == 'positive')
-            negative_count = sum(1 for s in sentiments if s['sentiment'] == 'negative')
-            neutral_count = sum(1 for s in sentiments if s['sentiment'] == 'neutral')
+            positive_count = sum(1 for s in sentiments if str(s.get('sentiment', '')).lower() == 'positive')
+            negative_count = sum(1 for s in sentiments if str(s.get('sentiment', '')).lower() == 'negative')
+            neutral_count = sum(1 for s in sentiments if str(s.get('sentiment', '')).lower() == 'neutral')
             
-            total_positive_score = sum(s['scores']['positive'] for s in sentiments)
-            total_negative_score = sum(s['scores']['negative'] for s in sentiments)
-            total_neutral_score = sum(s['scores']['neutral'] for s in sentiments)
+            total_positive_score = sum(float(s.get('scores', {}).get('positive', 0.0)) for s in sentiments)
+            total_negative_score = sum(float(s.get('scores', {}).get('negative', 0.0)) for s in sentiments)
+            total_neutral_score = sum(float(s.get('scores', {}).get('neutral', 0.0)) for s in sentiments)
             
             avg_positive = total_positive_score / len(sentiments)
             avg_negative = total_negative_score / len(sentiments)
             avg_neutral = total_neutral_score / len(sentiments)
             
             # Dominant sentiment
-            if avg_positive > avg_negative and avg_positive > avg_neutral:
+            if (avg_positive > avg_negative) and (avg_positive > avg_neutral):
                 overall_sentiment = 'positive'
                 overall_confidence = avg_positive
-            elif avg_negative > avg_positive and avg_negative > avg_neutral:
+            elif (avg_negative > avg_positive) and (avg_negative > avg_neutral):
                 overall_sentiment = 'negative'
                 overall_confidence = avg_negative
             else:
                 overall_sentiment = 'neutral'
                 overall_confidence = avg_neutral
             
-            return {
+            result = {
                 'symbol': symbol,
                 'overall_sentiment': overall_sentiment,
                 'confidence': overall_confidence,
@@ -157,6 +258,23 @@ class FinGPTAnalyzer:
                 'status': 'success',
                 'timestamp': datetime.now().isoformat()
             }
+
+            # Broadcast compact log to admin dashboard (toggle with FINGPT_BROADCAST_LOGS)
+            try:
+                import os as _os
+                if str(_os.getenv('FINGPT_BROADCAST_LOGS', '1')).lower() in ('1', 'true', 'yes'):
+                    _msg = (f"FinGPT {symbol}: news={len(news_texts)} "
+                            f"overall={overall_sentiment} conf={overall_confidence:.2f} "
+                            f"pos={positive_count} neg={negative_count} neu={neutral_count}")
+                    self._broadcast('INFO', _msg, 'news')
+                    try:
+                        logger.info(_msg)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            return result
             
         except Exception as e:
             logger.error(f"Stock news analysis hatası: {e}")
@@ -167,17 +285,39 @@ class FinGPTAnalyzer:
                 'status': 'error',
                 'message': str(e)
             }
+
+    # Internal lightweight broadcaster (best-effort)
+    def _broadcast(self, level: str, message: str, category: str = 'news') -> None:
+        try:
+            from flask import current_app
+            app_obj = current_app._get_current_object()
+            if hasattr(app_obj, 'broadcast_log'):
+                app_obj.broadcast_log(level, message, category)
+            else:
+                sock = getattr(app_obj, 'socketio', None)
+                if sock is not None:
+                    sock.emit('log_update', {
+                        'level': level,
+                        'message': message,
+                        'category': category,
+                        'timestamp': datetime.now().isoformat(),
+                    })
+        except Exception:
+            # Ignore if no app context/socket
+            pass
     
     def get_sentiment_signal(self, sentiment_result):
         """Sentiment'den trading sinyal türü belirle"""
-        if sentiment_result['status'] != 'success':
+        # Check if result has status (from analyze_sentiment) or not (from analyze_stock_news)
+        if 'status' in sentiment_result and sentiment_result['status'] != 'success':
             return 'NEUTRAL'
         
-        sentiment = sentiment_result['sentiment']
-        confidence = sentiment_result['confidence']
+        # Handle both 'sentiment' and 'overall_sentiment' keys for compatibility
+        sentiment = sentiment_result.get('sentiment') or sentiment_result.get('overall_sentiment', 'neutral')
+        confidence = sentiment_result.get('confidence', 0.0)
         
-        # Yüksek güvenlik threshold'u
-        if confidence < 0.6:
+        # Türkçe için düşürülmüş threshold (0.6 → 0.3)
+        if confidence < 0.3:
             return 'NEUTRAL'
         
         if sentiment == 'positive':
@@ -195,8 +335,10 @@ class FinGPTAnalyzer:
             'model_name': "ProsusAI/finbert" if self.model_loaded else None
         }
 
+
 # Global singleton instance
 _fingpt_analyzer_instance = None
+
 
 def get_fingpt_analyzer():
     """FinGPT analyzer singleton'ını döndür"""
@@ -204,6 +346,7 @@ def get_fingpt_analyzer():
     if _fingpt_analyzer_instance is None:
         _fingpt_analyzer_instance = FinGPTAnalyzer()
     return _fingpt_analyzer_instance
+
 
 if __name__ == "__main__":
     # Test

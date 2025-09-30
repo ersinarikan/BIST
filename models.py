@@ -2,6 +2,7 @@
 Database Models for BIST Pattern Detection
 PostgreSQL + SQLAlchemy Implementation
 """
+# flake8: noqa
 from datetime import datetime
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
@@ -13,6 +14,9 @@ db = SQLAlchemy()
 class User(UserMixin, db.Model):
     """Enhanced User Model with OAuth and Email Verification"""
     __tablename__ = 'users'
+    __table_args__ = (
+        db.Index('idx_user_last_login', 'last_login'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(255), unique=True, nullable=False, index=True)
@@ -169,13 +173,13 @@ class Watchlist(db.Model):
     def to_dict(self):
         return {
             'id': self.id,
-            'symbol': self.stock.symbol,
-            'name': self.stock.name,
+            'symbol': getattr(self.stock, 'symbol', None),
+            'name': getattr(self.stock, 'name', None),
             'notes': self.notes,
             'alert_enabled': self.alert_enabled,
             'alert_threshold_buy': float(self.alert_threshold_buy) if self.alert_threshold_buy else None,
             'alert_threshold_sell': float(self.alert_threshold_sell) if self.alert_threshold_sell else None,
-            'created_at': self.created_at.isoformat()
+            'created_at': (self.created_at.isoformat() if self.created_at else None)
         }
     
     def __repr__(self):

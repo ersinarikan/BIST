@@ -4,7 +4,6 @@ Advanced Pattern Detector
 - Designed to be lightweight and safe in preprod
 """
 
-from datetime import datetime
 from typing import List, Dict
 
 import numpy as np
@@ -37,7 +36,11 @@ class AdvancedPatternDetector:
 
             # Cap list size
             if len(patterns) > 8:
-                patterns = sorted(patterns, key=lambda p: p.get('confidence', 0), reverse=True)[:8]
+                patterns = sorted(
+                    patterns,
+                    key=lambda p: p.get('confidence', 0),
+                    reverse=True,
+                )[:8]
             return patterns
         except Exception:
             return []
@@ -47,23 +50,26 @@ class AdvancedPatternDetector:
         df = data.copy()
         # Accept both Open/High/Low/Close/Volume and lower-case variants
         rename_map = {}
-        if 'Open' in df.columns: rename_map['Open'] = 'open'
-        if 'High' in df.columns: rename_map['High'] = 'high'
-        if 'Low' in df.columns: rename_map['Low'] = 'low'
-        if 'Close' in df.columns: rename_map['Close'] = 'close'
-        if 'Volume' in df.columns: rename_map['Volume'] = 'volume'
+        if 'Open' in df.columns:
+            rename_map['Open'] = 'open'
+        if 'High' in df.columns:
+            rename_map['High'] = 'high'
+        if 'Low' in df.columns:
+            rename_map['Low'] = 'low'
+        if 'Close' in df.columns:
+            rename_map['Close'] = 'close'
+        if 'Volume' in df.columns:
+            rename_map['Volume'] = 'volume'
         df = df.rename(columns=rename_map)
         return df
 
     def _detect_double_top_bottom(self, df: pd.DataFrame) -> List[Dict]:
         # Very simple peak/trough detection using rolling windows
         prices = df['close'].values.astype(float)
-        window = 5
+        # window retained for potential future heuristics
         patterns: List[Dict] = []
 
-        # Find local maxima/minima
-        highs = (df['high'].rolling(window).max()).values
-        lows = (df['low'].rolling(window).min()).values
+        # Find local maxima/minima (kept for potential future heuristics)
 
         try:
             # Double Top: two highs within small range separated by a dip
@@ -81,9 +87,14 @@ class AdvancedPatternDetector:
                     if abs(segment[j] - max_val) <= tolerance:
                         # ensure a dip between peaks
                         left, right = sorted([j, max_idx])
-                        valley = np.min(segment[left:right]) if right - left > 2 else max_val
+                        valley = (
+                            np.min(segment[left:right]) if right - left > 2 else max_val
+                        )
                         if valley < max_val * 0.985:  # at least 1.5% dip
-                            conf = min(0.9, 0.6 + float((max_val - valley) / max_val) * 5)
+                            conf = min(
+                                0.9,
+                                0.6 + float((max_val - valley) / max_val) * 5,
+                            )
                             patterns.append({
                                 'pattern': 'DOUBLE_TOP',
                                 'signal': 'BEARISH',
@@ -100,9 +111,15 @@ class AdvancedPatternDetector:
                         continue
                     if abs(segment[j] - min_val) <= tolerance_b:
                         left, right = sorted([j, min_idx])
-                        peak = np.max(segment[left:right]) if right - left > 2 else min_val
+                        peak = (
+                            np.max(segment[left:right]) if right - left > 2 else min_val
+                        )
                         if peak > min_val * 1.015:
-                            conf = min(0.9, 0.6 + float((peak - min_val) / (abs(min_val) + 1e-8)) * 5)
+                            conf = min(
+                                0.9,
+                                0.6
+                                + float((peak - min_val) / (abs(min_val) + 1e-8)) * 5,
+                            )
                             patterns.append({
                                 'pattern': 'DOUBLE_BOTTOM',
                                 'signal': 'BULLISH',
@@ -129,9 +146,16 @@ class AdvancedPatternDetector:
                 for i in range(len(peaks_idx) - 2):
                     a, b, c = peaks_idx[i], peaks_idx[i + 1], peaks_idx[i + 2]
                     left, head, right = segment[a], segment[b], segment[c]
-                    if head > left * 1.01 and head > right * 1.01 and abs(left - right) / max(left, 1e-8) < 0.03:
+                    if (
+                        head > left * 1.01
+                        and head > right * 1.01
+                        and abs(left - right) / max(left, 1e-8) < 0.03
+                    ):
                         # Head & Shoulders
-                        conf = min(0.9, 0.55 + float((head - (left + right) / 2) / (head + 1e-8)) * 5)
+                        conf = min(
+                            0.9,
+                            0.55 + float((head - (left + right) / 2) / (head + 1e-8)) * 5,
+                        )
                         patterns.append({
                             'pattern': 'HEAD_AND_SHOULDERS',
                             'signal': 'BEARISH',
@@ -139,9 +163,17 @@ class AdvancedPatternDetector:
                             'source': 'ADVANCED_TA'
                         })
                         break
-                    if head < left * 0.99 and head < right * 0.99 and abs(left - right) / max(left, 1e-8) < 0.03:
+                    if (
+                        head < left * 0.99
+                        and head < right * 0.99
+                        and abs(left - right) / max(left, 1e-8) < 0.03
+                    ):
                         # Inverse H&S
-                        conf = min(0.9, 0.55 + float(((left + right) / 2 - head) / (abs(head) + 1e-8)) * 5)
+                        conf = min(
+                            0.9,
+                            0.55
+                            + float(((left + right) / 2 - head) / (abs(head) + 1e-8)) * 5,
+                        )
                         patterns.append({
                             'pattern': 'INVERSE_HEAD_AND_SHOULDERS',
                             'signal': 'BULLISH',

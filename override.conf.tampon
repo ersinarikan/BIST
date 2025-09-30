@@ -1,9 +1,0 @@
-[Service]
-WorkingDirectory=/opt/bist-pattern
-ExecStart=
-ExecStart=/opt/bist-pattern/venv/bin/python /opt/bist-pattern/scheduler_daemon.py
-EnvironmentFile=/opt/bist-pattern/.env
-TimeoutStopSec=120
-KillSignal=SIGTERM
-Restart=always
-RestartSec=10

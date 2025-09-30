@@ -16,8 +16,8 @@
     
     <script>
         // 🚀 CACHE BUSTER & VERSION CONTROL
-        const DASHBOARD_VERSION = '2025.08.08.WebSocket.1.0';
-        const CACHE_BUSTER = Date.now();
+        const DASHBOARD_VERSION = '2025.08.08.WebSocket.1.1';
+        const CACHE_BUSTER = 1758220727;
         console.log('🎯 BIST Dashboard - Version:', DASHBOARD_VERSION, 'Cache:', CACHE_BUSTER);
         
         // Force refresh indicator
@@ -31,23 +31,104 @@
         let isConnected = false;
         
         function initializeWebSocket() {
-            socket = io({ path: '/socket.io' });
+            socket = io({ 
+                path: '/socket.io',
+                transports: ['polling', 'websocket'],
+                upgrade: true,
+                secure: window.location.protocol === 'https:',
+                rejectUnauthorized: false,
+                withCredentials: true,
+                reconnection: true,
+                reconnectionDelay: 1000,
+                reconnectionAttempts: 20,
+                timeout: 60000,
+                maxReconnectionAttempts: 20
+            });
             
             socket.on('connect', function() {
                 isConnected = true;
+                window._reconnectAttempts = 0; // Reset reconnect counter on successful connection
                 console.log('🔗 WebSocket connected:', socket.id);
                 addLog('SUCCESS', '🔗 Real-time connection established');
                 
                 // Join admin room
                 socket.emit('join_admin');
-                updateConnectionStatus(true);
+                
+                // Update connection status
+                try {
+                    const wsStatusElement = document.getElementById('websocket-status');
+                    if (wsStatusElement) {
+                        wsStatusElement.textContent = 'connected';
+                        wsStatusElement.className = 'badge bg-success';
+                    }
+                } catch (e) {
+                    console.warn('WebSocket status update error:', e);
+                }
             });
             
             socket.on('disconnect', function() {
                 isConnected = false;
                 console.log('❌ WebSocket disconnected');
                 addLog('ERROR', '❌ Real-time connection lost');
-                updateConnectionStatus(false);
+                
+                // Update connection status
+                try {
+                    const wsStatusElement = document.getElementById('websocket-status');
+                    if (wsStatusElement) {
+                        wsStatusElement.textContent = 'disconnected';
+                        wsStatusElement.className = 'badge bg-danger';
+                    }
+                } catch (e) {
+                    console.warn('WebSocket status update error:', e);
+                }
+                // Controlled reconnect attempt with exponential backoff
+                try { 
+                    if (!window._reconnectAttempts) window._reconnectAttempts = 0;
+                    window._reconnectAttempts++;
+                    const delay = Math.min(30000, 1500 * Math.pow(2, window._reconnectAttempts - 1));
+                    setTimeout(() => { 
+                        if (socket && !socket.connected && window._reconnectAttempts < 10) { 
+                            socket.connect(); 
+                        }
+                    }, delay); 
+                } catch (e) {}
+            });
+
+            socket.on('connect_error', function(err) {
+                try {
+                    const msg = (err && (err.message || err.description || err.type || err.name)) || String(err);
+                    console.error('❌ WebSocket connect_error:', err);
+                    addLog('ERROR', `❌ WebSocket connect_error: ${msg}`);
+                } catch (_) {}
+            });
+
+            socket.on('reconnect', function() {
+                console.log('🔄 WebSocket reconnected');
+                addLog('SUCCESS', '🔄 Real-time connection restored');
+                
+                // Rejoin admin room after reconnection
+                socket.emit('join_admin');
+                
+                // Update connection status
+                try {
+                    const wsStatusElement = document.getElementById('websocket-status');
+                    if (wsStatusElement) {
+                        wsStatusElement.textContent = 'connected';
+                        wsStatusElement.className = 'badge bg-success';
+                    }
+                } catch (e) {
+                    console.warn('WebSocket status update error:', e);
+                }
+            });
+
+            socket.on('reconnect_attempt', function() {
+                console.log('🔄 Attempting to reconnect...');
+                addLog('INFO', '🔄 Attempting to reconnect...');
+            });
+
+            socket.on('reconnect_failed', function() {
+                console.log('❌ Reconnection failed');
+                addLog('ERROR', '❌ Reconnection failed - please refresh page');
             });
             
             socket.on('room_joined', function(data) {
@@ -417,6 +498,22 @@
                         <i class="fas fa-tasks me-2"></i>Recent Tasks
                         <span id="current-phase-badge" class="badge bg-secondary ms-2" title="Current pipeline phase">IDLE</span>
                     </h4>
+                    <div class="d-flex justify-content-between align-items-center mt-2">
+                        <div class="small text-muted">
+                            <span class="badge" style="background:#0d6efd">INCREMENTAL</span>
+                            <span class="badge" style="background:#6f42c1">ANALYSIS</span>
+                            <span class="badge" style="background:#0dcaf0;color:#000">COLLECTION</span>
+                            <span class="badge" style="background:#20c997">ML</span>
+                        </div>
+                        <div class="input-group input-group-sm" style="width: 170px;">
+                            <label class="input-group-text" for="tasks-count-select">Show</label>
+                            <select id="tasks-count-select" class="form-select form-select-sm">
+                                <option value="5">Last 5</option>
+                                <option value="10">Last 10</option>
+                                <option value="20">Last 20</option>
+                            </select>
+                        </div>
+                    </div>
                     <div id="recent-tasks" class="mt-3">
                         <div class="text-center">
                             <div class="spinner-border spinner-border-sm" role="status"></div>
@@ -442,6 +539,24 @@
 
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Report Modal -->
+    <div class="modal fade" id="reportModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">System Report</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body" id="reportModalBody">
+            <div class="text-muted">Loading...</div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
 <script>
         // Global variables
@@ -502,26 +617,47 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Update timestamp
                 document.getElementById('timestamp').textContent = new Date().toLocaleTimeString();
                 
-                // Get automation status with retry logic
+                // Get automation status with improved retry logic
                 let automationData;
-                try {
-                    const automationResponse = await fetch('/api/automation/status?source=internal&cache=1');
-                    if (!automationResponse.ok) throw new Error('Automation API failed');
-                    automationData = await automationResponse.json();
-                } catch (error) {
-                    console.warn('Automation status fetch failed, retrying...', error);
-                    // Retry after 1 second
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    const automationResponse = await fetch('/api/automation/status?source=internal&cache=1');
-                    automationData = await automationResponse.json();
+                let retryCount = 0;
+                const maxRetries = 3;
+                
+                while (retryCount < maxRetries) {
+                    try {
+                        const automationResponse = await fetch('/api/automation/status?source=internal&cache=1&v=' + Date.now());
+                        if (automationResponse.ok) {
+                            automationData = await automationResponse.json();
+                            break; // Success, exit retry loop
+                        } else {
+                            throw new Error(`HTTP ${automationResponse.status}: ${automationResponse.statusText}`);
+                        }
+                    } catch (error) {
+                        retryCount++;
+                        console.warn(`Automation status fetch failed (attempt ${retryCount}/${maxRetries}):`, error.message);
+                        
+                        if (retryCount >= maxRetries) {
+                            // Final fallback
+                            automationData = {
+                                available: false,
+                                scheduler_status: { is_running: false },
+                                mode: 'UNKNOWN',
+                                error: error.message
+                            };
+                            addLog('WARNING', `⚠️ Automation status unavailable after ${maxRetries} attempts: ${error.message}`);
+                        } else {
+                            // Wait before retry (exponential backoff)
+                            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+                        }
+                    }
                 }
                 
                 if (automationData && automationData.available) {
                     const status = automationData.scheduler_status;
-                    // Ensure status exists and has valid data
-                    if (status && typeof status.is_running === 'boolean') {
-                        const currentStatus = status.is_running ? 'RUNNING' : 'STOPPED';
-                        const currentJobs = (automationData.mode === 'CONTINUOUS_FULL') ? 'Continuous (5m)' : (status.scheduled_jobs || 0);
+                    // Ensure status exists and has valid data (handle both boolean and string)
+                    if (status && (typeof status.is_running === 'boolean' || typeof status.is_running === 'string')) {
+                        const isRunning = (status.is_running === true || status.is_running === 'True' || status.is_running === 'true');
+                        const currentStatus = isRunning ? 'RUNNING' : 'STOPPED';
+                        const currentJobs = (automationData.mode === 'SYMBOL_FLOW') ? 'Symbol Flow (Sequential)' : (status.scheduled_jobs || 0);
                         
                         // Only update if different to prevent flickering
                         const statusElement = document.getElementById('automation-status');
@@ -662,37 +798,55 @@ document.addEventListener('DOMContentLoaded', function() {
                 const tasksContainer = document.getElementById('recent-tasks');
                 
                 if (data.status === 'success' && data.tasks && data.tasks.length > 0) {
-                    const MAX_TASKS_DISPLAY = 5;
+                    const preferCount = parseInt(localStorage.getItem('tasksDisplayCount') || '5');
+                    const MAX_TASKS_DISPLAY = Number.isFinite(preferCount) ? preferCount : 5;
                     const tasksToRender = data.tasks.slice(0, MAX_TASKS_DISPLAY);
                     let html = '';
                     
                     tasksToRender.forEach(task => {
-                        const statusClass = {
-                            'completed': 'text-success',
-                            'running': 'text-primary',
-                            'failed': 'text-danger',
-                            'pending': 'text-warning'
-                        };
-                        
+                        const state = (task.status || '').toLowerCase();
                         const statusIcon = {
                             'completed': '✅',
                             'running': '⏳',
                             'failed': '❌',
-                            'pending': '⏰'
+                            'pending': '⏰',
+                            'start': '▶️',
+                            'end': '✅',
+                            'error': '❌'
                         };
-                        
+                        const badgeClass = {
+                            'completed': 'bg-success',
+                            'running': 'bg-primary',
+                            'failed': 'bg-danger',
+                            'pending': 'bg-warning',
+                            'start': 'bg-primary',
+                            'end': 'bg-success',
+                            'error': 'bg-danger'
+                        };
+                        const badgeText = (state === 'start' || state === 'end' || state === 'error')
+                            ? state.toUpperCase()
+                            : (state || 'UNKNOWN').toUpperCase();
+                        const phaseKey = String(task.task || '').toLowerCase();
+                        const phase = (task.task || '').replace(/_/g, ' ');
+                        const phaseColors = {
+                            'incremental_cycle': '#0d6efd',
+                            'ai_analysis': '#6f42c1',
+                            'data_collection': '#0dcaf0',
+                            'bulk_predictions': '#20c997',
+                            'symbol_flow': '#ffc107'
+                        };
+                        const leftColor = phaseColors[phaseKey] || '#ced4da';
+                        const repeatBadge = (task.repeat && task.repeat > 1) ? `<span class="badge bg-secondary ms-2">x${task.repeat}</span>` : '';
                         html += `
-                            <div class="d-flex align-items-start mb-3 p-2 border-bottom">
-                                <span class="me-2 fs-5">${task.icon}</span>
+                            <div class="d-flex align-items-start mb-3 p-2 border-bottom" style="border-left:4px solid ${leftColor};">
+                                <span class="me-2 fs-5">${statusIcon[state] || task.icon || '🧩'}</span>
                                 <div class="flex-grow-1">
                                     <div class="d-flex justify-content-between">
-                                        <strong class="small">${task.task}</strong>
+                                        <strong class="small">${phase}</strong>
                                         <small class="text-muted">${task.timestamp}</small>
                                     </div>
-                                    <div class="small text-muted">${task.description}</div>
-                                    <div class="small ${statusClass[task.status] || 'text-secondary'}">
-                                        ${statusIcon[task.status] || '❓'} ${task.status.toUpperCase()}
-                                    </div>
+                                    <div class="small text-muted">${task.description || ''}</div>
+                                    <span class="badge ${badgeClass[state] || 'bg-secondary'}">${badgeText}</span>${repeatBadge}
                                 </div>
                             </div>
                         `;
@@ -738,9 +892,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 const statusJson = statusRes.ok ? await statusRes.json() : null;
                 let isRunning = false;
                 if (statusJson) {
-                    const container = statusJson.automation ? statusJson.automation : statusJson;
-                    const sched = (container && (container.scheduler_status || container.internal)) || {};
-                    isRunning = !!(sched && sched.is_running);
+                    // Try multiple sources for running status
+                    isRunning = !!(statusJson.automation && statusJson.automation.running) ||
+                               !!(statusJson.scheduler_status && statusJson.scheduler_status.is_running) ||
+                               !!(statusJson.running);
                 }
 
                 const res = await fetch('/api/automation/pipeline-history');
@@ -755,7 +910,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         // Find most recent 'start' entry to decide the phase reliably
                         let lastStart = null;
                         for (let i = hist.length - 1; i >= 0; i--) {
-                            if (hist[i].state === 'start' && (hist[i].phase === 'data_collection' || hist[i].phase === 'ai_analysis')) {
+                            if (hist[i].state === 'start' && (hist[i].phase === 'data_collection' || hist[i].phase === 'ai_analysis' || hist[i].phase === 'incremental_cycle' || hist[i].phase === 'symbol_flow')) {
                                 lastStart = hist[i];
                                 break;
                             }
@@ -765,6 +920,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         if (state === 'start') {
                             if (phase === 'data_collection') { label = 'Collecting'; cls = 'bg-info'; }
                             else if (phase === 'ai_analysis') { label = 'Analyzing'; cls = 'bg-primary'; }
+                            else if (phase === 'incremental_cycle') { label = 'Incremental'; cls = 'bg-primary'; }
+                            else if (phase === 'symbol_flow') { label = 'Symbol Flow'; cls = 'bg-warning'; }
                             else { label = 'Running'; cls = 'bg-primary'; }
                         } else if (state === 'end') {
                             label = 'Idle'; cls = 'bg-success';
@@ -786,7 +943,14 @@ document.addEventListener('DOMContentLoaded', function() {
         async function startAutomation() {
             try {
                 addLog('INFO', 'Starting automation...');
-                const response = await fetch('/api/automation/start', { method: 'POST' });
+                console.log('🚀 Starting automation via /api/automation/start');
+                const response = await fetch('/api/automation/start?v=1.1', { 
+                    method: 'POST',
+                    headers: {
+                        'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw',
+                        'X-Internal-Request': 'true'
+                    }
+                });
                 let data;
                 try { data = await response.json(); } catch (_) { data = { status: 'error', message: `HTTP ${response.status}` }; }
                 const okStatuses = ['started', 'already_running'];
@@ -801,7 +965,14 @@ document.addEventListener('DOMContentLoaded', function() {
         async function stopAutomation() {
             try {
                 addLog('INFO', 'Stopping automation...');
-                const response = await fetch('/api/automation/stop', { method: 'POST' });
+                console.log('🛑 Stopping automation via /api/automation/stop');
+                const response = await fetch('/api/automation/stop?v=1.1', { 
+                    method: 'POST',
+                    headers: {
+                        'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw',
+                        'X-Internal-Request': 'true'
+                    }
+                });
                 let data;
                 try { data = await response.json(); } catch (_) { data = { status: 'error', message: `HTTP ${response.status}` }; }
                 const okStatuses = ['stopped', 'already_stopped'];
@@ -816,25 +987,378 @@ document.addEventListener('DOMContentLoaded', function() {
         async function runTask(taskName) {
             try {
                 addLog('INFO', `Running task: ${taskName}...`);
-                const response = await fetch(`/api/automation/run-task/${taskName}`, { method: 'POST' });
+                
+                // Add loading state for long-running tasks
+                const isLongTask = ['data_collection', 'model_retraining'].includes(taskName);
+                if (isLongTask) {
+                    addLog('INFO', `⏳ ${taskName} is a long-running task, please wait...`);
+                }
+                
+                const headers = {
+                    'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw',
+                    'X-Internal-Request': 'true',
+                    'Content-Type': 'application/json'
+                };
+                
+                // Debug: Log request details
+                console.log(`🔍 Request: POST /api/internal/automation/run-task/${taskName}`);
+                console.log('🔍 Headers:', headers);
+                
+                const response = await fetch(`/api/internal/automation/run-task/${taskName}`, { 
+                    method: 'POST',
+                    headers: headers,
+                    // Set appropriate timeout for long tasks
+                    signal: isLongTask ? undefined : AbortSignal.timeout(30000) // 30s for short tasks
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
                 const logType = data.status === 'success' ? 'SUCCESS' : 'ERROR';
                 addLog(logType, `Task ${taskName}: ${data.message}`);
+                
+                // Show detailed results for successful tasks
+                if (data.status === 'success' && data.result) {
+                    const result = data.result;
+                    if (typeof result === 'object') {
+                        const details = Object.entries(result)
+                            .filter(([k, v]) => k !== 'timestamp' && v !== undefined)
+                            .map(([k, v]) => `${k}: ${v}`)
+                            .join(', ');
+                        if (details) {
+                            addLog('INFO', `📊 ${taskName} details: ${details}`);
+                        }
+                    }
+                }
+                
                 updateDashboard();
             } catch (error) {
-                addLog('ERROR', `Task ${taskName} failed: ${error.message}`);
+                if (error.name === 'TimeoutError') {
+                    addLog('WARNING', `Task ${taskName} timed out - may still be running in background`);
+                } else {
+                    addLog('ERROR', `Task ${taskName} failed: ${error.message}`);
+                }
             }
         }
 
+        let __reportChart = null;
         async function generateReport() {
             try {
                 addLog('INFO', 'Generating system report...');
-                const response = await fetch('/api/automation/report');
-                const data = await response.json();
+                const [repRes, histRes] = await Promise.all([
+                    fetch('/api/automation/report?v=' + Date.now()),
+                    fetch('/api/automation/pipeline-history?v=' + Date.now())
+                ]);
+                const rep = repRes.ok ? await repRes.json() : { status: 'error' };
+                const hist = histRes.ok ? await histRes.json() : { status: 'error' };
+                renderReportModal(rep, hist);
+                const modalEl = document.getElementById('reportModal');
+                const modal = new bootstrap.Modal(modalEl);
+                modal.show();
                 addLog('SUCCESS', 'System report generated successfully');
-                // Could show report in modal here
-    } catch (error) {
+            } catch (error) {
                 addLog('ERROR', `Report generation failed: ${error.message}`);
+            }
+        }
+
+        function renderReportModal(rep, hist) {
+            try {
+                const body = document.getElementById('reportModalBody');
+                // Aggregate metrics since automation start
+                const aggr = (rep && rep.report && rep.report.aggregates) ? rep.report.aggregates : {};
+                const sinceStarted = (rep && rep.report) ? (rep.report.since_started || '') : '';
+                const lastStats = (rep && rep.report && rep.report.last_run_stats) ? rep.report.last_run_stats : {};
+                let cycle = Number(lastStats.cycle || 0);
+                let analyzed = Number(lastStats.analyzed || 0);
+                let collected = Number(lastStats.total_records || 0);
+                let updated = Number(lastStats.updated_records || 0);
+
+                const history = (hist && hist.history) ? hist.history.filter(h => h.phase === 'symbol_flow' && h.state === 'end') : [];
+                // Fallback: if last_run_stats missing/zero, derive counters from last history end entry
+                if ((cycle === 0 && history.length > 0) || (!lastStats || Object.keys(lastStats).length === 0)) {
+                    const lastEnd = history[history.length - 1] || {};
+                    const det = lastEnd.details || {};
+                    cycle = Number(det.cycle || history.length || 0);
+                    analyzed = Number(det.analyzed || 0);
+                    collected = Number(det.collected_records || 0);
+                    updated = Number(det.updated_records || 0);
+                }
+
+                // Volume tiers from backend report (if any)
+                const volume = (rep && rep.report && rep.report.volume) ? rep.report.volume : null;
+                const lookbackDays = volume ? Number(volume.lookback_days || 0) : 0;
+                const recent = history.slice(-10);
+                const rows = recent.map((r, idx) => {
+                    const det = r.details || {};
+                    return `<tr>
+                        <td>${recent.length - idx}</td>
+                        <td>${r.timestamp || ''}</td>
+                        <td>${det.analyzed ?? '-'}</td>
+                        <td>${det.collected_records ?? 0}</td>
+                        <td>${det.updated_records ?? 0}</td>
+                        <td>${det.total ?? '-'}</td>
+                    </tr>`;
+                }).join('');
+
+                body.innerHTML = `
+                    <div class="row g-3 mb-3">
+                        <div class="col-6 col-md-3">
+                            <div class="p-3 rounded text-center" style="background:#f8f9fa;border:1px solid #e9ecef;">
+                                <div class="small text-muted">Cycle</div>
+                                <div class="h4 mb-0">${cycle}</div>
+                                <div class="small text-muted mt-1">since start: ${aggr.cycles ?? '-'}</div>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <div class="p-3 rounded text-center" style="background:#f8fff9;border:1px solid #e2f3e7;">
+                                <div class="small text-muted">Analyzed</div>
+                                <div class="h4 mb-0">${analyzed}</div>
+                                <div class="small text-muted mt-1">since start: ${aggr.analyzed ?? '-'}</div>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <div class="p-3 rounded text-center" style="background:#f6fbff;border:1px solid #e3f0fb;">
+                                <div class="small text-muted">Collected</div>
+                                <div class="h4 mb-0">${collected}</div>
+                                <div class="small text-muted mt-1">since start: ${aggr.collected ?? '-'}</div>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <div class="p-3 rounded text-center" style="background:#fffaf6;border:1px solid #fde8d9;">
+                                <div class="small text-muted">Updated</div>
+                                <div class="h4 mb-0">${updated}</div>
+                                <div class="small text-muted mt-1">since start: ${aggr.updated ?? '-'}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row g-3 mb-3">
+                        <div class="col-12">
+                            <div class="p-3 rounded" style="background:#ffffff;border:1px solid #e9ecef;">
+                                <div class="d-flex flex-wrap gap-3 align-items-center">
+                                    <div><strong>Since Started:</strong> <span class="text-muted">${sinceStarted || '-'}</span></div>
+                                    <div><strong>Total Trainings:</strong> <span>${(aggr && (aggr.train_total ?? aggr.train_total === 0)) ? aggr.train_total : '-'}</span></div>
+                                    <div><strong>Total Signals:</strong> <span>${(aggr && (aggr.signals_total ?? aggr.signals_total === 0)) ? aggr.signals_total : '-'}</span></div>
+                                    <div><strong>YOLO Detections:</strong> <span>${(aggr && (aggr.yolo_detections ?? aggr.yolo_detections === 0)) ? aggr.yolo_detections : '-'}</span></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label small">Volume Tier</label>
+                            <select class="form-select form-select-sm" id="filterVolumeTier">
+                                <option value="all" selected>All</option>
+                                <option value="vh">Very High</option>
+                                <option value="h">High</option>
+                                <option value="m">Medium</option>
+                                <option value="l">Low</option>
+                                <option value="vl">Very Low</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small">Timeframe</label>
+                            <select class="form-select form-select-sm" id="filterTimeframe" disabled>
+                                <option value="1">1d</option>
+                                <option value="3" selected>3d</option>
+                                <option value="7">7d</option>
+                                <option value="14">14d</option>
+                                <option value="30">30d</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small">Search <span id="searchResultCount" class="text-muted"></span></label>
+                            <div class="input-group input-group-sm">
+                                <input class="form-control" id="filterSearch" placeholder="Örn: THYAO, Türk Hava" />
+                                <button class="btn btn-outline-secondary" type="button" onclick="clearSearch()">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row g-3">
+                        <div class="col-lg-6">
+                            <div class="p-3 rounded" style="background:#ffffff;border:1px solid #e9ecef;">
+                                <canvas id="reportChart" height="220"></canvas>
+                            </div>
+                        </div>
+                        <div class="col-lg-6">
+                            <div class="p-3 rounded" style="background:#ffffff;border:1px solid #e9ecef;">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <strong>Recent Cycles</strong>
+                                    <small class="text-muted">Last ${recent.length}</small>
+                                </div>
+                                <div class="table-responsive" style="max-height:260px;">
+                                    <table class="table table-sm table-striped align-middle mb-0">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th>#</th><th>Time</th><th>Analyzed</th><th>Collected</th><th>Updated</th><th>Total</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>${rows || ''}</tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row g-3 mt-3" id="volumeSection">
+                        <div class="col-12">
+                            <div class="p-3 rounded" style="background:#ffffff;border:1px solid #e9ecef;">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <strong>Volume Tiers</strong>
+                                    <small class="text-muted">Lookback: ${lookbackDays || '-'} days</small>
+                                </div>
+                                <div id="volumeSummary" class="mb-2"></div>
+                                <div class="table-responsive" style="max-height:260px;">
+                                    <table class="table table-sm table-striped align-middle mb-0">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th>Symbol</th><th>Avg Volume</th><th>Tier</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="volumeSymbolsList"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                // Build chart
+                try {
+                    const labels = recent.map((r) => (r.details && (r.details.cycle || ''))).map((v, i) => v || `#${cycle - (recent.length - i)}`);
+                    const collectedArr = recent.map(r => (r.details && Number(r.details.collected_records || 0)) || 0);
+                    const updatedArr = recent.map(r => (r.details && Number(r.details.updated_records || 0)) || 0);
+                    const ctx = document.getElementById('reportChart').getContext('2d');
+                    if (__reportChart) { try { __reportChart.destroy(); } catch (_) {} }
+                    __reportChart = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: labels,
+                            datasets: [
+                                { label: 'Collected', data: collectedArr, backgroundColor: 'rgba(13, 110, 253, 0.6)' },
+                                { label: 'Updated', data: updatedArr, backgroundColor: 'rgba(25, 135, 84, 0.6)' }
+                            ]
+                        },
+                        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+                    });
+                } catch (e) { /* ignore chart errors */ }
+                // Volume tier rendering and filters
+                try {
+                    window.__reportVolume = volume || null;
+                    const tierSel = document.getElementById('filterVolumeTier');
+                    const searchInp = document.getElementById('filterSearch');
+                    const sectionEl = document.getElementById('volumeSection');
+
+                    function mapShortToTier(s) {
+                        if (s === 'vh') return 'very_high';
+                        if (s === 'h') return 'high';
+                        if (s === 'm') return 'medium';
+                        if (s === 'l') return 'low';
+                        if (s === 'vl') return 'very_low';
+                        return 'all';
+                    }
+
+                    function renderVolumeSymbols() {
+                        const vol = window.__reportVolume;
+                        const listEl = document.getElementById('volumeSymbolsList');
+                        const sumEl = document.getElementById('volumeSummary');
+                        if (!vol) {
+                            if (sectionEl) sectionEl.style.display = 'none';
+                            return;
+                        }
+                        if (sectionEl) sectionEl.style.display = '';
+                        const all = Array.isArray(vol.symbols) ? vol.symbols : [];
+                        const sum = vol.summary || {};
+                        sumEl.innerHTML = `
+                            <span class="badge bg-dark me-1">Very High: ${sum.very_high || 0}</span>
+                            <span class="badge bg-primary me-1">High: ${sum.high || 0}</span>
+                            <span class="badge bg-secondary me-1">Medium: ${sum.medium || 0}</span>
+                            <span class="badge bg-warning text-dark me-1">Low: ${sum.low || 0}</span>
+                            <span class="badge bg-light text-dark">Very Low: ${sum.very_low || 0}</span>
+                        `;
+                        const tierVal = (tierSel && tierSel.value) ? tierSel.value : 'all';
+                        const q = (searchInp && searchInp.value ? searchInp.value : '').trim().toUpperCase();
+                        let filtered = all.slice();
+                        if (tierVal !== 'all') {
+                            const target = mapShortToTier(tierVal);
+                            filtered = filtered.filter(s => (s.tier || '') === target);
+                        }
+                        if (q) {
+                            filtered = filtered.filter(s => {
+                                const sym = String(s.symbol || '').toUpperCase();
+                                const name = String(s.name || '').toUpperCase();
+                                return sym.includes(q) || name.includes(q);
+                            });
+                        }
+                        const rowsHtml = filtered.slice(0, 200).map(s => {
+                            // Highlight search terms
+                            let displayText = s.symbol;
+                            if (s.name) displayText += ' - ' + s.name;
+                            if (q) {
+                                const regex = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+                                displayText = displayText.replace(regex, '<mark>$1</mark>');
+                            }
+                            return `
+                            <tr>
+                                <td>${displayText}</td>
+                                <td>${Number(s.avg_volume || 0).toLocaleString('tr-TR')}</td>
+                                <td><span class="badge bg-secondary">${s.tier}</span></td>
+                            </tr>
+                        `;
+                        }).join('');
+                        
+                        // Update search result count
+                        const countEl = document.getElementById('searchResultCount');
+                        if (countEl) {
+                            if (q) {
+                                countEl.textContent = `(${filtered.length} sonuç)`;
+                                countEl.className = 'text-success';
+                            } else {
+                                countEl.textContent = '';
+                            }
+                        }
+                        
+                        listEl.innerHTML = rowsHtml || '<tr><td colspan="3" class="text-muted">Sonuç bulunamadı</td></tr>';
+                    }
+
+                    if (volume) {
+                        renderVolumeSymbols();
+                        if (tierSel) tierSel.addEventListener('change', renderVolumeSymbols);
+                        if (searchInp) {
+                            // Remove existing listeners to prevent duplicates
+                            searchInp.removeEventListener('input', renderVolumeSymbols);
+                            searchInp.addEventListener('input', renderVolumeSymbols);
+                            
+                            // Enhanced keydown handler
+                            searchInp.addEventListener('keydown', function(e){
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    renderVolumeSymbols();
+                                    try { 
+                                        if (sectionEl) sectionEl.scrollIntoView({behavior: 'smooth', block: 'start'}); 
+                                    } catch (_) {}
+                                } else if (e.key === 'Escape') {
+                                    // Clear search on Escape
+                                    searchInp.value = '';
+                                    renderVolumeSymbols();
+                                }
+                            });
+                        }
+                    } else if (sectionEl) {
+                        sectionEl.style.display = 'none';
+                    }
+                } catch (_) { /* ignore */ }
+
+            } catch (e) {
+                // Fallback content
+                const body = document.getElementById('reportModalBody');
+                body.innerHTML = '<div class="alert alert-warning">Report content could not be rendered.</div>';
             }
         }
 
@@ -868,6 +1392,18 @@ document.addEventListener('DOMContentLoaded', function() {
             setInterval(updateDashboard, 15000);
         }
 
+        // Clear search function for report modal
+        function clearSearch() {
+            const searchInp = document.getElementById('filterSearch');
+            if (searchInp) {
+                searchInp.value = '';
+                // Trigger search update if renderVolumeSymbols exists
+                if (typeof renderVolumeSymbols === 'function') {
+                    renderVolumeSymbols();
+                }
+            }
+        }
+
         // Initialize everything when page loads
         window.onload = function() {
             // Initialize WebSocket first
@@ -876,6 +1412,17 @@ document.addEventListener('DOMContentLoaded', function() {
             // Load initial dashboard data
             updateDashboard();
             
+            // Restore tasks display count preference
+            try {
+                const sel = document.getElementById('tasks-count-select');
+                const prefer = localStorage.getItem('tasksDisplayCount') || '5';
+                sel.value = prefer;
+                sel.addEventListener('change', function() {
+                    localStorage.setItem('tasksDisplayCount', String(this.value));
+                    updateRecentTasks();
+                });
+            } catch (_) { /* ignore */ }
+
             // Periodik güncelleme: tek interval (20 sn)
             if (!window.__dashInterval) {
                 window.__dashInterval = setInterval(() => {

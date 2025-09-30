@@ -3,13 +3,11 @@ Flask==2.3.3
 Flask-SQLAlchemy==3.0.5
 Flask-Migrate==4.0.5
 Flask-Login==0.6.3
-Flask-Mail==0.9.1
 Flask-SocketIO==5.3.6
 Flask-WTF==1.1.1
 Flask-Limiter==3.3.1
 Flask-Cors==4.0.0
-eventlet==0.36.1
-authlib[client]==1.3.1
+authlib==1.3.1
 
 # Database
 psycopg2-binary==2.9.7
@@ -24,8 +22,7 @@ yfinance==0.2.22
 scikit-learn==1.3.0
 xgboost==2.0.0
 lightgbm==4.1.0
-
-# Technical Analysis
+catboost==1.2.7
 
 # Computer Vision (YOLOv8)
 ultralytics==8.0.196
@@ -33,13 +30,10 @@ opencv-python==4.8.1.78
 Pillow==10.0.0
 
 # Scheduling & Background Tasks
-APScheduler==3.10.4
-schedule==1.2.0
 
 # Web Scraping & HTTP
 requests==2.31.0
-beautifulsoup4==4.12.2
-selenium==4.15.0
+curl_cffi==0.13.0
 
 # Utilities
 python-dotenv==1.0.0
@@ -49,14 +43,16 @@ python-socketio==5.8.0
 # Security
 cryptography==41.0.4
 
-# Development Tools
-pytest==7.4.2
-black==23.7.0
-flake8==6.0.0
-
 # Deployment
 gunicorn==21.2.0
+gevent==24.2.1
+gevent-websocket==0.10.1
 redis==4.6.0
+feedparser==6.0.10
+
+# FinGPT/RSS Dependencies  
+transformers>=4.21.0
+torch>=1.12.0
 
 # Additional ML Libraries
 joblib==1.3.2

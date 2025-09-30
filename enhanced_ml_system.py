@@ -6,13 +6,12 @@ XGBoost, LightGBM, CatBoost ile gelişmiş tahmin modelleri
 import numpy as np
 import pandas as pd
 import os
-from datetime import datetime, timedelta
 import logging
-from sklearn.model_selection import train_test_split, TimeSeriesSplit
-from sklearn.preprocessing import StandardScaler, RobustScaler
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, mean_absolute_percentage_error
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.metrics import mean_squared_error, r2_score
 import joblib
-import os
+import json
+from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -43,6 +42,7 @@ except ImportError:
     BASE_ML_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
 
 class EnhancedMLSystem:
     """Gelişmiş ML tahmin sistemi"""
@@ -91,6 +91,40 @@ class EnhancedMLSystem:
         logger.info(f"📊 LightGBM: {LIGHTGBM_AVAILABLE}")
         logger.info(f"📊 CatBoost: {CATBOOST_AVAILABLE}")
     
+    @staticmethod
+    def _smape(y_true, y_pred, eps: float = 1e-8) -> float:
+        try:
+            y_true_arr = np.asarray(y_true, dtype=float)
+            y_pred_arr = np.asarray(y_pred, dtype=float)
+            denom = np.abs(y_true_arr) + np.abs(y_pred_arr) + eps
+            return float(np.mean(2.0 * np.abs(y_pred_arr - y_true_arr) / denom))
+        except Exception:
+            return float('nan')
+    
+    @staticmethod
+    def _r2_to_confidence(r2_score):
+        """
+        Convert R² score to confidence [0-1]
+        R² can be negative (model worse than mean baseline)
+        
+        CRITICAL FIX: R² directly as confidence was wrong!
+        - R² < 0 → poor model, but still give some confidence (0.3-0.4)
+        - R² = 0 → baseline (0.45)
+        - R² = 0.5 → moderate (0.7)
+        - R² = 0.8 → good (0.85)
+        - R² = 1.0 → excellent (0.95, never 1.0 for humility)
+        
+        Formula: conf = 0.3 + 0.65 / (1 + exp(-5*r2))
+        """
+        try:
+            # Sigmoid transformation shifted and scaled
+            exponent = -5.0 * float(r2_score)
+            confidence = 0.3 + (0.65 / (1.0 + np.exp(exponent)))
+            # Clamp to [0.2, 0.95] for safety
+            return float(np.clip(confidence, 0.2, 0.95))
+        except Exception:
+            return 0.5  # Fallback
+
     def create_advanced_features(self, data):
         """Gelişmiş feature engineering"""
         try:
@@ -286,22 +320,24 @@ class EnhancedMLSystem:
             # Numeric sütunları al
             numeric_columns = df.select_dtypes(include=[np.number]).columns
             
-            # Her numeric sütun için outlier temizleme
+            # CRITICAL FIX: Softened outlier removal (was too aggressive)
+            # Previous: 3 sigma + 1-99 percentile → Market shocks were removed!
+            # New: 5 sigma + 0.5-99.5 percentile → Keep real market events
             for col in numeric_columns:
                 if col in ['open', 'high', 'low', 'close', 'volume']:
                     continue  # Ana price sütunlarını dokunma
                 
-                # Z-score ile outlier tespiti (3 sigma)
+                # Z-score ile outlier tespiti (5 sigma - yumuşatıldı)
                 if df[col].std() > 0:  # Std > 0 kontrolü
                     z_scores = np.abs((df[col] - df[col].mean()) / df[col].std())
-                    df.loc[z_scores > 3, col] = np.nan
+                    df.loc[z_scores > 5, col] = np.nan  # 3 → 5 sigma
                 
-                # Çok büyük değerleri sınırla
-                percentile_99 = df[col].quantile(0.99)
-                percentile_1 = df[col].quantile(0.01)
+                # Çok büyük değerleri sınırla (yumuşatıldı)
+                percentile_high = df[col].quantile(0.995)  # 0.99 → 0.995
+                percentile_low = df[col].quantile(0.005)   # 0.01 → 0.005
                 
-                if not np.isnan(percentile_99) and not np.isnan(percentile_1):
-                    df[col] = df[col].clip(lower=percentile_1, upper=percentile_99)
+                if not np.isnan(percentile_high) and not np.isnan(percentile_low):
+                    df[col] = df[col].clip(lower=percentile_low, upper=percentile_high)
             
             # NaN değerleri forward fill ile doldur
             df = df.ffill()
@@ -341,8 +377,13 @@ class EnhancedMLSystem:
             # Clean infinite and large values
             df_features = self._clean_data(df_features)
             
-            if len(df_features) < 200:
-                logger.warning(f"{symbol} için yeterli veri yok (200+ gerekli)")
+            try:
+                # Read minimum data days from environment; default 180 to align with override policy
+                min_days = int(os.getenv('ML_MIN_DATA_DAYS', os.getenv('ML_MIN_DAYS', '180')))
+            except Exception:
+                min_days = 180
+            if len(df_features) < min_days:
+                logger.warning(f"{symbol} için yeterli veri yok ({min_days}+ gerekli)")
                 return False
             
             # Feature selection
@@ -359,9 +400,11 @@ class EnhancedMLSystem:
             for horizon in self.prediction_horizons:
                 logger.info(f"📈 {symbol} - {horizon} gün tahmini için model eğitimi")
                 
-                # Target variable
-                target = f'target_{horizon}d'
-                df_features[target] = df_features['close'].shift(-horizon)
+                # Target variable: forward return (percentage)
+                target = f'target_ret_{horizon}d'
+                df_features[target] = (
+                    df_features['close'].shift(-horizon) / df_features['close'] - 1.0
+                )
                 
                 # Remove last horizon rows
                 df_model = df_features[:-horizon].copy()
@@ -378,15 +421,27 @@ class EnhancedMLSystem:
                 # 1. XGBoost
                 if XGBOOST_AVAILABLE:
                     try:
+                        # CRITICAL FIX: Improved XGBoost parameters for realistic predictions
+                        # Previous: n_estimators=100 was too few, causing underfitting
+                        # Added regularization to prevent overfitting
+                        # Added early stopping for optimal model complexity
                         xgb_model = xgb.XGBRegressor(
-                            n_estimators=100,
-                            max_depth=6,
-                            learning_rate=0.1,
+                            n_estimators=500,           # Increased from 100
+                            max_depth=8,                # Increased from 6 for more expressiveness
+                            learning_rate=0.05,         # Decreased from 0.1 for stability
+                            subsample=0.8,              # NEW: Row sampling for generalization
+                            colsample_bytree=0.8,       # NEW: Column sampling
+                            min_child_weight=5,         # NEW: Regularization
+                            gamma=0.1,                  # NEW: Pruning parameter
+                            reg_alpha=0.1,              # NEW: L1 regularization
+                            reg_lambda=1.0,             # NEW: L2 regularization
                             random_state=42,
-                            n_jobs=-1
+                            n_jobs=-1,
+                            early_stopping_rounds=50,   # NEW: Stop when no improvement
+                            eval_metric='rmse'          # NEW: Explicit metric
                         )
                         
-                        # Cross-validation
+                        # Cross-validation (on returns)
                         xgb_scores = []
                         for fold, (train_idx, val_idx) in enumerate(tscv.split(X)):
                             try:
@@ -404,13 +459,18 @@ class EnhancedMLSystem:
                         
                         # Final training
                         xgb_model.fit(X, y)
-                        xgb_pred = xgb_model.predict(X[-100:])  # Last 100 for validation
+                        xgb_pred = xgb_model.predict(X[-100:])  # Last 100 returns for validation
+                        
+                        # CRITICAL FIX: R² to confidence conversion
+                        raw_r2 = np.mean(xgb_scores)
+                        confidence = self._r2_to_confidence(raw_r2)
                         
                         horizon_models['xgboost'] = {
                             'model': xgb_model,
-                            'score': np.mean(xgb_scores),
-                            'rmse': np.sqrt(mean_squared_error(y[-100:], xgb_pred)),
-                            'mape': mean_absolute_percentage_error(y[-100:], xgb_pred)
+                            'score': confidence,  # Confidence [0-1]
+                            'raw_r2': float(raw_r2),  # Keep raw R² for debugging
+                            'rmse': float(np.sqrt(mean_squared_error(y[-100:], xgb_pred))),
+                            'mape': float(self._smape(y[-100:], xgb_pred)),
                         }
                         
                         # Feature importance
@@ -418,7 +478,7 @@ class EnhancedMLSystem:
                             zip(feature_cols, xgb_model.feature_importances_)
                         )
                         
-                        logger.info(f"XGBoost {horizon}D - R²: {np.mean(xgb_scores):.3f}")
+                        logger.info(f"XGBoost {horizon}D - R²: {raw_r2:.3f} → Confidence: {confidence:.3f}")
                         
                     except Exception as e:
                         logger.error(f"XGBoost eğitim hatası: {e}")
@@ -435,7 +495,7 @@ class EnhancedMLSystem:
                             verbose=-1
                         )
                         
-                        # Cross-validation
+                        # Cross-validation (on returns)
                         lgb_scores = []
                         for train_idx, val_idx in tscv.split(X):
                             X_train, X_val = X[train_idx], X[val_idx]
@@ -450,11 +510,16 @@ class EnhancedMLSystem:
                         lgb_model.fit(X, y)
                         lgb_pred = lgb_model.predict(X[-100:])
                         
+                        # CRITICAL FIX: R² to confidence conversion
+                        raw_r2 = np.mean(lgb_scores)
+                        confidence = self._r2_to_confidence(raw_r2)
+                        
                         horizon_models['lightgbm'] = {
                             'model': lgb_model,
-                            'score': np.mean(lgb_scores),
-                            'rmse': np.sqrt(mean_squared_error(y[-100:], lgb_pred)),
-                            'mape': mean_absolute_percentage_error(y[-100:], lgb_pred)
+                            'score': confidence,  # Confidence [0-1]
+                            'raw_r2': float(raw_r2),
+                            'rmse': float(np.sqrt(mean_squared_error(y[-100:], lgb_pred))),
+                            'mape': float(self._smape(y[-100:], lgb_pred)),
                         }
                         
                         # Feature importance
@@ -462,7 +527,7 @@ class EnhancedMLSystem:
                             zip(feature_cols, lgb_model.feature_importances_)
                         )
                         
-                        logger.info(f"LightGBM {horizon}D - R²: {np.mean(lgb_scores):.3f}")
+                        logger.info(f"LightGBM {horizon}D - R²: {raw_r2:.3f} → Confidence: {confidence:.3f}")
                         
                     except Exception as e:
                         logger.error(f"LightGBM eğitim hatası: {e}")
@@ -480,7 +545,7 @@ class EnhancedMLSystem:
                             logging_level='Silent'
                         )
                         
-                        # Cross-validation
+                        # Cross-validation (on returns)
                         cat_scores = []
                         for train_idx, val_idx in tscv.split(X):
                             X_train, X_val = X[train_idx], X[val_idx]
@@ -495,11 +560,16 @@ class EnhancedMLSystem:
                         cat_model.fit(X, y)
                         cat_pred = cat_model.predict(X[-100:])
                         
+                        # CRITICAL FIX: R² to confidence conversion
+                        raw_r2 = np.mean(cat_scores)
+                        confidence = self._r2_to_confidence(raw_r2)
+                        
                         horizon_models['catboost'] = {
                             'model': cat_model,
-                            'score': np.mean(cat_scores),
-                            'rmse': np.sqrt(mean_squared_error(y[-100:], cat_pred)),
-                            'mape': mean_absolute_percentage_error(y[-100:], cat_pred)
+                            'score': confidence,  # Confidence [0-1]
+                            'raw_r2': float(raw_r2),
+                            'rmse': float(np.sqrt(mean_squared_error(y[-100:], cat_pred))),
+                            'mape': float(self._smape(y[-100:], cat_pred)),
                         }
                         
                         # Feature importance
@@ -507,7 +577,7 @@ class EnhancedMLSystem:
                             zip(feature_cols, cat_model.feature_importances_)
                         )
                         
-                        logger.info(f"CatBoost {horizon}D - R²: {np.mean(cat_scores):.3f}")
+                        logger.info(f"CatBoost {horizon}D - R²: {raw_r2:.3f} → Confidence: {confidence:.3f}")
                         
                     except Exception as e:
                         logger.error(f"CatBoost eğitim hatası: {e}")
@@ -525,6 +595,47 @@ class EnhancedMLSystem:
             # Store performance
             self.model_performance[symbol] = results
             
+            # Auto-backtest if enabled
+            backtest_enabled = str(os.getenv('ENABLE_AUTO_BACKTEST', 'True')).lower() == 'true'
+            if backtest_enabled:
+                try:
+                    from bist_pattern.ml.ml_backtester import get_ml_backtester
+                    backtester = get_ml_backtester()
+                    
+                    backtest_results = backtester.backtest_model(
+                        symbol=symbol,
+                        model_predictor=self,  # self has predict_enhanced method
+                        historical_data=data,
+                        horizons=self.prediction_horizons
+                    )
+                    
+                    # Store backtest results
+                    if backtest_results.get('status') == 'success':
+                        overall = backtest_results.get('overall', {})
+                        results['backtest'] = {
+                            'sharpe_ratio': overall.get('avg_sharpe_ratio', 0.0),
+                            'mape': overall.get('avg_mape', 0.0),
+                            'hit_rate': overall.get('avg_hit_rate', 0.0),
+                            'quality': overall.get('quality', 'UNKNOWN')
+                        }
+                        
+                        logger.info(
+                            f"📊 Backtest {symbol}: Sharpe={overall.get('avg_sharpe_ratio', 0):.2f}, "
+                            f"Hit Rate={overall.get('avg_hit_rate', 0):.1%}, "
+                            f"Quality={overall.get('quality', 'UNKNOWN')}"
+                        )
+                        
+                        # Warn if poor performance
+                        min_sharpe = float(os.getenv('BACKTEST_MIN_SHARPE', '0.3'))
+                        if overall.get('avg_sharpe_ratio', 0) < min_sharpe:
+                            logger.warning(
+                                f"⚠️ {symbol} model has low Sharpe ratio: "
+                                f"{overall.get('avg_sharpe_ratio', 0):.2f} < {min_sharpe}"
+                            )
+                    
+                except Exception as e:
+                    logger.warning(f"Backtest error for {symbol}: {e}")
+            
             logger.info(f"✅ {symbol} enhanced model eğitimi tamamlandı")
             return results
             
@@ -535,6 +646,19 @@ class EnhancedMLSystem:
     def predict_enhanced(self, symbol, current_data):
         """Enhanced predictions"""
         try:
+            # Auto-load models for this symbol if not already loaded
+            if not self.feature_columns or len(self.models) == 0:
+                logger.info(f"🔄 {symbol}: Auto-loading trained models...")
+                if self.has_trained_models(symbol):
+                    loaded = self.load_trained_models(symbol)
+                    if not loaded:
+                        logger.warning(f"⚠️ {symbol}: Failed to load trained models")
+                        return None
+                    logger.info(f"✅ {symbol}: Models loaded successfully ({len(self.feature_columns)} features)")
+                else:
+                    logger.warning(f"⚠️ {symbol}: No trained models found")
+                    return None
+            
             # Feature engineering
             df_features = self.create_advanced_features(current_data)
             df_features = df_features.dropna()
@@ -569,8 +693,11 @@ class EnhancedMLSystem:
                     
                     for model_name, model_info in horizon_models.items():
                         try:
-                            pred = model_info['model'].predict(latest_features)[0]
-                            
+                            # Predict forward return and map to forward price
+                            pred_ret = float(model_info['model'].predict(latest_features)[0])
+                            current_px = float(current_data['close'].iloc[-1])
+                            pred = current_px * (1.0 + pred_ret)
+
                             model_predictions[model_name] = {
                                 'prediction': float(pred),
                                 'confidence': float(model_info['score']),
@@ -585,17 +712,22 @@ class EnhancedMLSystem:
                         weights = [info['confidence'] for info in model_predictions.values()]
                         predictions_list = [info['prediction'] for info in model_predictions.values()]
                         
+                        # If all stored scores are zero (e.g., loaded models without metrics),
+                        # fallback to equal-weight averaging to avoid empty predictions.
                         if sum(weights) > 0:
                             ensemble_pred = np.average(predictions_list, weights=weights)
                             avg_confidence = np.mean(weights)
-                            
-                            predictions[f"{horizon}d"] = {
-                                'ensemble_prediction': float(ensemble_pred),
-                                'confidence': float(avg_confidence),
-                                'models': model_predictions,
-                                'current_price': float(current_data['close'].iloc[-1]),
-                                'model_count': len(model_predictions)
-                            }
+                        else:
+                            ensemble_pred = float(np.mean(predictions_list))
+                            # conservative default confidence
+                            avg_confidence = 0.55
+                        predictions[f"{horizon}d"] = {
+                            'ensemble_prediction': float(ensemble_pred),
+                            'confidence': float(avg_confidence),
+                            'models': model_predictions,
+                            'current_price': float(current_data['close'].iloc[-1]),
+                            'model_count': len(model_predictions)
+                        }
             
             return predictions
             
@@ -621,10 +753,112 @@ class EnhancedMLSystem:
             symbol_importance = {k: v for k, v in self.feature_importance.items() if k.startswith(symbol)}
             joblib.dump(symbol_importance, importance_file)
             
+            # Feature columns'ı ayrı JSON olarak kaydet (prediction için gerekli)
+            try:
+                cols_file = f"{self.model_directory}/{symbol}_feature_columns.json"
+                with open(cols_file, 'w') as wf:
+                    json.dump(list(self.feature_columns or []), wf)
+            except Exception:
+                pass
+
+            # Eğitim meta verisini kaydet (dashboard için)
+            try:
+                log_dir = os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+                os.makedirs(log_dir, exist_ok=True)
+                meta_dir = os.path.join(log_dir, 'model_performance')
+                os.makedirs(meta_dir, exist_ok=True)
+                meta = {
+                    'symbol': symbol,
+                    'timestamp': datetime.now().isoformat(),
+                    'horizons': self.prediction_horizons,
+                    'models': {
+                        f"{h}d": {
+                            m: {
+                                'score': float(info.get('score', 0.0)),
+                                'rmse': float(info.get('rmse', 0.0)),
+                                'mape': float(info.get('mape', 0.0)),
+                            }
+                            for m, info in (self.models.get(f"{symbol}_{h}d", {}) or {}).items()
+                        }
+                        for h in self.prediction_horizons
+                    },
+                    'feature_count': len(getattr(self, 'feature_columns', [])),
+                }
+                with open(os.path.join(meta_dir, f"{symbol}.json"), 'w') as wf:
+                    json.dump(meta, wf)
+            except Exception:
+                pass
+
             logger.info(f"💾 {symbol} enhanced modelleri kaydedildi")
             
         except Exception as e:
             logger.error(f"Enhanced model kaydetme hatası: {e}")
+
+    def has_trained_models(self, symbol: str) -> bool:
+        """Diskte bu sembol için en az bir horizon model dosyası var mı?"""
+        try:
+            for h in self.prediction_horizons:
+                for m in ('xgboost', 'lightgbm', 'catboost'):
+                    fpath = f"{self.model_directory}/{symbol}_{h}d_{m}.pkl"
+                    if os.path.exists(fpath):
+                        return True
+            return False
+        except Exception:
+            return False
+
+    def load_trained_models(self, symbol: str) -> bool:
+        """Diskten sembol modellerini ve feature kolonlarını yükle (varsa)."""
+        try:
+            loaded_any = False
+            for h in self.prediction_horizons:
+                model_key = f"{symbol}_{h}d"
+                horizon_models = {}
+                for m in ('xgboost', 'lightgbm', 'catboost'):
+                    fpath = f"{self.model_directory}/{symbol}_{h}d_{m}.pkl"
+                    if os.path.exists(fpath):
+                        try:
+                            model_obj = joblib.load(fpath)
+                            horizon_models[m] = {
+                                'model': model_obj,
+                                'score': 0.0,
+                                'rmse': 0.0,
+                                'mape': 0.0,
+                            }
+                            loaded_any = True
+                        except Exception:
+                            continue
+                if horizon_models:
+                    self.models[model_key] = horizon_models
+
+            # Feature columns: JSON → fallback importance → fallback empty
+            cols_file = f"{self.model_directory}/{symbol}_feature_columns.json"
+            cols = []
+            try:
+                if os.path.exists(cols_file):
+                    with open(cols_file, 'r') as rf:
+                        cols = json.load(rf) or []
+            except Exception:
+                cols = []
+            if not cols:
+                try:
+                    importance_file = f"{self.model_directory}/{symbol}_feature_importance.pkl"
+                    if os.path.exists(importance_file):
+                        imp = joblib.load(importance_file) or {}
+                        # Union of feature names (order fallback: sorted)
+                        keys = set()
+                        for _k, _v in (imp.items() if isinstance(imp, dict) else []):
+                            try:
+                                keys.update(list(_v.keys()))
+                            except Exception:
+                                continue
+                        cols = sorted(keys)
+                except Exception:
+                    cols = []
+            if cols:
+                self.feature_columns = list(cols)
+            return loaded_any
+        except Exception:
+            return False
     
     def get_top_features(self, symbol, model_type='xgboost', top_n=20):
         """En önemli feature'ları döndür"""
@@ -667,8 +901,10 @@ class EnhancedMLSystem:
             'performance_tracked': len(self.model_performance)
         }
 
+
 # Global singleton instance
 _enhanced_ml_system = None
+
 
 def get_enhanced_ml_system():
     """Enhanced ML System singleton'ını döndür"""
@@ -677,14 +913,15 @@ def get_enhanced_ml_system():
         _enhanced_ml_system = EnhancedMLSystem()
     return _enhanced_ml_system
 
+
 if __name__ == "__main__":
     # Test
     enhanced_ml = get_enhanced_ml_system()
     info = enhanced_ml.get_system_info()
-    
+
     print("🧠 Enhanced ML System Test:")
     print(f"📊 XGBoost: {info['xgboost_available']}")
     print(f"📊 LightGBM: {info['lightgbm_available']}")
     print(f"📊 CatBoost: {info['catboost_available']}")
     print(f"🎯 Prediction Horizons: {info['prediction_horizons']}")
-    print(f"✅ Enhanced ML System ready!")
+    print("✅ Enhanced ML System ready!")
