@@ -350,11 +350,7 @@ class MLPredictionSystem:
 _ml_system = None
 
 
-def get_ml_prediction_system():
-    global _ml_system
-    if _ml_system is None:
-        _ml_system = MLPredictionSystem()
-    return _ml_system    def _save_models_to_disk(self, symbol: str, models: Dict) -> bool:
+    def _save_models_to_disk(self, symbol: str, models: Dict) -> bool:
         """Save trained models to disk"""
         if not self.model_cache_dir or not models:
             return False
@@ -415,3 +411,14 @@ def get_ml_prediction_system():
         except Exception as e:
             logger.debug(f"Model load error for {symbol}: {e}")
             return None
+
+
+# Module-level singleton
+_ml_system = None
+
+
+def get_ml_prediction_system():
+    global _ml_system
+    if _ml_system is None:
+        _ml_system = MLPredictionSystem()
+    return _ml_system
