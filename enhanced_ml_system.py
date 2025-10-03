@@ -11,9 +11,62 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_squared_error, r2_score
 import joblib
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
+
+
+# ⚡ PURGED TIME-SERIES SPLIT - Data Leakage Prevention
+class PurgedTimeSeriesSplit:
+    """
+    Time-series cross-validation with purging and embargo.
+    
+    Purging: Remove samples from training set that are too close to test set
+    Embargo: Add gap between train and test to prevent lookahead bias
+    
+    Based on "Advances in Financial Machine Learning" by Marcos López de Prado
+    """
+    
+    def __init__(self, n_splits=3, purge_gap=5, embargo_td=2):
+        """
+        Args:
+            n_splits: Number of splits
+            purge_gap: Number of samples to purge before test (removes overlap)
+            embargo_td: Number of samples to embargo after train (future data gap)
+        """
+        self.n_splits = n_splits
+        self.purge_gap = purge_gap
+        self.embargo_td = embargo_td
+    
+    def split(self, X, y=None, groups=None):
+        """Generate purged train/test indices."""
+        n_samples = len(X)
+        fold_size = n_samples // (self.n_splits + 1)
+        
+        indices = np.arange(n_samples)
+        
+        for i in range(self.n_splits):
+            # Test set
+            test_start = (i + 1) * fold_size
+            test_end = test_start + fold_size
+            test_indices = indices[test_start:test_end]
+            
+            # Train set (before test, with purging)
+            train_end = test_start - self.purge_gap  # Purge gap
+            if train_end <= 0:
+                continue
+            
+            train_indices = indices[:train_end]
+            
+            # Apply embargo (remove recent samples that overlap with test timing)
+            if self.embargo_td > 0 and len(train_indices) > self.embargo_td:
+                train_indices = train_indices[:-self.embargo_td]
+            
+            if len(train_indices) > 10 and len(test_indices) > 3:
+                yield train_indices, test_indices
+    
+    def get_n_splits(self, X=None, y=None, groups=None):
+        return self.n_splits
 
 # Enhanced ML Models
 try:
@@ -640,7 +693,11 @@ class EnhancedMLSystem:
                 y = df_model[target].values
                 
                 # Time series split
-                tscv = TimeSeriesSplit(n_splits=3)
+                # ⚡ USE PURGED CV: Prevents data leakage with purging + embargo
+                # purge_gap=5: Remove 5 days before test set
+                # embargo_td=2: Add 2-day gap after train set
+                tscv = PurgedTimeSeriesSplit(n_splits=3, purge_gap=5, embargo_td=2)
+                logger.info(f"✅ Using Purged Time-Series CV (purge=5, embargo=2)")
                 
                 # Train models
                 horizon_models = {}
