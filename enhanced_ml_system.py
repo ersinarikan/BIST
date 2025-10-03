@@ -8,6 +8,7 @@ import pandas as pd
 import os
 import logging
 from sklearn.metrics import mean_squared_error, r2_score
+# from sklearn.linear_model import Ridge  # TODO: Uncomment when meta-learner training is added
 import joblib
 import json
 from datetime import datetime
@@ -109,6 +110,8 @@ class EnhancedMLSystem:
         self.scalers = {}
         self.feature_importance = {}
         self.model_performance = {}
+        # ⚡ NEW: Meta-learners storage (Ridge for stacking)
+        self.meta_learners = {}  # {symbol_horizon: Ridge model}
         self.model_directory = os.getenv('ML_MODEL_PATH', "enhanced_ml_models")
         self.prediction_horizons = [1, 3, 7, 14, 30]  # 1D, 3D, 7D, 14D, 30D
         self.feature_columns = []  # Initialize feature columns list
@@ -125,6 +128,11 @@ class EnhancedMLSystem:
             self.enable_fingpt_features = str(os.getenv('ENABLE_FINGPT_FEATURES', 'True')).lower() in ('1', 'true', 'yes')
         except Exception:
             self.enable_fingpt_features = True
+        try:
+            # ⚡ NEW: Meta-stacking with Ridge learner (default: disabled for safety)
+            self.enable_meta_stacking = str(os.getenv('ENABLE_META_STACKING', 'False')).lower() in ('1', 'true', 'yes')
+        except Exception:
+            self.enable_meta_stacking = False
         try:
             self.enable_yolo_features = str(os.getenv('ENABLE_YOLO_FEATURES', 'True')).lower() in ('1', 'true', 'yes')
         except Exception:
@@ -1098,31 +1106,55 @@ class EnhancedMLSystem:
                         except Exception as e:
                             logger.error(f"{model_name} prediction error: {e}")
                     
-                    # Ensemble prediction (weighted by performance)
+                    # Ensemble prediction (weighted by performance OR meta-stacking)
                     if model_predictions:
                         weights = [info['confidence'] for info in model_predictions.values()]
                         predictions_list = [info['prediction'] for info in model_predictions.values()]
                         
-                        # ✨ IMPROVED: Performance-based weighting + disagreement penalty
-                        if sum(weights) > 0:
-                            ensemble_pred = np.average(predictions_list, weights=weights)
-                            avg_confidence = np.mean(weights)
-                            
-                            # ✨ NEW: Reduce confidence if models disagree significantly
-                            if len(predictions_list) > 1:
-                                pred_std = np.std(predictions_list)
-                                pred_mean = np.mean(predictions_list)
-                                disagreement_ratio = pred_std / max(abs(pred_mean), 1e-8)
+                        # ⚡ NEW: Meta-Stacking with Ridge Learner (if enabled)
+                        if self.enable_meta_stacking and len(predictions_list) >= 2:
+                            try:
+                                # Meta-features: base predictions as features
+                                meta_key = f"{symbol}_{horizon}d_meta"
                                 
-                                # Penalize confidence if disagreement > 5%
-                                if disagreement_ratio > 0.05:
-                                    disagreement_penalty = min(0.3, disagreement_ratio * 2)
-                                    avg_confidence = max(0.25, avg_confidence * (1 - disagreement_penalty))
-                                    logger.debug(f"{symbol} {horizon}d: Model disagreement {disagreement_ratio*100:.1f}%, confidence adjusted to {avg_confidence:.2f}")
+                                # Check if meta-learner exists (trained during model training)
+                                if meta_key in self.meta_learners:
+                                    meta_model = self.meta_learners[meta_key]
+                                    # Stack predictions as features
+                                    meta_X = np.array(predictions_list).reshape(1, -1)
+                                    ensemble_pred = float(meta_model.predict(meta_X)[0])
+                                    avg_confidence = np.mean(weights) * 1.1  # Meta-stacking bonus
+                                    logger.debug(f"Meta-stacking used for {symbol} {horizon}d")
+                                else:
+                                    # Fallback to weighted average if meta-learner not trained yet
+                                    ensemble_pred = np.average(predictions_list, weights=weights) if sum(weights) > 0 else float(np.mean(predictions_list))
+                                    avg_confidence = np.mean(weights) if sum(weights) > 0 else 0.55
+                            except Exception as e:
+                                logger.error(f"Meta-stacking error: {e}, falling back to weighted average")
+                                ensemble_pred = np.average(predictions_list, weights=weights) if sum(weights) > 0 else float(np.mean(predictions_list))
+                                avg_confidence = np.mean(weights) if sum(weights) > 0 else 0.55
+                        
                         else:
-                            ensemble_pred = float(np.mean(predictions_list))
-                            # conservative default confidence
-                            avg_confidence = 0.55
+                            # Original: Performance-based weighting + disagreement penalty
+                            if sum(weights) > 0:
+                                ensemble_pred = np.average(predictions_list, weights=weights)
+                                avg_confidence = np.mean(weights)
+                                
+                                # ✨ NEW: Reduce confidence if models disagree significantly
+                                if len(predictions_list) > 1:
+                                    pred_std = np.std(predictions_list)
+                                    pred_mean = np.mean(predictions_list)
+                                    disagreement_ratio = pred_std / max(abs(pred_mean), 1e-8)
+                                    
+                                    # Penalize confidence if disagreement > 5%
+                                    if disagreement_ratio > 0.05:
+                                        disagreement_penalty = min(0.3, disagreement_ratio * 2)
+                                        avg_confidence = max(0.25, avg_confidence * (1 - disagreement_penalty))
+                                        logger.debug(f"{symbol} {horizon}d: Model disagreement {disagreement_ratio*100:.1f}%, confidence adjusted to {avg_confidence:.2f}")
+                            else:
+                                ensemble_pred = float(np.mean(predictions_list))
+                                # conservative default confidence
+                                avg_confidence = 0.55
                         predictions[f"{horizon}d"] = {
                             'ensemble_prediction': float(ensemble_pred),
                             'confidence': float(avg_confidence),
