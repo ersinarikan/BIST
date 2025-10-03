@@ -7,11 +7,10 @@ import numpy as np
 import pandas as pd
 import os
 import logging
-from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_squared_error, r2_score
 import joblib
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -67,6 +66,7 @@ class PurgedTimeSeriesSplit:
     
     def get_n_splits(self, X=None, y=None, groups=None):
         return self.n_splits
+
 
 # Enhanced ML Models
 try:
@@ -746,7 +746,7 @@ class EnhancedMLSystem:
                 # purge_gap=5: Remove 5 days before test set
                 # embargo_td=2: Add 2-day gap after train set
                 tscv = PurgedTimeSeriesSplit(n_splits=3, purge_gap=5, embargo_td=2)
-                logger.info(f"✅ Using Purged Time-Series CV (purge=5, embargo=2)")
+                logger.info("✅ Using Purged Time-Series CV (purge=5, embargo=2)")
                 
                 # Train models
                 horizon_models = {}
