@@ -520,6 +520,55 @@ class EnhancedMLSystem:
             vol_ma = vol_20.rolling(60).mean()
             df['vol_regime'] = (vol_20 / vol_ma - 1)
             
+            # ⚡ NEW: ADX (Average Directional Index) - Trend Strength
+            try:
+                high = df['high']
+                low = df['low']
+                close = df['close']
+                
+                # True Range
+                tr1 = high - low
+                tr2 = abs(high - close.shift())
+                tr3 = abs(low - close.shift())
+                tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                atr = tr.rolling(14).mean()
+                
+                # Directional Movement
+                up_move = high - high.shift()
+                down_move = low.shift() - low
+                
+                plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+                minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+                
+                plus_di = 100 * pd.Series(plus_dm).rolling(14).mean() / atr
+                minus_di = 100 * pd.Series(minus_dm).rolling(14).mean() / atr
+                
+                # ADX
+                dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10)
+                df['adx'] = dx.rolling(14).mean()
+                df['adx_trending'] = (df['adx'] > 25).astype(int)  # 1 if trending, 0 if ranging
+                
+            except Exception as e:
+                logger.debug(f"ADX calculation error: {e}")
+                df['adx'] = 0
+                df['adx_trending'] = 0
+            
+            # ⚡ NEW: Realized Volatility (Annualized)
+            try:
+                returns = df['close'].pct_change()
+                # Realized vol over different windows
+                df['realized_vol_5d'] = returns.rolling(5).std() * np.sqrt(252)
+                df['realized_vol_20d'] = returns.rolling(20).std() * np.sqrt(252)
+                df['realized_vol_60d'] = returns.rolling(60).std() * np.sqrt(252)
+                
+                # Volatility regime based on quantiles
+                vol_5d = df['realized_vol_5d']
+                df['vol_regime_high'] = (vol_5d > vol_5d.quantile(0.75)).astype(int)
+                df['vol_regime_low'] = (vol_5d < vol_5d.quantile(0.25)).astype(int)
+                
+            except Exception as e:
+                logger.debug(f"Realized vol calculation error: {e}")
+            
         except Exception as e:
             logger.error(f"Volatility features hatası: {e}")
     
