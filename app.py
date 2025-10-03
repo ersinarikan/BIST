@@ -58,12 +58,6 @@ socketio = SocketIO()
 csrf = CSRFProtect()
 limiter = Limiter(key_func=get_remote_address, storage_uri="memory://")
 
-
-def internal_route(f):
-    """Decorator to exempt internal routes from rate limiting."""
-    limiter.exempt(f)
-    return f
-
 # ==========================================
 # FLASK APP FACTORY & CONFIG
 # ==========================================
