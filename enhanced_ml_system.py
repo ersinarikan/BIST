@@ -134,6 +134,15 @@ class EnhancedMLSystem:
         except Exception:
             self.enable_meta_stacking = False
         try:
+            # ⚡ NEW: Seed bagging (multiple random seeds for variance reduction)
+            self.enable_seed_bagging = str(os.getenv('ENABLE_SEED_BAGGING', 'True')).lower() in ('1', 'true', 'yes')
+            self.n_seeds = int(os.getenv('N_SEEDS', '3'))  # 3 seeds by default
+            self.base_seeds = [42, 123, 456, 789, 999][:self.n_seeds]  # Use first N seeds
+        except Exception:
+            self.enable_seed_bagging = True  # Enable by default!
+            self.n_seeds = 3
+            self.base_seeds = [42, 123, 456]
+        try:
             self.enable_yolo_features = str(os.getenv('ENABLE_YOLO_FEATURES', 'True')).lower() in ('1', 'true', 'yes')
         except Exception:
             self.enable_yolo_features = True
@@ -819,13 +828,35 @@ class EnhancedMLSystem:
                                 logger.error(f"XGBoost fold {fold} error: {e}")
                                 # Don't raise - continue with other folds
                         
-                        # Final training (disable early stopping to avoid eval_set requirement)
-                        try:
-                            xgb_model.set_params(early_stopping_rounds=None)
-                        except Exception:
-                            pass
-                        xgb_model.fit(X, y)
-                        xgb_pred = xgb_model.predict(X[-100:])  # Last 100 returns for validation
+                        # Final training with seed bagging (variance reduction)
+                        if self.enable_seed_bagging and self.n_seeds > 1:
+                            # ⚡ SEED BAGGING: Train with multiple seeds and average
+                            seed_predictions = []
+                            for seed in self.base_seeds:
+                                try:
+                                    xgb_model.set_params(random_state=seed, early_stopping_rounds=None)
+                                    xgb_model.fit(X, y)
+                                    pred = xgb_model.predict(X[-100:])
+                                    seed_predictions.append(pred)
+                                except Exception as e:
+                                    logger.error(f"XGBoost seed {seed} error: {e}")
+                            
+                            if seed_predictions:
+                                xgb_pred = np.mean(seed_predictions, axis=0)  # Average across seeds
+                                logger.info(f"XGBoost: Seed bagging with {len(seed_predictions)} seeds")
+                            else:
+                                # Fallback to single seed
+                                xgb_model.set_params(random_state=42, early_stopping_rounds=None)
+                                xgb_model.fit(X, y)
+                                xgb_pred = xgb_model.predict(X[-100:])
+                        else:
+                            # Original: Single seed (faster)
+                            try:
+                                xgb_model.set_params(early_stopping_rounds=None)
+                            except Exception:
+                                pass
+                            xgb_model.fit(X, y)
+                            xgb_pred = xgb_model.predict(X[-100:])  # Last 100 returns for validation
                         
                         # CRITICAL FIX: R² to confidence conversion
                         raw_r2 = np.mean(xgb_scores)
@@ -890,9 +921,30 @@ class EnhancedMLSystem:
                             score = r2_score(y_val, pred)
                             lgb_scores.append(score)
                         
-                        # Final training
-                        lgb_model.fit(X, y)
-                        lgb_pred = lgb_model.predict(X[-100:])
+                        # Final training with seed bagging
+                        if self.enable_seed_bagging and self.n_seeds > 1:
+                            # ⚡ SEED BAGGING: Train with multiple seeds and average
+                            seed_predictions = []
+                            for seed in self.base_seeds:
+                                try:
+                                    lgb_model.set_params(random_state=seed)
+                                    lgb_model.fit(X, y)
+                                    pred = lgb_model.predict(X[-100:])
+                                    seed_predictions.append(pred)
+                                except Exception as e:
+                                    logger.error(f"LightGBM seed {seed} error: {e}")
+                            
+                            if seed_predictions:
+                                lgb_pred = np.mean(seed_predictions, axis=0)
+                                logger.info(f"LightGBM: Seed bagging with {len(seed_predictions)} seeds")
+                            else:
+                                lgb_model.set_params(random_state=42)
+                                lgb_model.fit(X, y)
+                                lgb_pred = lgb_model.predict(X[-100:])
+                        else:
+                            # Original: Single seed
+                            lgb_model.fit(X, y)
+                            lgb_pred = lgb_model.predict(X[-100:])
                         
                         # CRITICAL FIX: R² to confidence conversion
                         raw_r2 = np.mean(lgb_scores)
@@ -957,9 +1009,30 @@ class EnhancedMLSystem:
                             score = r2_score(y_val, pred)
                             cat_scores.append(score)
                         
-                        # Final training
-                        cat_model.fit(X, y, verbose=False)
-                        cat_pred = cat_model.predict(X[-100:])
+                        # Final training with seed bagging
+                        if self.enable_seed_bagging and self.n_seeds > 1:
+                            # ⚡ SEED BAGGING: Train with multiple seeds and average
+                            seed_predictions = []
+                            for seed in self.base_seeds:
+                                try:
+                                    cat_model.set_params(random_seed=seed)  # CatBoost uses random_seed
+                                    cat_model.fit(X, y, verbose=False)
+                                    pred = cat_model.predict(X[-100:])
+                                    seed_predictions.append(pred)
+                                except Exception as e:
+                                    logger.error(f"CatBoost seed {seed} error: {e}")
+                            
+                            if seed_predictions:
+                                cat_pred = np.mean(seed_predictions, axis=0)
+                                logger.info(f"CatBoost: Seed bagging with {len(seed_predictions)} seeds")
+                            else:
+                                cat_model.set_params(random_seed=42)
+                                cat_model.fit(X, y, verbose=False)
+                                cat_pred = cat_model.predict(X[-100:])
+                        else:
+                            # Original: Single seed
+                            cat_model.fit(X, y, verbose=False)
+                            cat_pred = cat_model.predict(X[-100:])
                         
                         # CRITICAL FIX: R² to confidence conversion
                         raw_r2 = np.mean(cat_scores)
