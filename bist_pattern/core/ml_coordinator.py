@@ -318,7 +318,8 @@ class MLCoordinator:
                 # Model varlığını kontrol et
                 if enhanced_ml.has_trained_models(symbol):
                     enhanced_ml.load_trained_models(symbol)
-                    enhanced_pred = enhanced_ml.predict_enhanced(symbol, data)
+                    # ⚡ Pass sentiment_score for prediction adjustment
+                    enhanced_pred = enhanced_ml.predict_enhanced(symbol, data, sentiment_score=sentiment_score)
                     if enhanced_pred:
                         result['enhanced'] = enhanced_pred
                         logger.debug(f"✅ Enhanced ML tahmin: {symbol}")

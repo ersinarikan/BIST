@@ -1117,8 +1117,8 @@ class EnhancedMLSystem:
             logger.error(f"Enhanced model eğitim hatası: {e}")
             return False
     
-    def predict_enhanced(self, symbol, current_data):
-        """Enhanced predictions"""
+    def predict_enhanced(self, symbol, current_data, sentiment_score=None):
+        """Enhanced predictions with optional sentiment adjustment"""
         try:
             # Auto-load models for this symbol if not already loaded
             if not self.feature_columns or len(self.models) == 0:
@@ -1237,6 +1237,34 @@ class EnhancedMLSystem:
                             'current_price': float(current_data['close'].iloc[-1]),
                             'model_count': len(model_predictions)
                         }
+            
+            # ⚡ NEW: Sentiment-based prediction adjustment (optional)
+            if sentiment_score is not None and isinstance(sentiment_score, (int, float)):
+                try:
+                    sent = float(sentiment_score)
+                    # Dynamic adjustment based on sentiment strength (like Basic ML)
+                    if sent > 0.7:  # Strong bullish
+                        adjustment_factor = 1.10  # +10%
+                    elif sent < 0.3:  # Strong bearish
+                        adjustment_factor = 0.90  # -10%
+                    elif sent > 0.6:  # Moderate bullish
+                        adjustment_factor = 1.05  # +5%
+                    elif sent < 0.4:  # Moderate bearish
+                        adjustment_factor = 0.95  # -5%
+                    else:  # Neutral (0.4-0.6)
+                        adjustment_factor = 1.0  # No adjustment
+                    
+                    if adjustment_factor != 1.0:
+                        for h_key in predictions:
+                            if 'ensemble_prediction' in predictions[h_key]:
+                                original = predictions[h_key]['ensemble_prediction']
+                                adjusted = original * adjustment_factor
+                                predictions[h_key]['ensemble_prediction'] = float(adjusted)
+                                predictions[h_key]['sentiment_adjusted'] = True
+                                predictions[h_key]['sentiment_score'] = float(sent)
+                        logger.debug(f"Sentiment adjustment applied: {sent:.2f} → {adjustment_factor:.2f}x")
+                except Exception as e:
+                    logger.error(f"Sentiment adjustment error: {e}")
             
             return predictions
             
