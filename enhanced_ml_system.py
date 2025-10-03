@@ -271,6 +271,9 @@ class EnhancedMLSystem:
             # Statistical features
             self._add_statistical_features(df)
             
+            # ⚡ NEW: Liquidity/Volume tier features
+            self._add_liquidity_features(df)
+            
             # Optional: TA-Lib candlestick pattern features (lightweight subset)
             if self.enable_talib_patterns:
                 self._add_candlestick_features(df)
@@ -651,6 +654,57 @@ class EnhancedMLSystem:
             
         except Exception as e:
             logger.error(f"Statistical features hatası: {e}")
+    
+    def _add_liquidity_features(self, df):
+        """Liquidity and volume tier features"""
+        try:
+            volume = df['volume']
+            close = df['close']
+            
+            # Volume statistics
+            vol_mean = volume.mean()
+            vol_std = volume.std()
+            
+            # Relative volume (vs rolling average)
+            for window in [5, 20, 60]:
+                vol_ma = volume.rolling(window).mean()
+                df[f'relative_volume_{window}'] = volume / (vol_ma + 1e-10)
+            
+            # Volume tier classification (based on percentiles)
+            vol_q25 = volume.quantile(0.25)
+            vol_q75 = volume.quantile(0.75)
+            
+            # Tier features (one-hot style)
+            df['volume_tier_high'] = (volume > vol_q75).astype(int)  # Top 25%
+            df['volume_tier_low'] = (volume < vol_q25).astype(int)   # Bottom 25%
+            df['volume_tier_mid'] = ((volume >= vol_q25) & (volume <= vol_q75)).astype(int)
+            
+            # Continuous volume score (normalized)
+            if vol_std > 0:
+                df['volume_zscore'] = (volume - vol_mean) / vol_std
+            else:
+                df['volume_zscore'] = 0
+            
+            # Volume regime (high activity vs low activity)
+            vol_rank = volume.rolling(60).rank(pct=True)
+            df['volume_regime'] = vol_rank  # 0-1, higher = more active lately
+            
+            # Dollar volume (proxy for liquidity)
+            df['dollar_volume'] = volume * close
+            dollar_vol_ma = df['dollar_volume'].rolling(20).mean()
+            df['relative_dollar_volume'] = df['dollar_volume'] / (dollar_vol_ma + 1e-10)
+            
+            # Volume-price relationship
+            # High volume + up move = strong momentum
+            # High volume + down move = strong sell-off
+            returns = close.pct_change()
+            df['volume_price_corr_5'] = volume.rolling(5).corr(returns)
+            df['volume_price_corr_20'] = volume.rolling(20).corr(returns)
+            
+            logger.debug("Liquidity/volume features added")
+            
+        except Exception as e:
+            logger.error(f"Liquidity features hatası: {e}")
     
     def _clean_data(self, df):
         """Veri temizleme - INF, NaN ve aşırı değerleri temizle"""
