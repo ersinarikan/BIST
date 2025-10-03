@@ -106,14 +106,12 @@ def add_watchlist():
 
         db.session.commit()
 
-        # Trigger initial analysis broadcast
+        # Cache-only: do not trigger fresh analysis here
         try:
-            from app import get_pattern_detector
-            result = get_pattern_detector().analyze_stock(symbol)
-            if hasattr(current_app, 'socketio') and result:
+            if hasattr(current_app, 'socketio'):
                 current_app.socketio.emit('pattern_analysis', {
                     'symbol': symbol,
-                    'data': result,
+                    'data': {'symbol': symbol, 'status': 'pending'},
                     'timestamp': datetime.now().isoformat()
                 }, to=f'stock_{symbol}')
         except Exception:

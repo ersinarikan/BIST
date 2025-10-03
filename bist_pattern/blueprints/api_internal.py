@@ -135,6 +135,182 @@ def register(app):
             app.logger.error(f"Internal automation status error: {e}")
             return jsonify({'status': 'error', 'error': str(e)}), 500
 
+    @bp.route('/bulk-predictions/status')
+    @_allow_or_token(app)
+    def bulk_predictions_status():
+        """Return freshness info about ml_bulk_predictions.json (internal only)."""
+        try:
+            import os as _os
+            import json as _json
+            import time as _time
+            log_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+            path = _os.path.join(log_dir, 'ml_bulk_predictions.json')
+            exists = _os.path.exists(path)
+            size = int(_os.path.getsize(path)) if exists else 0
+            mtime = float(_os.path.getmtime(path)) if exists else None
+            age_seconds = (float(_time.time()) - mtime) if mtime else None
+            count = None
+            stale = None
+            if exists:
+                try:
+                    with open(path, 'r') as rf:
+                        data = _json.load(rf) or {}
+                    preds = (data.get('predictions') or {}) if isinstance(data, dict) else {}
+                    if isinstance(preds, dict):
+                        count = len(preds)
+                except Exception:
+                    pass
+                try:
+                    ttl = int(_os.getenv('BULK_PREDICTIONS_TTL_SECONDS', '7200'))
+                    if age_seconds is not None:
+                        stale = bool(age_seconds > ttl)
+                except Exception:
+                    stale = None
+            return jsonify({
+                'status': 'success',
+                'path': path,
+                'exists': bool(exists),
+                'size': size,
+                'mtime': mtime,
+                'age_seconds': age_seconds,
+                'stale': stale,
+                'predictions_count': count,
+            })
+        except Exception as e:
+            app.logger.error(f"Internal bulk predictions status error: {e}")
+            return jsonify({'status': 'error', 'error': str(e)}), 500
+
+    # Internal helper to rebuild bulk predictions from pattern_cache
+    def _rebuild_bulk_from_pattern_cache() -> dict:
+        import os as _os
+        import json as _json
+        import glob as _glob
+        import time as _time
+
+        log_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+        pat_dir = _os.path.join(log_dir, 'pattern_cache')
+        _os.makedirs(pat_dir, exist_ok=True)
+        bulk_path = _os.path.join(log_dir, 'ml_bulk_predictions.json')
+
+        def _extract_from_unified(u):
+            out = {}
+            try:
+                for h in ('1d', '3d', '7d', '14d', '30d'):
+                    node = u.get(h) if isinstance(u, dict) else None
+                    price = None
+                    if node and isinstance(node, dict):
+                        if isinstance(node.get('enhanced'), dict) and isinstance(node['enhanced'].get('price'), (int, float)):
+                            price = float(node['enhanced']['price'])
+                        elif isinstance(node.get('basic'), dict) and isinstance(node['basic'].get('price'), (int, float)):
+                            price = float(node['basic']['price'])
+                    if isinstance(price, (int, float)):
+                        out[h] = {'price': float(price)}
+            except Exception:
+                return {}
+            return out
+
+        def _extract_generic(d):
+            out = {}
+            try:
+                for h in ('1d', '3d', '7d', '14d', '30d'):
+                    node = d.get(h) if isinstance(d, dict) else None
+                    if isinstance(node, dict):
+                        if 'ensemble_prediction' in node and isinstance(node['ensemble_prediction'], (int, float)):
+                            out[h] = {'ensemble_prediction': float(node['ensemble_prediction'])}
+                        elif 'price' in node and isinstance(node['price'], (int, float)):
+                            out[h] = {'price': float(node['price'])}
+                    elif isinstance(node, (int, float)):
+                        out[h] = {'price': float(node)}
+            except Exception:
+                return {}
+            return out
+
+        preds_map = {}
+        files = sorted(_glob.glob(_os.path.join(pat_dir, '*.json')))
+        for f in files:
+            try:
+                sym = _os.path.basename(f).split('.')[0].upper()
+                with open(f, 'r') as rf:
+                    data = _json.load(rf) or {}
+                enriched = {}
+                if isinstance(data.get('ml_unified'), dict):
+                    enriched = _extract_from_unified(data['ml_unified'])
+                if not enriched and isinstance(data.get('enhanced_predictions'), dict):
+                    enriched = _extract_generic(data['enhanced_predictions'])
+                if not enriched and isinstance(data.get('ml_predictions'), dict):
+                    enriched = _extract_generic(data['ml_predictions'])
+                if not enriched and isinstance(data.get('predictions'), dict):
+                    enriched = _extract_generic(data['predictions'])
+                if enriched:
+                    preds_map[sym] = {'enhanced': enriched}
+            except Exception:
+                continue
+
+        obj = {'predictions': preds_map, 'rebuilt_at': _time.time()}
+
+        tmp_path = bulk_path + '.tmp'
+        try:
+            payload = _json.dumps(obj)
+            with open(tmp_path, 'w') as wf:
+                wf.write(payload)
+                try:
+                    wf.flush()
+                    _os.fsync(wf.fileno())
+                except Exception:
+                    pass
+            _os.replace(tmp_path, bulk_path)
+        finally:
+            try:
+                if _os.path.exists(tmp_path):
+                    _os.remove(tmp_path)
+            except Exception:
+                pass
+
+        return {'path': bulk_path, 'predictions_count': len(preds_map)}
+
+    @bp.route('/bulk-predictions/refresh', methods=['POST'])
+    @_allow_or_token(app)
+    def bulk_predictions_refresh():
+        """Rebuild ml_bulk_predictions.json from pattern_cache (fast, cache-only)."""
+        try:
+            res = _rebuild_bulk_from_pattern_cache()
+            return jsonify({'status': 'success', **res})
+        except Exception as e:
+            app.logger.error(f"Internal bulk predictions refresh error: {e}")
+            return jsonify({'status': 'error', 'error': str(e)}), 500
+
+    @bp.route('/pattern-cache/coverage')
+    @_allow_or_token(app)
+    def pattern_cache_coverage():
+        """Return coverage stats for logs/pattern_cache against active stocks."""
+        try:
+            import os as _os
+            import time as _time
+            from models import Stock
+            log_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+            pat_dir = _os.path.join(log_dir, 'pattern_cache')
+            _os.makedirs(pat_dir, exist_ok=True)
+            total = Stock.query.filter_by(is_active=True).count()
+            files = {fn.split('.')[0].upper() for fn in _os.listdir(pat_dir) if fn.endswith('.json')}
+            with_cache = len(files)
+            without_cache = max(0, total - with_cache)
+            # Age stats (avg)
+            ages = []
+            now = _time.time()
+            for fn in files:
+                fp = _os.path.join(pat_dir, f'{fn}.json')
+                try:
+                    m = _os.path.getmtime(fp)
+                    ages.append(now - m)
+                except Exception:
+                    continue
+            avg_age = (sum(ages) / len(ages)) if ages else None
+            max_age = max(ages) if ages else None
+            return jsonify({'status': 'success', 'total_active': total, 'with_cache': with_cache, 'without_cache': without_cache, 'avg_age_seconds': avg_age, 'max_age_seconds': max_age})
+        except Exception as e:
+            app.logger.error(f"Internal pattern cache coverage error: {e}")
+            return jsonify({'status': 'error', 'error': str(e)}), 500
+
     @bp.route('/automation/run-task/<task_name>', methods=['POST'])
     @_allow_or_token(app)
     def run_automation_task(task_name):
@@ -159,6 +335,83 @@ def register(app):
             return jsonify({'status': 'success' if ok else 'error', 'result': result})
         except Exception as e:
             app.logger.error(f"Internal automation run task error: {e}")
+            return jsonify({'status': 'error', 'error': str(e)}), 500
+
+    @bp.route('/watchlist/cache-report', methods=['GET'])
+    def internal_watchlist_cache_report():
+        """Internal version of cache report that uses X-Internal-Token and allows localhost.
+        Query param/email is required to choose user (e.g., testuser2@lotlot.net).
+        """
+        try:
+            token = request.headers.get('X-Internal-Token')
+            expected = app.config.get('INTERNAL_API_TOKEN')
+            if expected and token != expected:
+                # Allow localhost without token
+                remote_ip = (request.headers.get('X-Forwarded-For') or request.remote_addr or '').split(',')[0].strip()
+                is_local = remote_ip in ('127.0.0.1', '::1', 'localhost')
+                allow_localhost = str(os.getenv('INTERNAL_ALLOW_LOCALHOST', str(app.config.get('INTERNAL_ALLOW_LOCALHOST', 'True')))).lower() == 'true'
+                if not (is_local and allow_localhost):
+                    return jsonify({'status': 'unauthorized'}), 401
+
+            email = request.args.get('email')
+            if not email:
+                return jsonify({'status': 'error', 'error': 'email query parameter required'}), 400
+
+            from models import User, Watchlist
+            from sqlalchemy.orm import joinedload
+            user = User.query.filter_by(email=email).first()
+            if not user:
+                return jsonify({'status': 'error', 'error': 'user not found'}), 404
+            items = (
+                Watchlist.query.options(joinedload(Watchlist.stock))
+                .filter_by(user_id=user.id)
+                .all()
+            )
+            symbols = [it.stock.symbol for it in items if getattr(it, 'stock', None)]
+
+            import os
+            import json
+            import time
+            log_dir = os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+            pat_dir = os.path.join(log_dir, 'pattern_cache')
+            os.makedirs(pat_dir, exist_ok=True)
+            bulk_path = os.path.join(log_dir, 'ml_bulk_predictions.json')
+            bulk = {}
+            bulk_mtime = None
+            if os.path.exists(bulk_path):
+                with open(bulk_path, 'r') as rf:
+                    data = json.load(rf) or {}
+                    bulk = (data.get('predictions') or {}) if isinstance(data, dict) else {}
+                bulk_mtime = os.path.getmtime(bulk_path)
+            now = time.time()
+
+            report_items = []
+            for sym in symbols:
+                sp = os.path.join(pat_dir, f'{sym}.json')
+                exists = os.path.exists(sp)
+                age = None
+                if exists:
+                    try:
+                        age = float(now - os.path.getmtime(sp))
+                    except Exception:
+                        age = None
+                report_items.append({
+                    'symbol': sym,
+                    'pattern_cache': {'exists': bool(exists), 'age_seconds': age},
+                    'predictions': {'exists': bool(sym in bulk)},
+                })
+
+            return jsonify({
+                'status': 'success',
+                'email': email,
+                'count': len(report_items),
+                'bulk_predictions_mtime': bulk_mtime,
+                'missing_pattern': [it['symbol'] for it in report_items if not it['pattern_cache']['exists']],
+                'missing_predictions': [it['symbol'] for it in report_items if not it['predictions']['exists']],
+                'items': report_items,
+            })
+        except Exception as e:
+            app.logger.error(f"Internal cache report error: {e}")
             return jsonify({'status': 'error', 'error': str(e)}), 500
 
     @bp.route('/automation/full-cycle', methods=['POST'])
@@ -213,9 +466,27 @@ def register(app):
                 _append_status('data_collection', 'start', {})
                 _broadcast('INFO', '📊 Tam veri toplama başlıyor', 'collector')
                 try:
-                    from advanced_collector import AdvancedBISTCollector
-                    collector = AdvancedBISTCollector()
-                    col_res = collector.collect_all_stocks_parallel()
+                    col_res = None
+                    collector = None
+                    try:
+                        # Primary path (if module present)
+                        from advanced_collector import AdvancedBISTCollector  # type: ignore
+                        collector = AdvancedBISTCollector()
+                    except Exception:
+                        # Fallback to unified collector (always available)
+                        try:
+                            from bist_pattern.core.unified_collector import get_unified_collector  # type: ignore
+                            collector = get_unified_collector()
+                        except Exception as ce:
+                            _append_status('data_collection', 'error', {'error': f'unified_collector failed: {ce}'})
+                            collector = None
+                    if collector is not None:
+                        try:
+                            # Some collectors support scope; call safely
+                            col_res = collector.collect_all_stocks_parallel()  # type: ignore[attr-defined]
+                        except Exception as ie:
+                            _append_status('data_collection', 'error', {'error': f'collector run failed: {ie}'})
+                            col_res = None
                     _append_status('data_collection', 'end', col_res or {})
                 except Exception as e:
                     _append_status('data_collection', 'error', {'error': str(e)})
@@ -256,6 +527,13 @@ def register(app):
                     _append_status('bulk_predictions', 'end', {'symbols': count})
                 except Exception as e:
                     _append_status('bulk_predictions', 'error', {'error': str(e)})
+
+                # Deterministic bulk rebuild from pattern_cache
+                try:
+                    rebuild = _rebuild_bulk_from_pattern_cache()
+                    _append_status('bulk_predictions', 'end', {'symbols': rebuild.get('predictions_count', 0)})
+                except Exception as _reb_err:
+                    _append_status('bulk_predictions', 'error', {'error': str(_reb_err)})
 
                 _broadcast('SUCCESS', '✅ Full cycle tamamlandı', 'pipeline')
                 return {'analyzed': analyzed, 'total': total}

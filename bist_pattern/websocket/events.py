@@ -70,24 +70,20 @@ def register_socketio_events(app):
         if not symbol:
             return
         try:
-            from app import get_pattern_detector  # delayed import
-            # Try cached fast path first to reduce recomputation storms on refresh
+            # Cache-only: do not import or trigger detector here
+            # Try cached fast path first
             try:
-                from bist_pattern.core.cache import cache_get as _cache_get, cache_set as _cache_set
+                from bist_pattern.core.cache import cache_get as _cache_get  # type: ignore
             except Exception:
-                _cache_get = _cache_set = None  # type: ignore
+                _cache_get = None  # type: ignore
 
             cache_key = f"pattern_analysis:{symbol}"
             result = None
             if callable(_cache_get):
                 result = _cache_get(cache_key)
+            # Do NOT compute here. If cache miss → pending
             if not result:
-                result = get_pattern_detector().analyze_stock(symbol)
-                try:
-                    if callable(_cache_set):
-                        _cache_set(cache_key, result, ttl_seconds=30.0)
-                except Exception:
-                    pass
+                result = {'symbol': symbol, 'status': 'pending'}
             emit('pattern_analysis', {
                 'symbol': symbol,
                 'data': result,
@@ -100,7 +96,7 @@ def register_socketio_events(app):
             }, to=f'stock_{symbol}')
             if current_app and current_app.logger:
                 current_app.logger.info(
-                    f"📊 Pattern analysis sent for {symbol} to {getattr(request, 'sid', 'n/a')} and stock room"
+                    f"📊 Pattern analysis (cache-only) sent for {symbol} to {getattr(request, 'sid', 'n/a')} and stock room"
                 )
         except Exception as e:  # pragma: no cover
             emit('error', {'message': f'Pattern analysis failed for {symbol}: {str(e)}'})

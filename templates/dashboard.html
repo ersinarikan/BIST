@@ -295,11 +295,16 @@
                             </div>
                         </div>
                         <div class="col-md-3">
-                            <div class="metric-card text-center" style="background: linear-gradient(45deg, #f093fb 0%, #f5576c 100%);">
-                                <div class="metric-value" id="scheduled-jobs">--</div>
-                                <div class="metric-label" id="jobs-label">Scheduled Jobs</div>
-                    </div>
-                </div>
+                            <div class="metric-card text-center" style="background: linear-gradient(45deg, #ffd86f 0%, #fc6262 100%);">
+                                <div class="metric-value" id="bulk-count">--</div>
+                                <div class="metric-label">Bulk Predictions (records)</div>
+                                <div class="small" id="bulk-age" style="opacity:.9">Age: --</div>
+                                <span class="badge bg-secondary" id="bulk-stale">--</span>
+                                <div class="mt-2">
+                                    <button class="btn btn-sm btn-light" id="btn-refresh-bulk" onclick="refreshBulkNow()"><i class="fas fa-rotate"></i> Refresh</button>
+                                </div>
+                            </div>
+                        </div>
                 <div class="col-md-3">
                             <div class="metric-card text-center" style="background: linear-gradient(45deg, #4ecdc4 0%, #44a08d 100%);">
                                 <div class="metric-value" id="stocks-count">--</div>
@@ -313,6 +318,7 @@
                 </div>
                         </div>
                     </div>
+                    
                 </div>
             </div>
         </div>
@@ -402,9 +408,27 @@
                 </div>
             </div>
 
-            <!-- Paper Trading Simulation Panel -->
+            <!-- Coverage + Simulation Panel -->
             <div class="col-lg-4 mb-4">
                 <div class="dashboard-card p-4 h-100" style="background: white; border: 2px solid #e9ecef; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+                    <h4>
+                        <i class="fas fa-database me-2 text-info"></i>Cache Coverage
+                    </h4>
+                    <div id="coverage-box" class="mb-3">
+                        <div class="d-flex justify-content-between align-items-center p-3 rounded" style="background:#f8f9fa;border:1px solid #dee2e6;">
+                            <div>
+                                <div class="small text-muted">Pattern cache coverage</div>
+                                <div class="h5 mb-0" id="coverage-stats">-- / --</div>
+                            </div>
+                            <div class="text-end">
+                                <span class="badge bg-secondary" id="coverage-age">--</span>
+                            </div>
+                        </div>
+                        <div class="mt-2 d-flex gap-2">
+                            <button class="btn btn-sm btn-outline-secondary" onclick="loadCoverage()"><i class="fas fa-sync"></i> Reload</button>
+                            <button class="btn btn-sm btn-outline-primary" onclick="refreshBulkNow()"><i class="fas fa-rotate"></i> Rebuild Bulk</button>
+                        </div>
+                    </div>
                     <h4><i class="fas fa-robot me-2 text-info"></i>AI Simulation</h4>
                     <p class="mb-3 small text-muted">Test AI model with virtual trading - TÜM 606 hisse takip</p>
                     
@@ -661,16 +685,13 @@ document.addEventListener('DOMContentLoaded', function() {
                         
                         // Only update if different to prevent flickering
                         const statusElement = document.getElementById('automation-status');
-                        const jobsElement = document.getElementById('scheduled-jobs');
+                        const jobsElement = null; // removed scheduled-jobs widget
                         
                         if (statusElement.textContent !== currentStatus) {
                             statusElement.textContent = currentStatus;
                             console.log('🔄 Automation status updated to:', currentStatus);
                         }
-                        if (jobsElement.textContent !== currentJobs.toString()) {
-                            jobsElement.textContent = currentJobs;
-                            console.log('📊 Scheduled jobs updated to:', currentJobs);
-                        }
+                        // scheduled-jobs widget removed
                     }
                 } else {
                     // Fallback when automation data is unavailable
@@ -687,6 +708,36 @@ document.addEventListener('DOMContentLoaded', function() {
                     document.getElementById('stocks-count').textContent = systemData.database.stocks || 0;
                     document.getElementById('price-records').textContent = (systemData.database.price_records || 0).toLocaleString();
                 }
+
+                // Bulk predictions freshness (internal endpoint)
+                try {
+                    const resp = await fetch('/api/internal/bulk-predictions/status', {
+                        headers: { 'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' }
+                    });
+                    if (resp.ok) {
+                        const bj = await resp.json();
+                        const cnt = (bj && typeof bj.predictions_count === 'number') ? bj.predictions_count : null;
+                        const ageSec = (bj && typeof bj.age_seconds === 'number') ? bj.age_seconds : null;
+                        const stale = (bj && typeof bj.stale !== 'undefined') ? !!bj.stale : null;
+                        const fmtAge = (s) => {
+                            if (typeof s !== 'number' || !isFinite(s)) return '--';
+                            const h = Math.floor(s / 3600);
+                            const m = Math.floor((s % 3600) / 60);
+                            if (h > 0) return `${h}h ${m}m`;
+                            return `${m}m`;
+                        };
+                        const cntEl = document.getElementById('bulk-count');
+                        const ageEl = document.getElementById('bulk-age');
+                        const staleEl = document.getElementById('bulk-stale');
+                        if (cntEl) cntEl.textContent = (cnt !== null ? cnt : '--');
+                        if (ageEl) ageEl.textContent = 'Age: ' + fmtAge(ageSec);
+                        if (staleEl) {
+                            if (stale === true) { staleEl.textContent = 'STALE'; staleEl.className = 'badge bg-danger'; }
+                            else if (stale === false) { staleEl.textContent = 'FRESH'; staleEl.className = 'badge bg-success'; }
+                            else { staleEl.textContent = '--'; staleEl.className = 'badge bg-secondary'; }
+                        }
+                    }
+                } catch (e) { /* ignore */ }
 
                 // Get health status
                 const healthResponse = await fetch('/api/automation/health');
@@ -761,17 +812,58 @@ document.addEventListener('DOMContentLoaded', function() {
         function updatePerformanceChart(healthData) {
             const now = new Date().toLocaleTimeString();
             const healthScore = calculateHealthScore(healthData);
+            // Extract CPU/RAM/Disk metrics if available
+            let cpu = null, mem = null, disk = null, loadAvg = null;
+            try {
+                const res = (healthData && healthData.health_check) ? healthData.health_check.system_resources : null;
+                if (res) {
+                    cpu = Number(res.cpu_percent);
+                    mem = Number(res.memory_percent);
+                    disk = Number(res.disk_percent);
+                    loadAvg = Array.isArray(res.load_avg) ? res.load_avg[0] : null;
+                }
+            } catch (_) {}
             
             // Keep only last 20 data points
             if (performanceChart.data.labels.length > 20) {
                 performanceChart.data.labels.shift();
                 performanceChart.data.datasets[0].data.shift();
                 performanceChart.data.datasets[1].data.shift();
+                if (performanceChart.data.datasets[2]) performanceChart.data.datasets[2].data.shift();
+                if (performanceChart.data.datasets[3]) performanceChart.data.datasets[3].data.shift();
+                if (performanceChart.data.datasets[4]) performanceChart.data.datasets[4].data.shift();
             }
             
             performanceChart.data.labels.push(now);
             performanceChart.data.datasets[0].data.push(healthScore);
-            performanceChart.data.datasets[1].data.push(document.getElementById('scheduled-jobs').textContent || 0);
+            performanceChart.data.datasets[1].data.push(0);
+            // Dynamically add datasets for CPU/RAM/Disk once
+            if (performanceChart.data.datasets.length < 5) {
+                performanceChart.data.datasets.push({
+                    label: 'CPU %',
+                    data: [],
+                    borderColor: '#dc3545',
+                    backgroundColor: 'rgba(220,53,69,0.1)',
+                    tension: 0.3
+                });
+                performanceChart.data.datasets.push({
+                    label: 'RAM %',
+                    data: [],
+                    borderColor: '#20c997',
+                    backgroundColor: 'rgba(32,201,151,0.1)',
+                    tension: 0.3
+                });
+                performanceChart.data.datasets.push({
+                    label: 'Disk %',
+                    data: [],
+                    borderColor: '#fd7e14',
+                    backgroundColor: 'rgba(253,126,20,0.1)',
+                    tension: 0.3
+                });
+            }
+            performanceChart.data.datasets[2].data.push(Number.isFinite(cpu) ? cpu : null);
+            performanceChart.data.datasets[3].data.push(Number.isFinite(mem) ? mem : null);
+            performanceChart.data.datasets[4].data.push(Number.isFinite(disk) ? disk : null);
             performanceChart.update('none');
         }
 
@@ -1655,6 +1747,40 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Could add more detailed trade info here
             console.log('Recent trades:', recentTrades);
+        }
+
+        async function loadCoverage(){
+            try{
+                const resp = await fetch('/api/internal/pattern-cache/coverage', { headers: { 'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' }});
+                if(!resp.ok) return;
+                const j = await resp.json();
+                const total = Number(j.total_active||0);
+                const have = Number(j.with_cache||0);
+                const miss = Number(j.without_cache||0);
+                const avg = typeof j.avg_age_seconds==='number' ? j.avg_age_seconds : null;
+                const fmt = (s)=>{
+                    if(typeof s!=='number'||!isFinite(s)) return '--';
+                    const h=Math.floor(s/3600), m=Math.floor((s%3600)/60); return h>0?`${h}h ${m}m`:`${m}m`;
+                };
+                const el = document.getElementById('coverage-stats');
+                if(el) el.textContent = `${have}/${total} (missing ${miss})`;
+                const ageEl = document.getElementById('coverage-age');
+                if(ageEl) ageEl.textContent = `avg age: ${fmt(avg)}`;
+            }catch(e){}
+        }
+
+        async function refreshBulkNow(){
+            try{
+                const btn = document.getElementById('btn-refresh-bulk');
+                if(btn){ btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Refreshing'; }
+                const resp = await fetch('/api/internal/bulk-predictions/refresh', { method:'POST', headers:{ 'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' }});
+                const j = await resp.json().catch(()=>({}));
+                console.log('bulk refresh result', j);
+                await updateDashboard();
+            }catch(e){} finally{
+                const btn = document.getElementById('btn-refresh-bulk');
+                if(btn){ btn.disabled=false; btn.innerHTML='<i class="fas fa-rotate"></i> Refresh'; }
+            }
         }
 </script>
 </body>

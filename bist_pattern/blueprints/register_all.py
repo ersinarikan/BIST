@@ -30,15 +30,12 @@ def register_all_blueprints(app: Any, csrf: Any) -> None:
     _try_register('bist_pattern.blueprints.api_recent')
     _try_register('bist_pattern.blueprints.api_watchlist')
     _try_register('bist_pattern.blueprints.api_simulation')
-    _try_register('bist_pattern.blueprints.api_automation')
     _try_register('bist_pattern.blueprints.api_health')
     # Web pages
     _try_register('bist_pattern.blueprints.web')
     _try_register('bist_pattern.blueprints.admin_dashboard')
     
-    # Additional API modules (from /opt/bist-pattern/blueprints and api_modules)
-    _try_register('blueprints.api_patterns')
-    _try_register('blueprints.api_ml')
+    # Additional API modules (from api_modules)
     _try_register('bist_pattern.api_modules.stocks')
     _try_register('bist_pattern.api_modules.automation')
     _try_register('bist_pattern.api_modules.watchlist')
@@ -46,7 +43,7 @@ def register_all_blueprints(app: Any, csrf: Any) -> None:
     
     # High-performance batch API (NEW!)
     _try_register('bist_pattern.blueprints.api_batch')
-
+    
     # CSRF exemptions for internal and auth endpoints
     try:
         if 'api_internal' in app.blueprints:
@@ -58,5 +55,3 @@ def register_all_blueprints(app: Any, csrf: Any) -> None:
             csrf.exempt(app.blueprints['auth'])
     except Exception:
         pass
-
-

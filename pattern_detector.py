@@ -244,27 +244,33 @@ class HybridPatternDetector:
                 default_days = int(getattr(config['default'], 'PATTERN_DATA_DAYS', 365))
             except Exception:
                 default_days = 365
-            days = days or default_days
+            # If days is None, use default; if days <= 0, fetch full history (no limit)
+            try:
+                use_days = default_days if days is None else int(days)
+            except Exception:
+                use_days = default_days
             with app.app_context():
                 # Stock ID'yi bul
                 stock = Stock.query.filter_by(symbol=symbol.upper()).first()
                 if not stock:
                     logger.warning(f"Hisse bulunamadı: {symbol}")
                     # Yahoo Finance fallback dene
-                    yahoo_data = self._try_yahoo_finance_fallback(symbol, days)
+                    yahoo_data = self._try_yahoo_finance_fallback(symbol, (use_days if use_days > 0 else None))
                     if yahoo_data is not None:
                         return yahoo_data
                     return None
                 
-                # Son N günlük veriyi al
-                prices = StockPrice.query.filter_by(stock_id=stock.id)\
-                            .order_by(StockPrice.date.desc())\
-                            .limit(days).all()
+                # Son N günlük veriyi al (use_days <= 0 ise limitsiz)
+                query = StockPrice.query.filter_by(stock_id=stock.id)\
+                            .order_by(StockPrice.date.desc())
+                if use_days > 0:
+                    query = query.limit(use_days)
+                prices = query.all()
             
             if not prices:
                 logger.warning(f"Fiyat verisi bulunamadı: {symbol}")
                 # Yahoo Finance fallback dene
-                yahoo_data = self._try_yahoo_finance_fallback(symbol, days)
+                yahoo_data = self._try_yahoo_finance_fallback(symbol, (use_days if use_days > 0 else None))
                 if yahoo_data is not None:
                     return yahoo_data
                 return None
@@ -1005,6 +1011,179 @@ class HybridPatternDetector:
                     enhanced_first = (os.getenv('ENHANCED_FIRST', '1').lower() in ('1', 'true', 'yes', 'on'))
                 except Exception:
                     enhanced_first = True
+                # Regime score: use realized volatility to modulate weights (higher vol → favor enhanced)
+                try:
+                    recent_ret = data['close'].pct_change().tail(20)
+                    vol20 = float(recent_ret.std()) if len(recent_ret) > 5 else 0.0
+                    recent_ret60 = data['close'].pct_change().tail(60)
+                    vol60 = float(recent_ret60.std()) if len(recent_ret60) > 5 else 0.0
+                    regime = min(1.0, max(0.0, (vol20 / max(1e-6, vol60)) if vol60 > 0 else vol20 / 0.05))
+                except Exception:
+                    regime = 0.5
+
+                # Aggregate evidence from patterns and sentiment
+                # Pre-compute visual confirmation and sentiment gating thresholds
+                try:
+                    enable_yolo_confirm = (os.getenv('ENABLE_YOLO_CONFIRM', '1').lower() in ('1', 'true', 'yes', 'on'))
+                except Exception:
+                    enable_yolo_confirm = True
+                try:
+                    yolo_confirm_mult = float(os.getenv('YOLO_CONFIRM_MULT', '1.5'))
+                except Exception:
+                    yolo_confirm_mult = 1.5
+                try:
+                    yolo_min_conf_ev = float(os.getenv('YOLO_MIN_CONF_EVID', '0.25'))
+                except Exception:
+                    yolo_min_conf_ev = 0.25
+                try:
+                    fingpt_min_conf = float(os.getenv('FINGPT_MIN_CONF', '0.65'))
+                except Exception:
+                    fingpt_min_conf = 0.65
+                try:
+                    fingpt_min_news = int(os.getenv('FINGPT_MIN_NEWS', '1'))
+                except Exception:
+                    fingpt_min_news = 1
+
+                # Visual confirmation flags (recent YOLO detections)
+                visual_bullish = False
+                visual_bearish = False
+                try:
+                    for _vp in (patterns or []):
+                        if str(_vp.get('source', '')).upper() == 'VISUAL_YOLO':
+                            try:
+                                if float(_vp.get('confidence', 0.0)) < yolo_min_conf_ev:
+                                    continue
+                            except Exception:
+                                continue
+                            _sig = str(_vp.get('signal', '')).upper()
+                            if _sig == 'BULLISH':
+                                visual_bullish = True
+                            elif _sig == 'BEARISH':
+                                visual_bearish = True
+                except Exception:
+                    visual_bullish = visual_bearish = False
+
+                def _agg_evidence(h_days: int):
+                    try:
+                        pat_score = 0.0
+                        pat_w = 0.0
+                        sent_score = 0.0
+                        sent_w = 0.0
+                        for p in (patterns or []):
+                            try:
+                                src = str(p.get('source', '')).upper()
+                                sig = str(p.get('signal', '')).upper()
+                                sgn = 1.0 if sig == 'BULLISH' else (-1.0 if sig == 'BEARISH' else 0.0)
+                                confp = float(p.get('confidence', (p.get('strength', 50)/100.0)))
+                                confp = max(0.0, min(1.0, confp))
+                                # Horizon weighting: shorter horizons stronger
+                                h_w = 1.0 if h_days <= 3 else (0.8 if h_days <= 7 else 0.6)
+                                src_w = 1.1 if src in ('VISUAL_YOLO', 'ADVANCED_TA') else 1.0
+                                # FinGPT gating: require sufficient confidence and news count
+                                if src == 'FINGPT':
+                                    try:
+                                        nnews = int(p.get('news_count', 0) or 0)
+                                    except Exception:
+                                        nnews = 0
+                                    if (confp >= fingpt_min_conf) and (nnews >= fingpt_min_news):
+                                        w = confp * h_w * src_w
+                                        sent_score += sgn * w
+                                        sent_w += w
+                                    else:
+                                        # Ignore weak/insufficient sentiment
+                                        pass
+                                else:
+                                    w = confp * h_w * src_w
+                                    # YOLO confirmation: if TA pattern direction matches YOLO, amplify
+                                    if enable_yolo_confirm and src in ('ADVANCED_TA', 'BASIC'):
+                                        if (sgn > 0 and visual_bullish) or (sgn < 0 and visual_bearish):
+                                            w *= yolo_confirm_mult
+                                    pat_score += sgn * w
+                                    pat_w += w
+                            except Exception:
+                                continue
+                        pat_val = (pat_score / pat_w) if pat_w > 0 else 0.0
+                        sent_val = (sent_score / sent_w) if sent_w > 0 else 0.0
+                        return max(-1.0, min(1.0, pat_val)), max(-1.0, min(1.0, sent_val))
+                    except Exception:
+                        return 0.0, 0.0
+
+                # --- Helper: 1D directional booster (lightweight, on-cycle) ---
+                def _compute_1d_booster_prob(df):
+                    try:
+                        try:
+                            from sklearn.linear_model import LogisticRegression
+                        except Exception:
+                            return None
+                        import numpy as np  # local import
+                        import pandas as pd  # local import
+
+                        if not isinstance(df, (pd.DataFrame,)) or len(df) < 140:
+                            return None
+                        # Use last ~360 bars to keep fit light
+                        d = df[['open', 'high', 'low', 'close', 'volume']].copy().tail(360)
+                        close = d['close']
+                        high = d['high']
+                        low = d['low']
+                        volume = d['volume'].astype(float)
+
+                        feats = pd.DataFrame(index=d.index)
+                        # overnight proxy
+                        feats['overnight'] = (d['open'] / close.shift(1) - 1.0) * 100.0
+                        feats['ret1'] = close.pct_change(1) * 100.0
+                        feats['mom3'] = ((close / close.rolling(3).mean()) - 1.0) * 100.0
+                        feats['rv5'] = np.log(close).diff().rolling(5).std() * np.sqrt(252) * 100.0
+                        # RSI(3)
+                        delta = close.diff()
+                        up = delta.clip(lower=0).rolling(3).mean()
+                        down = (-delta.clip(upper=0)).rolling(3).mean()
+                        rs = up / (down + 1e-9)
+                        feats['rsi3'] = 100.0 - (100.0 / (1.0 + rs))
+                        feats['gap'] = ((d['open'] - close.shift(1)) / (close.shift(1) + 1e-9)) * 100.0
+                        feats['tail_up'] = ((high - close) / (close + 1e-9)) * 100.0
+                        feats['tail_dn'] = ((close - low) / (close + 1e-9)) * 100.0
+                        tr1 = (high - low).abs()
+                        tr2 = (high - close.shift(1)).abs()
+                        tr3 = (low - close.shift(1)).abs()
+                        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                        atr5 = tr.rolling(5).mean()
+                        feats['atr5_n'] = (atr5 / (close + 1e-9)) * 100.0
+                        ma20 = close.rolling(20).mean()
+                        sd20 = close.rolling(20).std()
+                        feats['boll_pos'] = (close - ma20) / (sd20 + 1e-9)
+                        ll14 = low.rolling(14).min()
+                        hh14 = high.rolling(14).max()
+                        feats['stoch_k'] = ((close - ll14) / ((hh14 - ll14) + 1e-9)) * 100.0
+                        ema10 = close.ewm(span=10, adjust=False).mean()
+                        feats['ema10_slope'] = ema10.pct_change(1) * 100.0
+                        vol_ma = volume.rolling(20).mean()
+                        vol_sd = volume.rolling(20).std()
+                        feats['vol_z'] = (volume - vol_ma) / (vol_sd + 1e-9)
+                        # day of week one-hot
+                        dow = feats.index.dayofweek
+                        for dval in range(5):
+                            feats[f'dow_{dval}'] = (dow == dval).astype(int)
+
+                        # target (t+1 up?)
+                        y = (close.shift(-1) > close).astype(float)
+                        mask = feats.replace([np.inf, -np.inf], np.nan).notna().all(axis=1) & y.notna()
+                        feats = feats.loc[mask]
+                        y = y.loc[mask]
+                        if len(feats) < 120:
+                            return None
+                        # Train on all but last row; predict last row prob for up move
+                        X_train = feats.iloc[:-1]
+                        y_train = y.iloc[:-1]
+                        X_last = feats.iloc[[-1]]
+                        if len(np.unique(y_train)) < 2:
+                            return None
+                        clf = LogisticRegression(max_iter=400, solver='liblinear')
+                        clf.fit(X_train.values, y_train.values)
+                        p_up = float(clf.predict_proba(X_last.values)[0, 1])
+                        return p_up
+                    except Exception:
+                        return None
+
                 for h in horizons:
                     cur = {}
                     if h in bmap:
@@ -1021,14 +1200,107 @@ class HybridPatternDetector:
                                 delta = (price - current_px) / current_px
                                 cdelta = _calibrate_delta(delta)
                                 try:
-                                    base_w = 0.7 if src == 'enhanced' else 0.6
+                                    # Horizon-specific calibration: longer horizons need stronger move for same confidence
+                                    h_days = int(str(h).replace('d', '') or 7)
+                                    move_scale = 0.05 * max(1.0, h_days / 7.0)
+                                    # Regime-weighted base (more volatile → prioritize enhanced)
+                                    base_w = (0.6 + 0.2 * regime) if src == 'enhanced' else (0.65 - 0.15 * regime)
                                     rr = float(rel) if isinstance(rel, (int, float)) else (0.65 if src == 'enhanced' else 0.6)
-                                    conf = max(0.25, min(0.95, base_w * rr * min(1.0, abs(cdelta) / 0.05)))
+                                    conf = max(0.25, min(0.95, base_w * rr * min(1.0, abs(cdelta) / move_scale)))
                                 except Exception:
                                     conf = max(0.25, min(0.95, abs(cdelta) / 0.05))
-                                cur[src]['delta_pct'] = float(cdelta)
-                                cur[src]['confidence'] = conf
-                                score = abs(cdelta) * float(max(0.0, min(1.0, rel))) if isinstance(rel, (int, float)) else abs(cdelta) * (0.65 if src == 'enhanced' else 0.6)
+                                # Evidence-based confidence adjustment
+                                try:
+                                    h_days = int(str(h).replace('d', '') or 7)
+                                except Exception:
+                                    h_days = 7
+                                # Gate by env: PATTERN_SENTI_META (default on)
+                                enable_meta = True
+                                try:
+                                    enable_meta = (os.getenv('PATTERN_SENTI_META', '1').lower() in ('1', 'true', 'yes', 'on'))
+                                except Exception:
+                                    enable_meta = True
+                                pat_s, sent_s = _agg_evidence(h_days)
+                                if h_days <= 1:
+                                    w_pat, w_sent = 0.12, 0.10
+                                elif h_days <= 3:
+                                    w_pat, w_sent = 0.10, 0.08
+                                elif h_days <= 7:
+                                    w_pat, w_sent = 0.06, 0.05
+                                elif h_days <= 14:
+                                    w_pat, w_sent = 0.04, 0.03
+                                else:
+                                    w_pat, w_sent = 0.03, 0.02
+                                signed_adj = (w_pat * pat_s + w_sent * sent_s) if enable_meta else 0.0
+                                conf_after_meta = max(0.25, min(0.95, conf + max(-0.15, min(0.15, signed_adj))))
+
+                                # Optional: 1D directional booster (confidence alignment)
+                                booster_adj = 0.0
+                                booster_p = None
+                                try:
+                                    enable_booster = (os.getenv('ENABLE_1D_BOOSTER', '1').lower() in ('1', 'true', 'yes', 'on'))
+                                except Exception:
+                                    enable_booster = True
+                                if enable_booster and h_days <= 1:
+                                    booster_p = _compute_1d_booster_prob(data)
+                                    if isinstance(booster_p, float):
+                                        # alignment: if booster agrees with direction, increase confidence up to ~0.08
+                                        agree = (cdelta >= 0 and booster_p >= 0.5) or (cdelta < 0 and booster_p < 0.5)
+                                        strength = abs(booster_p - 0.5) * 2.0  # [0..1]
+                                        booster_adj = (0.08 * strength) * (1.0 if agree else -1.0)
+
+                                conf_final = max(0.25, min(0.95, conf_after_meta + booster_adj))
+
+                                # Small horizon-aware delta tilt using evidence alignment (strictly bounded)
+                                try:
+                                    try:
+                                        enable_delta_tilt = (os.getenv('ENABLE_DELTA_TILT', '1').lower() in ('1', 'true', 'yes', 'on'))
+                                    except Exception:
+                                        enable_delta_tilt = True
+                                    thr_map = {'1d': 0.008, '3d': 0.021, '7d': 0.03, '14d': 0.03, '30d': 0.025}
+                                    alpha_map = {'1d': 0.25, '3d': 0.15, '7d': 0.10, '14d': 0.08, '30d': 0.08}
+                                    h_key = str(h)
+                                    base_thr = float(thr_map.get(h_key, 0.03))
+                                    alpha = float(alpha_map.get(h_key, 0.08))
+                                    # Normalize signed_adj to [-1,1] scale via conf clip used (0.15 window)
+                                    mag = min(1.0, max(0.0, abs(signed_adj) / 0.15 if 0.15 > 0 else 0.0))
+                                    sgn = 1.0 if signed_adj >= 0 else -1.0
+                                    # Primary tilt follows evidence if agrees with predicted direction
+                                    agree = (cdelta >= 0 and sgn > 0) or (cdelta < 0 and sgn < 0)
+                                    base_tilt = (alpha * base_thr * mag) if enable_delta_tilt else 0.0
+                                    tilt_ev = base_tilt if agree else -0.5 * base_tilt
+                                    # Booster tilt (lighter than confidence impact)
+                                    tilt_boost = 0.0
+                                    if isinstance(booster_p, float):
+                                        bmag = abs(booster_p - 0.5) * 2.0
+                                        bagree = (cdelta >= 0 and booster_p >= 0.5) or (cdelta < 0 and booster_p < 0.5)
+                                        tilt_boost = ((0.5 * alpha) * base_thr * bmag * (1.0 if bagree else -1.0)) if enable_delta_tilt else 0.0
+                                    cdelta_tilted = cdelta + tilt_ev + tilt_boost
+                                    # Safety clamp
+                                    if cdelta_tilted > 0.5:
+                                        cdelta_tilted = 0.5
+                                    if cdelta_tilted < -0.5:
+                                        cdelta_tilted = -0.5
+                                    delta_contrib = (cdelta_tilted - cdelta)
+                                except Exception:
+                                    cdelta_tilted = cdelta
+                                    delta_contrib = 0.0
+
+                                cur[src]['delta_pct'] = float(cdelta_tilted)
+                                cur[src]['confidence'] = conf_final
+                                cur[src]['evidence'] = {
+                                    'pattern_score': float(pat_s),
+                                    'sentiment_score': float(sent_s),
+                                    'contrib_conf': float(conf_final - conf),
+                                }
+                                if booster_p is not None:
+                                    cur[src]['evidence']['booster_prob'] = float(booster_p)
+                                    cur[src]['evidence']['contrib_booster'] = float(booster_adj)
+                                if isinstance(delta_contrib, float) and abs(delta_contrib) > 0:
+                                    cur[src]['evidence']['contrib_delta'] = float(delta_contrib)
+                                # Regime-aware score for best-of selection
+                                eff_rel = float(max(0.0, min(1.0, rel))) if isinstance(rel, (int, float)) else (0.65 if src == 'enhanced' else 0.6)
+                                score = abs(cdelta) * eff_rel * (1.0 + (0.15 if (src == 'enhanced' and regime >= 0.6) else 0.0))
                                 entries.append((score, src))
                     # Decide best
                     if enhanced_first and ('enhanced' in cur):
@@ -1291,6 +1563,23 @@ class HybridPatternDetector:
                 'data': result,
                 'timestamp': current_time
             }
+
+            # Persist file cache for cross-process reuse (used by batch API)
+            try:
+                import os as _os
+                import json as _json
+                log_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+                file_cache_dir = _os.path.join(log_dir, 'pattern_cache')
+                try:
+                    _os.makedirs(file_cache_dir, exist_ok=True)
+                except Exception:
+                    pass
+                fpath = _os.path.join(file_cache_dir, f'{symbol}.json')
+                with open(fpath, 'w') as wf:
+                    _json.dump(result, wf)
+            except Exception:
+                # Best-effort only; ignore persistence errors to avoid breaking analysis
+                pass
             
             # Cache cleanup - 100'den fazla entry varsa eski olanları temizle
             if len(self.cache) > self.result_cache_max_size:

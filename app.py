@@ -86,8 +86,8 @@ def create_app(config_name='default'):
         cors_allowed_origins=app.config.get('CORS_ORIGINS', '*'),
         logger=False,
         engineio_logger=False,
-        ping_timeout=30,
-        ping_interval=20,
+        ping_timeout=90,
+        ping_interval=45,
     )
     csrf.init_app(app)
     # Exempt Socket.IO transport (polling POSTs) from CSRF to prevent 400s on /socket.io/
@@ -346,22 +346,29 @@ def create_app(config_name='default'):
         symbol = data.get('symbol', '').upper()
         if symbol:
             try:
-                result = get_pattern_detector().analyze_stock(symbol)
+                # Cache-only: do not compute here
+                from bist_pattern.core.cache import cache_get as _cache_get  # type: ignore
+                cache_key = f"pattern_analysis:{symbol}"
+                result = None
+                try:
+                    result = _cache_get(cache_key)
+                except Exception:
+                    result = None
+                if not result:
+                    result = {'symbol': symbol, 'status': 'pending'}
                 # Send to requesting client
                 emit('pattern_analysis', {
                     'symbol': symbol,
                     'data': result,
                     'timestamp': datetime.now().isoformat()
                 })
-                
                 # Also broadcast to stock room for other subscribers
                 socketio.emit('pattern_analysis', {
                     'symbol': symbol,
                     'data': result,
                     'timestamp': datetime.now().isoformat()
                 }, room=f'stock_{symbol}')  # type: ignore[call-arg]
-                
-                logger.info(f"📊 Pattern analysis sent for {symbol} to {request.sid} and stock room")
+                logger.info(f"📊 Pattern analysis (cache-only) sent for {symbol} to {request.sid} and stock room")
             except Exception as e:
                 emit('error', {'message': f'Pattern analysis failed for {symbol}: {str(e)}'})
                 logger.error(f"Pattern analysis error for {symbol}: {e}")

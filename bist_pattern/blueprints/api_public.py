@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify, request
-from datetime import datetime
+from datetime import datetime  # noqa: F401 (kept for consistency)
 
 bp = Blueprint('api_public', __name__, url_prefix='/api')
 
@@ -98,25 +98,32 @@ def register(app):
 
     @bp.route('/pattern-analysis/<symbol>')
     def pattern_analysis(symbol):
+        """Cache-only pattern analysis endpoint.
+
+        - Never triggers fresh analysis.
+        - Returns cached result from memory/redis or file cache.
+        - Accepts stale file cache and annotates it with staleness metadata so UI can still render overlays.
+        - If no cached result, returns {status: 'pending'}
+        """
         try:
-            # Fast/cached path: honor ?fast=1 to avoid recomputation on page refresh
-            use_fast = (request.args.get('fast') or '').lower() in ('1', 'true', 'yes')
             try:
-                from bist_pattern.core.cache import cache_get as _cache_get, cache_set as _cache_set
+                from bist_pattern.core.cache import cache_get as _cache_get
             except Exception:
-                _cache_get = _cache_set = None  # type: ignore
+                _cache_get = None  # type: ignore
 
             sym = symbol.upper()
             cache_key = f"pattern_analysis:{sym}"
 
-            # Layer 1: in-memory cache (per worker)
-            if use_fast and callable(_cache_get):
-                cached = _cache_get(cache_key)
+            # Layer 1: in-memory/Redis cache
+            if callable(_cache_get):
+                try:
+                    cached = _cache_get(cache_key)
+                except Exception:
+                    cached = None
                 if cached:
                     return jsonify(cached)
 
-            # Layer 2: file cache shared across workers
-            file_cache_hit = None
+            # Layer 2: file cache shared across workers (accept even if stale)
             file_cache_path = '/opt/bist-pattern/logs/pattern_cache'
             try:
                 import os as _os
@@ -125,74 +132,22 @@ def register(app):
                 ttl = float(_os.getenv('PATTERN_FILE_CACHE_TTL', '300'))
                 _os.makedirs(file_cache_path, exist_ok=True)
                 fpath = _os.path.join(file_cache_path, f'{sym}.json')
-                if use_fast and _os.path.exists(fpath):
+                if _os.path.exists(fpath):
                     st = _os.stat(fpath)
-                    if (_time.time() - float(getattr(st, 'st_mtime', 0))) < ttl:
-                        with open(fpath, 'r') as rf:
-                            file_cache_hit = _json.load(rf)
-            except Exception:
-                file_cache_hit = None
-            if file_cache_hit:
-                return jsonify(file_cache_hit)
-
-            if use_fast and callable(_cache_get):
-                cached = _cache_get(cache_key)
-                if cached:
-                    return jsonify(cached)
-
-            # Compute fresh analysis
-            result = get_pattern_detector().analyze_stock(sym)
-
-            # Store to short-lived API cache + file cache (shared between workers)
-            try:
-                if callable(_cache_set):
-                    import os as _os  # local import to avoid top-level side effects
-                    try:
-                        ttl = float(_os.getenv('PATTERN_CACHE_TTL', '30'))
-                    except Exception:
-                        ttl = 30.0
-                    _cache_set(cache_key, result, ttl_seconds=ttl)
+                    age = (_time.time() - float(getattr(st, 'st_mtime', 0)))
+                    with open(fpath, 'r') as rf:
+                        file_cache_hit = _json.load(rf)
+                    if isinstance(file_cache_hit, dict):
+                        file_cache_hit.setdefault('symbol', sym)
+                        file_cache_hit.setdefault('status', 'success')
+                        file_cache_hit['stale_seconds'] = float(age)
+                        file_cache_hit['stale'] = bool(age >= ttl)
+                    return jsonify(file_cache_hit)
             except Exception:
                 pass
 
-            # Persist file cache (best-effort)
-            try:
-                import os as _os
-                import json as _json
-                _os.makedirs(file_cache_path, exist_ok=True)
-                with open(_os.path.join(file_cache_path, f'{sym}.json'), 'w') as wf:
-                    _json.dump(result, wf)
-            except Exception:
-                pass
-
-            # Only process simulation side-effects on non-fast path to avoid duplicate trades
-            if not use_fast:
-                try:
-                    from simulation_engine import get_simulation_engine
-                    from models import SimulationSession
-                    active_sessions = SimulationSession.query.filter_by(status='active').all()
-                    if active_sessions and result.get('status') == 'success':
-                        simulation_engine = get_simulation_engine()
-                        for session in active_sessions:
-                            trade = simulation_engine.process_signal(
-                                session_id=session.id,
-                                symbol=sym,
-                                signal_data=result,
-                            )
-                            if trade and hasattr(app, 'socketio'):
-                                app.socketio.emit(
-                                    'simulation_trade',
-                                    {
-                                        'session_id': session.id,
-                                        'trade': trade.to_dict(),
-                                        'timestamp': datetime.now().isoformat(),
-                                    },
-                                    to='admin',
-                                )
-                except Exception as sim_error:
-                    app.logger.warning(f"Simulation processing failed: {sim_error}")
-
-            return jsonify(result)
+            # No compute – return pending
+            return jsonify({'symbol': sym, 'status': 'pending'})
         except Exception as e:
             return jsonify({'symbol': symbol, 'status': 'error', 'error': str(e)}), 500
 

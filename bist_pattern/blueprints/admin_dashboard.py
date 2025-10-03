@@ -471,22 +471,48 @@ def register(app):
             }
     
     def _check_system_resources():
-        """Check basic system resources"""
+        """Check basic system resources (CPU/RAM/Disk)."""
         try:
             import psutil
-            
+            import os as _os
+
+            # CPU usage
+            cpu_percent = float(psutil.cpu_percent(interval=0.1))
+
             # Memory usage
-            memory = psutil.virtual_memory()
-            disk = psutil.disk_usage('/')
-            
+            vm = psutil.virtual_memory()
+            memory_percent = float(getattr(vm, 'percent', 0.0))
+            memory_total_mb = float(getattr(vm, 'total', 0.0)) / (1024 * 1024)
+            memory_used_mb = float(getattr(vm, 'used', 0.0)) / (1024 * 1024)
+
+            # Disk usage
+            du = psutil.disk_usage('/')
+            disk_percent = float(getattr(du, 'percent', 0.0))
+            disk_free_gb = float(getattr(du, 'free', 0.0)) / (1024 * 1024 * 1024)
+            disk_used_gb = float(getattr(du, 'used', 0.0)) / (1024 * 1024 * 1024)
+
+            # Load average (if available)
+            try:
+                load_avg = None
+                if hasattr(_os, 'getloadavg'):
+                    la = _os.getloadavg()
+                    load_avg = [float(la[0]), float(la[1]), float(la[2])]
+            except Exception:
+                load_avg = None
+
             return {
                 'status': 'healthy',
                 'score': 90,
-                'memory_percent': memory.percent,
-                'disk_percent': disk.percent,
-                'available_gb': round(disk.free / (1024**3), 2)
+                'cpu_percent': cpu_percent,
+                'memory_percent': memory_percent,
+                'memory_total_mb': memory_total_mb,
+                'memory_used_mb': memory_used_mb,
+                'disk_percent': disk_percent,
+                'disk_free_gb': disk_free_gb,
+                'disk_used_gb': disk_used_gb,
+                'load_avg': load_avg,
             }
-            
+
         except ImportError:
             return {
                 'status': 'info',

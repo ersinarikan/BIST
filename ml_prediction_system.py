@@ -21,6 +21,14 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Optional statsmodels for ETS/ARIMA baseline
+try:
+    from statsmodels.tsa.holtwinters import ExponentialSmoothing  # type: ignore
+    from statsmodels.tsa.arima.model import ARIMA  # type: ignore
+    STATSMODELS_AVAILABLE = True
+except Exception:
+    STATSMODELS_AVAILABLE = False
+
 
 class MLPredictionSystem:
     def __init__(self) -> None:
@@ -32,7 +40,7 @@ class MLPredictionSystem:
         self.basic_model_dir = os.path.join(os.path.dirname(cache_dir), 'basic_ml_models')
         os.makedirs(self.basic_model_dir, exist_ok=True)
         
-        logger.info(f"📊 Basic ML System initialized (Real ML: True, Persistence: {JOBLIB_AVAILABLE})")
+        logger.info(f"📊 Basic ML System initialized (Real ML: True, Persistence: {JOBLIB_AVAILABLE}, ETS/ARIMA: {STATSMODELS_AVAILABLE})")
     
     def _get_model_path(self, symbol: str) -> str:
         """Get file path for symbol's model"""
@@ -109,9 +117,49 @@ class MLPredictionSystem:
         if len(df) < 50:
             return {}
         
-        models = {}
+        models: Dict[str, Dict[str, Any]] = {}
+        # Always include a naive mean fallback
         for h in self.prediction_horizons:
             models[str(h)] = {'type': 'naive_mean', 'window': max(10, h * 5)}
+
+        # Train ETS (trend+seasonal) as lightweight baseline if statsmodels available
+        if STATSMODELS_AVAILABLE and len(df) >= 60:
+            try:
+                close = df['close'].astype(float)
+                # Weekly-ish seasonal pattern ~5 trading days
+                seasonal_periods = 5
+                ets_model = ExponentialSmoothing(close, trend='add', seasonal='add', seasonal_periods=seasonal_periods)
+                ets_fit = ets_model.fit(optimized=True, use_brute=True)
+                for h in self.prediction_horizons:
+                    fc = float(ets_fit.forecast(steps=h).iloc[-1])
+                    models[str(h)] = {
+                        'type': 'ets',
+                        'forecast': fc,
+                        'seasonal_periods': seasonal_periods,
+                    }
+                logger.debug(f"✅ ETS trained for {symbol}")
+            except Exception as e:
+                logger.debug(f"ETS training failed for {symbol}: {e}")
+
+        # Optional ARIMA as a secondary baseline for longer horizons
+        if STATSMODELS_AVAILABLE and len(df) >= 80:
+            try:
+                close = df['close'].astype(float)
+                # Simple automatically selected (p,d,q) candidate; conservative
+                order = (1, 1, 1)
+                arima_fit = ARIMA(close, order=order).fit()
+                for h in self.prediction_horizons:
+                    fc = float(arima_fit.forecast(steps=h).iloc[-1])
+                    # Prefer ETS for short horizons; ARIMA for long
+                    if h >= 14:
+                        models[str(h)] = {
+                            'type': 'arima',
+                            'forecast': fc,
+                            'order': order,
+                        }
+                logger.debug(f"✅ ARIMA trained for {symbol}")
+            except Exception as e:
+                logger.debug(f"ARIMA training failed for {symbol}: {e}")
         
         # Store in memory
         self.models[symbol] = models
@@ -153,16 +201,23 @@ class MLPredictionSystem:
             else:  # Moderate signal
                 alpha = 0.08
         for h in self.prediction_horizons:
-            mw = models.get(str(h), {}).get('window', max(10, h * 5))
-            base = float(df['close'].tail(mw).mean()) if len(df) >= mw else current
-            # horizon ile hafif trend projeksiyonu
-            proj = current + (base - current) * min(1.0, h / 30.0)
+            m = models.get(str(h), {})
+            mtype = m.get('type')
+            proj = None
+            if mtype == 'ets' and isinstance(m.get('forecast'), (int, float)):
+                proj = float(m['forecast'])
+            elif mtype == 'arima' and isinstance(m.get('forecast'), (int, float)):
+                proj = float(m['forecast'])
+            else:
+                mw = m.get('window', max(10, h * 5))
+                base = float(df['close'].tail(mw).mean()) if len(df) >= mw else current
+                proj = current + (base - current) * min(1.0, h / 30.0)
             if alpha:
                 sent = float(sentiment_score) if sentiment_score is not None else 0.5
                 proj = proj * (1 + alpha * (sent - 0.5))
             out[f'{h}d'] = {'price': float(proj)}
         out['timestamp'] = datetime.now().isoformat()
-        out['model'] = 'basic_naive'
+        out['model'] = 'basic_ets_arima' if STATSMODELS_AVAILABLE else 'basic_naive'
         return out
 
 

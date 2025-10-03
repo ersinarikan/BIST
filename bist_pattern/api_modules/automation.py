@@ -288,39 +288,20 @@ def stop_automation():
 
 @bp.route('/health')
 def automation_health():
-    """System health check"""
+    """Pipeline-first health (no file fallback)."""
     try:
-        # Try live health via pipeline
-        live = None
+        pipeline = get_pipeline_with_context()
+        if not pipeline or not hasattr(pipeline, 'system_health_check'):
+            return jsonify({'status': 'unavailable', 'message': 'Pipeline unavailable'}), 503
         try:
-            pipeline = get_pipeline_with_context()
-            if pipeline and hasattr(pipeline, 'system_health_check'):
-                live = pipeline.system_health_check()
-        except Exception:
-            live = None
+            health_data = pipeline.system_health_check() or {}
+        except Exception as _e:
+            return jsonify({'status': 'unavailable', 'message': f'Health provider error: {str(_e)}'}), 503
 
-        if isinstance(live, dict) and live:
-            health_data = live
-        else:
-            # Fallback: read last health file
-            health_status_path = os.path.join(
-                os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs'),
-                'health_status.json'
-            )
-            if not os.path.exists(health_status_path):
-                return jsonify({
-                    'status': 'unavailable',
-                    'message': 'Health status not available yet. Scheduler may be starting.'
-                }), 503
-            with open(health_status_path, 'r') as f:
-                health_data = json.load(f)
-
-        # Add Flask and WebSocket status
+        # Enrich systems
         health_data.setdefault('systems', {})
         health_data['systems']['flask_api'] = {'status': 'healthy', 'details': 'API is responsive'}
         health_data['systems']['websocket'] = {'status': 'connected', 'details': 'Socket.IO is active'}
-
-        # Database status
         try:
             from sqlalchemy import text
             from models import db
@@ -328,61 +309,83 @@ def automation_health():
             health_data['systems']['database'] = {'status': 'connected'}
         except Exception as db_err:
             health_data['systems']['database'] = {'status': 'error', 'details': str(db_err)}
-
-        # Automation engine status
+        # Automation engine
         try:
-            pipeline = get_pipeline_with_context()
-            status_map = {}
-            try:
-                if pipeline and hasattr(pipeline, 'get_scheduler_status'):
-                    status_map = pipeline.get_scheduler_status() or {}
-            except Exception:
-                status_map = {}
-
-            is_running = bool(status_map.get('is_running', False))
-            thread_alive = bool(status_map.get('thread_alive', False))
-            effective = (is_running or thread_alive) or bool(pipeline and getattr(pipeline, 'is_running', False))
-            health_data['systems']['automation_engine'] = {'status': 'running' if effective else 'stopped'}
+            status_map = pipeline.get_scheduler_status() if hasattr(pipeline, 'get_scheduler_status') else {}
+            is_running = bool(status_map.get('is_running', getattr(pipeline, 'is_running', False)))
+            health_data['systems']['automation_engine'] = {'status': 'running' if is_running else 'stopped'}
         except Exception as auto_err:
             health_data['systems']['automation_engine'] = {'status': 'error', 'details': str(auto_err)}
 
-        # Calculate overall status based on all systems
+        # System resources (CPU/RAM/Disk)
         try:
-            systems = health_data.get('systems', {})
-            if not systems:
-                overall_status = 'error'
+            import psutil  # type: ignore
+            cpu_percent = float(psutil.cpu_percent(interval=0.1))
+            vm = psutil.virtual_memory()
+            mem_percent = float(getattr(vm, 'percent', 0.0))
+            mem_total_mb = float(getattr(vm, 'total', 0.0)) / (1024 * 1024)
+            mem_used_mb = float(getattr(vm, 'used', 0.0)) / (1024 * 1024)
+            du = psutil.disk_usage('/')
+            disk_percent = float(getattr(du, 'percent', 0.0))
+            disk_free_gb = float(getattr(du, 'free', 0.0)) / (1024 * 1024 * 1024)
+            disk_used_gb = float(getattr(du, 'used', 0.0)) / (1024 * 1024 * 1024)
+        except Exception:
+            cpu_percent = None
+            mem_percent = None
+            mem_total_mb = None
+            mem_used_mb = None
+            disk_percent = None
+            disk_free_gb = None
+            disk_used_gb = None
+        try:
+            load_avg = None
+            if hasattr(os, 'getloadavg'):
+                la = os.getloadavg()
+                load_avg = [float(la[0]), float(la[1]), float(la[2])]
+        except Exception:
+            load_avg = None
+        health_data['system_resources'] = {
+            'cpu_percent': cpu_percent,
+            'memory_percent': mem_percent,
+            'memory_total_mb': mem_total_mb,
+            'memory_used_mb': mem_used_mb,
+            'disk_percent': disk_percent,
+            'disk_free_gb': disk_free_gb,
+            'disk_used_gb': disk_used_gb,
+            'load_avg': load_avg,
+        }
+
+        # Derive overall_status for UI (healthy/warning/critical)
+        try:
+            def _norm(val: str) -> str:
+                return (str(val or '').strip().lower())
+
+            s = health_data.get('systems', {}) or {}
+            st_db = _norm(s.get('database', {}).get('status'))
+            st_api = _norm(s.get('flask_api', {}).get('status'))
+            st_ws = _norm(s.get('websocket', {}).get('status'))
+            st_auto = _norm(s.get('automation_engine', {}).get('status'))
+
+            critical = any(x in ('error', 'disconnected') for x in (st_db, st_api))
+            if critical:
+                overall = 'critical'
             else:
-                healthy_count = 0
-                total_count = len(systems)
-
-                for system_name, system_data in systems.items():
-                    status = system_data.get('status', 'unknown').lower()
-                    if status in ['healthy', 'connected', 'running']:
-                        healthy_count += 1
-                    elif status in ['error', 'disconnected', 'failed']:
-                        # Critical systems failure
-                        if system_name in ['database', 'flask_api']:
-                            overall_status = 'error'
-                            break
+                healthy = (st_db in ('healthy', 'connected')) and (st_api == 'healthy') and (st_ws in ('connected', 'healthy'))
+                if healthy and st_auto == 'running':
+                    overall = 'healthy'
+                elif healthy and st_auto != 'running':
+                    overall = 'warning'
                 else:
-                    # Calculate overall based on healthy percentage
-                    if healthy_count == total_count:
-                        overall_status = 'healthy'
-                    elif healthy_count >= (total_count * 0.75):  # 75% threshold
-                        overall_status = 'warning'
-                    else:
-                        overall_status = 'error'
-
-            health_data['overall_status'] = overall_status
-
-        except Exception as overall_err:
-            logger.error(f"Overall status calculation error: {overall_err}")
-            health_data['overall_status'] = 'error'
+                    overall = 'warning'
+            health_data['overall_status'] = overall
+        except Exception:
+            # Best-effort; default unknown if derivation fails
+            health_data['overall_status'] = 'unknown'
 
         return jsonify({'status': 'success', 'health_check': health_data})
     except Exception as e:
-        current_app.logger.error(f"Health check read error: {e}")
-        return jsonify({'status': 'error', 'message': f'Could not read health status: {str(e)}'}), 500
+        current_app.logger.error(f"Health endpoint error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 # NOTE: /run-task endpoint moved to api_internal blueprint 

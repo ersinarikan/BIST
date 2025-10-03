@@ -55,6 +55,48 @@ class EnhancedMLSystem:
         self.model_directory = os.getenv('ML_MODEL_PATH', "enhanced_ml_models")
         self.prediction_horizons = [1, 3, 7, 14, 30]  # 1D, 3D, 7D, 14D, 30D
         self.feature_columns = []  # Initialize feature columns list
+        # Optional feature flags
+        try:
+            self.enable_talib_patterns = str(os.getenv('ENABLE_TALIB_PATTERNS', 'True')).lower() in ('1', 'true', 'yes')
+        except Exception:
+            self.enable_talib_patterns = True
+        try:
+            self.enable_external_features = str(os.getenv('ENABLE_EXTERNAL_FEATURES', 'True')).lower() in ('1', 'true', 'yes')
+        except Exception:
+            self.enable_external_features = True
+        try:
+            self.enable_fingpt_features = str(os.getenv('ENABLE_FINGPT_FEATURES', 'True')).lower() in ('1', 'true', 'yes')
+        except Exception:
+            self.enable_fingpt_features = True
+        try:
+            self.enable_yolo_features = str(os.getenv('ENABLE_YOLO_FEATURES', 'True')).lower() in ('1', 'true', 'yes')
+        except Exception:
+            self.enable_yolo_features = True
+        # External features directory (backfilled files live here)
+        try:
+            self.external_feature_dir = os.getenv('EXTERNAL_FEATURE_DIR', '/opt/bist-pattern/logs/feature_backfill')
+        except Exception:
+            self.external_feature_dir = '/opt/bist-pattern/logs/feature_backfill'
+        # Training parallelism and early stopping configuration (ENV-driven)
+        try:
+            self.train_threads = int(os.getenv('ML_TRAIN_THREADS', '2'))
+            if self.train_threads <= 0:
+                # Fallback to CPU count if invalid
+                cpu_count = os.cpu_count() or 2
+                self.train_threads = max(1, int(cpu_count))
+        except Exception:
+            cpu_count = os.cpu_count() or 2
+            self.train_threads = max(1, int(cpu_count))
+        try:
+            self.early_stop_rounds = int(os.getenv('ML_EARLY_STOP_ROUNDS', '50'))
+        except Exception:
+            self.early_stop_rounds = 50
+        try:
+            self.early_stop_min_val = int(os.getenv('ML_EARLY_STOP_MIN_VAL', '10'))
+        except Exception:
+            self.early_stop_min_val = 10
+        # Optional stop-sentinel file path (for graceful halt)
+        self.stop_file_path = os.getenv('TRAIN_STOP_FILE', '/opt/bist-pattern/.cache/STOP_TRAIN')
         
         # Model klasörünü oluştur
         os.makedirs(self.model_directory, exist_ok=True)
@@ -125,7 +167,7 @@ class EnhancedMLSystem:
         except Exception:
             return 0.5  # Fallback
 
-    def create_advanced_features(self, data):
+    def create_advanced_features(self, data, symbol: str | None = None):
         """Gelişmiş feature engineering"""
         try:
             if BASE_ML_AVAILABLE:
@@ -155,11 +197,184 @@ class EnhancedMLSystem:
             # Statistical features
             self._add_statistical_features(df)
             
+            # Optional: TA-Lib candlestick pattern features (lightweight subset)
+            if self.enable_talib_patterns:
+                self._add_candlestick_features(df)
+            
+            # Optional: Merge external backfilled features (FinGPT / YOLO)
+            if symbol and self.enable_external_features:
+                self._merge_external_features(symbol, df)
+            
             return df
             
         except Exception as e:
             logger.error(f"Advanced feature engineering hatası: {e}")
             return data
+
+    def _add_candlestick_features(self, df):
+        """Lightweight TA-Lib candlestick features: last-3 day bull/bear counts and today's signal."""
+        try:
+            try:
+                import talib  # type: ignore
+            except Exception:
+                return
+            if not all(c in df.columns for c in ('open', 'high', 'low', 'close')):
+                return
+            op = df['open'].astype(float)
+            hi = df['high'].astype(float)
+            lo = df['low'].astype(float)
+            cl = df['close'].astype(float)
+
+            # Subset of robust patterns; TA-Lib returns 100/-100/0 values
+            pat_series = []
+            try:
+                pat_series.append(talib.CDLENGULFING(op, hi, lo, cl))
+            except Exception:
+                pass
+            try:
+                pat_series.append(talib.CDLHAMMER(op, hi, lo, cl))
+            except Exception:
+                pass
+            try:
+                pat_series.append(talib.CDLSHOOTINGSTAR(op, hi, lo, cl))
+            except Exception:
+                pass
+            try:
+                pat_series.append(talib.CDLHARAMI(op, hi, lo, cl))
+            except Exception:
+                pass
+            try:
+                pat_series.append(talib.CDLDOJI(op, hi, lo, cl))
+            except Exception:
+                pass
+
+            if not pat_series:
+                return
+
+            pats = None
+            try:
+                import pandas as _pd  # local alias
+                pats = sum(pat_series)
+                # Ensure pandas Series
+                if not hasattr(pats, 'tail'):
+                    pats = _pd.Series(pats, index=df.index)
+            except Exception:
+                return
+
+            last3 = pats.tail(3)
+            bull3 = int((last3 > 0).sum())
+            bear3 = int((last3 < 0).sum())
+            df['pat_bull3'] = float(bull3)
+            df['pat_bear3'] = float(bear3)
+            df['pat_net3'] = float(bull3 - bear3)
+            # Normalize today's raw signal to [-1, 1]
+            try:
+                today_raw = float(pats.iloc[-1]) if len(pats) else 0.0
+            except Exception:
+                today_raw = 0.0
+            df['pat_today'] = float(np.clip(today_raw / 100.0, -1.0, 1.0))
+        except Exception as e:
+            logger.debug(f"TA-Lib candlestick features skipped: {e}")
+
+    def _merge_external_features(self, symbol: str, df: pd.DataFrame) -> None:
+        """Merge offline backfilled features (FinGPT sentiment and YOLO pattern density) if available.
+
+        Expected files (CSV) under EXTERNAL_FEATURE_DIR:
+          - fingpt/{SYMBOL}.csv with columns like: date, sentiment_score (or score/sentiment), news_count
+          - yolo/{SYMBOL}.csv   with columns like: date, yolo_density (or density), yolo_bull, yolo_bear, yolo_score
+        """
+        try:
+            if df is None or len(df) == 0:
+                return
+            dates = pd.to_datetime(df.index).normalize()
+
+            def _load_csv_safe(path: str) -> pd.DataFrame | None:
+                try:
+                    if not os.path.exists(path):
+                        return None
+                    tmp = pd.read_csv(path)
+                    # Flexible date parsing
+                    if 'date' in tmp.columns:
+                        tmp['date'] = pd.to_datetime(tmp['date']).dt.normalize()
+                        tmp = tmp.set_index('date').sort_index()
+                    elif 'timestamp' in tmp.columns:
+                        tmp['timestamp'] = pd.to_datetime(tmp['timestamp']).dt.normalize()
+                        tmp = tmp.set_index('timestamp').sort_index()
+                    else:
+                        # try to parse index if unnamed
+                        tmp.index = pd.to_datetime(tmp.index).normalize()
+                    return tmp
+                except Exception as _e:
+                    logger.debug(f"External feature load failed: {path} → {_e}")
+                    return None
+
+            # FinGPT features
+            if self.enable_fingpt_features:
+                f_csv = os.path.join(self.external_feature_dir, 'fingpt', f'{symbol}.csv')
+                fdf = _load_csv_safe(f_csv)
+                if fdf is not None and len(fdf) > 0:
+                    # pick score column
+                    score_cols = [c for c in (
+                        'sentiment_score', 'score', 'avg_score', 'sentiment', 'sentiment_avg', 'polarity'
+                    ) if c in fdf.columns]
+                    count_cols = [c for c in ('news_count', 'count', 'n') if c in fdf.columns]
+                    # Align to DF dates
+                    fdf = fdf.reindex(dates)
+                    if score_cols:
+                        try:
+                            df['fingpt_sent'] = pd.to_numeric(fdf[score_cols[0]], errors='coerce').fillna(0.0).astype(float)
+                        except Exception:
+                            df['fingpt_sent'] = 0.0
+                    else:
+                        df['fingpt_sent'] = 0.0
+                    if count_cols:
+                        try:
+                            df['fingpt_news'] = pd.to_numeric(fdf[count_cols[0]], errors='coerce').fillna(0.0).astype(float)
+                        except Exception:
+                            df['fingpt_news'] = 0.0
+                    else:
+                        df['fingpt_news'] = 0.0
+
+            # YOLO features
+            if self.enable_yolo_features:
+                y_csv = os.path.join(self.external_feature_dir, 'yolo', f'{symbol}.csv')
+                ydf = _load_csv_safe(y_csv)
+                if ydf is not None and len(ydf) > 0:
+                    dens_cols = [c for c in ('yolo_density', 'density', 'det_density') if c in ydf.columns]
+                    bull_cols = [c for c in ('yolo_bull', 'bull', 'bull_count') if c in ydf.columns]
+                    bear_cols = [c for c in ('yolo_bear', 'bear', 'bear_count') if c in ydf.columns]
+                    score_cols = [c for c in ('yolo_score', 'score', 'align') if c in ydf.columns]
+                    ydf = ydf.reindex(dates)
+                    if dens_cols:
+                        try:
+                            df['yolo_density'] = pd.to_numeric(ydf[dens_cols[0]], errors='coerce').fillna(0.0).astype(float)
+                        except Exception:
+                            df['yolo_density'] = 0.0
+                    else:
+                        df['yolo_density'] = 0.0
+                    if bull_cols:
+                        try:
+                            df['yolo_bull'] = pd.to_numeric(ydf[bull_cols[0]], errors='coerce').fillna(0.0).astype(float)
+                        except Exception:
+                            df['yolo_bull'] = 0.0
+                    else:
+                        df['yolo_bull'] = 0.0
+                    if bear_cols:
+                        try:
+                            df['yolo_bear'] = pd.to_numeric(ydf[bear_cols[0]], errors='coerce').fillna(0.0).astype(float)
+                        except Exception:
+                            df['yolo_bear'] = 0.0
+                    else:
+                        df['yolo_bear'] = 0.0
+                    if score_cols:
+                        try:
+                            df['yolo_score'] = pd.to_numeric(ydf[score_cols[0]], errors='coerce').fillna(0.0).astype(float)
+                        except Exception:
+                            df['yolo_score'] = 0.0
+                    else:
+                        df['yolo_score'] = 0.0
+        except Exception as e:
+            logger.debug(f"External feature merge skipped: {e}")
     
     def _add_advanced_indicators(self, df):
         """Gelişmiş teknik indikatörler"""
@@ -358,6 +573,13 @@ class EnhancedMLSystem:
             logger.error(f"Veri temizleme hatası: {e}")
             return df
     
+    def _should_halt(self) -> bool:
+        """Eğitim sırasında dıştan durdurma talebi var mı kontrol et"""
+        try:
+            return bool(self.stop_file_path and os.path.exists(self.stop_file_path))
+        except Exception:
+            return False
+
     def train_enhanced_models(self, symbol, data):
         """Gelişmiş modelleri eğit"""
         try:
@@ -371,7 +593,7 @@ class EnhancedMLSystem:
             logger.info(f"📊 Veri boyutu: {data.shape}")
             
             # Feature engineering
-            df_features = self.create_advanced_features(data)
+            df_features = self.create_advanced_features(data, symbol=symbol)
             df_features = df_features.dropna()
             
             # Clean infinite and large values
@@ -398,6 +620,11 @@ class EnhancedMLSystem:
             
             # Her tahmin ufku için model eğit
             for horizon in self.prediction_horizons:
+                # Graceful stop kontrolü
+                if self._should_halt():
+                    logger.warning("⛔ Stop sentinel tespit edildi, eğitim durduruluyor")
+                    # Kısmi sonuçları kaydetmeden çık
+                    return False
                 logger.info(f"📈 {symbol} - {horizon} gün tahmini için model eğitimi")
                 
                 # Target variable: forward return (percentage)
@@ -431,7 +658,7 @@ class EnhancedMLSystem:
                             learning_rate=0.05,         # Decreased from 0.1 for stability
                             subsample=0.8,              # NEW: Row sampling for generalization
                             colsample_bytree=0.8,       # NEW: Column sampling
-                            n_jobs=2,                   # ⚡ CPU LIMIT: Max 2 cores (prevent %100 CPU)
+                            n_jobs=self.train_threads,  # ENV: Parallelism
                             min_child_weight=5,         # NEW: Regularization
                             gamma=0.1,                  # NEW: Pruning parameter
                             reg_alpha=0.1,              # NEW: L1 regularization
@@ -448,9 +675,9 @@ class EnhancedMLSystem:
                                 y_train, y_val = y[train_idx], y[val_idx]
                                 
                                 # ⚡ FIX: Skip early stopping if insufficient validation data
-                                if len(val_idx) >= 10:
+                                if len(val_idx) >= self.early_stop_min_val:
                                     # Use early stopping with eval_set
-                                    xgb_model.set_params(early_stopping_rounds=50)
+                                    xgb_model.set_params(early_stopping_rounds=self.early_stop_rounds)
                                     xgb_model.fit(
                                         X_train, y_train,
                                         eval_set=[(X_val, y_val)],
@@ -469,7 +696,11 @@ class EnhancedMLSystem:
                                 logger.error(f"XGBoost fold {fold} error: {e}")
                                 # Don't raise - continue with other folds
                         
-                        # Final training
+                        # Final training (disable early stopping to avoid eval_set requirement)
+                        try:
+                            xgb_model.set_params(early_stopping_rounds=None)
+                        except Exception:
+                            pass
                         xgb_model.fit(X, y)
                         xgb_pred = xgb_model.predict(X[-100:])  # Last 100 returns for validation
                         
@@ -505,13 +736,13 @@ class EnhancedMLSystem:
                             learning_rate=0.05,         # Decreased from 0.1 for stability
                             num_leaves=63,              # ✨ TUNED: Increased from 31
                             min_data_in_leaf=15,        # ✨ TUNED: Decreased from 20
-                            num_threads=2,              # ⚡ CPU LIMIT: Max 2 threads
+                            num_threads=self.train_threads,  # ENV: Parallelism
                             subsample=0.8,              # NEW: Row sampling
                             colsample_bytree=0.8,       # NEW: Feature sampling
                             reg_alpha=0.1,              # NEW: L1 regularization
                             reg_lambda=1.0,             # NEW: L2 regularization
                             random_state=42,
-                            n_jobs=-1,
+                            n_jobs=self.train_threads,
                             verbose=-1
                         )
                         
@@ -520,8 +751,18 @@ class EnhancedMLSystem:
                         for train_idx, val_idx in tscv.split(X):
                             X_train, X_val = X[train_idx], X[val_idx]
                             y_train, y_val = y[train_idx], y[val_idx]
-                            
-                            lgb_model.fit(X_train, y_train)
+
+                            if len(val_idx) >= self.early_stop_min_val:
+                                # LightGBM sklearn wrapper: use callbacks for early stopping
+                                lgb_model.fit(
+                                    X_train, y_train,
+                                    eval_set=[(X_val, y_val)],
+                                    eval_metric='rmse',
+                                    callbacks=[lgb.early_stopping(self.early_stop_rounds, verbose=False)],
+                                )
+                            else:
+                                lgb_model.fit(X_train, y_train)
+
                             pred = lgb_model.predict(X_val)
                             score = r2_score(y_val, pred)
                             lgb_scores.append(score)
@@ -562,13 +803,15 @@ class EnhancedMLSystem:
                             learning_rate=0.05,         # Decreased from 0.1
                             l2_leaf_reg=2.0,            # ✨ TUNED: Decreased from 3.0
                             border_count=128,           # NEW: Optimal splits
-                            thread_count=2,             # ⚡ CPU LIMIT: Max 2 threads
+                            thread_count=self.train_threads,  # ENV: Parallelism
                             subsample=0.8,              # NEW: Row sampling
                             rsm=0.8,                    # NEW: Feature sampling (Random Subspace Method)
                             random_seed=42,
                             allow_writing_files=False,
                             train_dir=self.catboost_train_dir,
-                            logging_level='Silent'
+                            logging_level='Silent',
+                            od_type='Iter',
+                            od_wait=self.early_stop_rounds
                         )
                         
                         # Cross-validation (on returns)
@@ -576,14 +819,23 @@ class EnhancedMLSystem:
                         for train_idx, val_idx in tscv.split(X):
                             X_train, X_val = X[train_idx], X[val_idx]
                             y_train, y_val = y[train_idx], y[val_idx]
-                            
-                            cat_model.fit(X_train, y_train)
+
+                            if len(val_idx) >= self.early_stop_min_val:
+                                cat_model.fit(
+                                    X_train, y_train,
+                                    eval_set=(X_val, y_val),
+                                    use_best_model=True,
+                                    verbose=False
+                                )
+                            else:
+                                cat_model.fit(X_train, y_train, verbose=False)
+
                             pred = cat_model.predict(X_val)
                             score = r2_score(y_val, pred)
                             cat_scores.append(score)
                         
                         # Final training
-                        cat_model.fit(X, y)
+                        cat_model.fit(X, y, verbose=False)
                         cat_pred = cat_model.predict(X[-100:])
                         
                         # CRITICAL FIX: R² to confidence conversion
@@ -686,7 +938,7 @@ class EnhancedMLSystem:
                     return None
             
             # Feature engineering
-            df_features = self.create_advanced_features(current_data)
+            df_features = self.create_advanced_features(current_data, symbol=symbol)
             df_features = df_features.dropna()
             
             # Clean data

@@ -10,7 +10,7 @@ import os
 import json
 from datetime import datetime
 from typing import Dict, Any, List
-import pandas as pd
+# pandas is optional for this module (used in training branches only)
 
 try:
     import gevent
@@ -202,6 +202,7 @@ class WorkingAutomationPipeline:
                                     from models import Stock
                                     from pattern_detector import HybridPatternDetector
                                     det = HybridPatternDetector()
+                                    # Universe: ALL active stocks (watchlist zaten bu kümenin alt kümesidir)
                                     symbols: List[str] = [s.symbol for s in Stock.query.filter_by(is_active=True).order_by(Stock.symbol.asc()).all()]
                                     total_symbols = len(symbols)
                                     analyzed = 0
@@ -282,124 +283,12 @@ class WorkingAutomationPipeline:
                                 total_symbols = 0
                                 col_res = {'success': False, 'error': 'CONTINUOUS_FULL mode removed'}
 
-                            # 2. Periodic Enhanced ML training via coordinator
+                            # 2. ML training gated off in automation (cron-only)
                             try:
-                                train_interval = 0
-                                # Training interval is controlled purely by environment overrides
-                                try:
-                                    train_interval = int(os.getenv('ML_TRAIN_INTERVAL_CYCLES', '1'))
-                                except Exception:
-                                    train_interval = 1
-                                if train_interval > 0 and (cycle_count % train_interval == 0):
-                                    from bist_pattern.core.ml_coordinator import get_ml_coordinator
-                                    mlc = get_ml_coordinator()
-                                    
-                                    # Check if global training is already active (crontab or other)
-                                    training_status = mlc.is_global_training_active()
-                                    if training_status['active']:
-                                        logger.info(f"⏸️ ML training skipped - already active by {training_status.get('started_by', 'unknown')}")
-                                        continue
-                                    
-                                    # Try to acquire global training lock
-                                    if not mlc.acquire_global_training_lock("automation", timeout=10):
-                                        logger.warning("⏰ Could not acquire ML training lock - skipping this cycle")
-                                        continue
-                                    
-                                    try:
-                                        # Candidate selection (reuse coordinator logic)
-                                        # Max trainings per cycle is controlled purely by environment overrides
-                                        max_train_per_cycle = int(os.getenv('ML_TRAIN_PER_CYCLE', '50'))
-                                        candidates = mlc.get_training_candidates(symbols, max_candidates=max_train_per_cycle)
-                                        trained = 0
-                                        # Training attempt/skip accounting
-                                        skip_reasons = {'insufficient_data': 0, 'enhanced_unavailable': 0, 'cooldown_active': 0, 'model_fresh_or_exists': 0, 'unknown': 0}
-                                        attempts = 0
-                                        successes = 0
-                                        for sym in candidates:
-                                            # Build DataFrame from DB (last 2 years)
-                                            try:
-                                                from sqlalchemy import and_  # type: ignore
-                                                from models import StockPrice, Stock  # type: ignore
-                                                stock_obj = Stock.query.filter_by(symbol=sym).first()
-                                                if not stock_obj:
-                                                    continue
-                                                from datetime import timedelta
-                                                cutoff = datetime.now() - timedelta(days=730)
-                                                rows = (
-                                                    StockPrice.query
-                                                    .filter(and_(StockPrice.stock_id == stock_obj.id, StockPrice.date >= cutoff))
-                                                    .order_by(StockPrice.date.asc())
-                                                    .all()
-                                                )
-                                                if not rows:
-                                                    continue
-                                                df_rows = []
-                                                for r in rows:
-                                                    df_rows.append({
-                                                        'date': r.date,
-                                                        'open': float(r.open_price),
-                                                        'high': float(r.high_price),
-                                                        'low': float(r.low_price),
-                                                        'close': float(r.close_price),
-                                                        'volume': int(r.volume or 0),
-                                                    })
-                                                df = pd.DataFrame(df_rows)
-                                                if not df.empty:
-                                                    df['date'] = pd.to_datetime(df['date'])
-                                                    df.set_index('date', inplace=True)
-                                                    # Evaluate gate for logging
-                                                    try:
-                                                        ok, reason = mlc.evaluate_training_gate(sym, len(df))
-                                                    except Exception:
-                                                        ok, reason = False, 'unknown'
-                                                    if ok:
-                                                        attempts += 1
-                                                        
-                                                        # ⚡ ASYNC: Train in background (non-blocking)
-                                                        def _train_async(symbol, data):
-                                                            """Background training task - non-blocking"""
-                                                            try:
-                                                                # Enhanced ML training
-                                                                result = mlc.train_enhanced_model_if_needed(symbol, data)
-                                                                if result:
-                                                                    logger.info(f"✅ Async training completed: {symbol}")
-                                                                
-                                                                # Basic ML training
-                                                                try:
-                                                                    basic_ml = mlc._get_basic_ml()
-                                                                    if basic_ml:
-                                                                        basic_ml.train_models(symbol, data)
-                                                                except Exception as e:
-                                                                    logger.debug(f"Basic ML training error for {symbol}: {e}")
-                                                            except Exception as e:
-                                                                logger.error(f"Async training error for {symbol}: {e}")
-                                                        
-                                                        # Spawn greenlet (non-blocking)
-                                                        if GEVENT_AVAILABLE:
-                                                            gevent.spawn(_train_async, sym, df)
-                                                            trained |= 1  # Mark as queued
-                                                        else:
-                                                            # Fallback: sync training
-                                                            if mlc.train_enhanced_model_if_needed(sym, df):
-                                                                successes += 1
-                                                                trained |= 1
-                                                    else:
-                                                        skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
-                                            except Exception:
-                                                continue
-                                        try:
-                                            msg = (
-                                                f"🧠 ML training cycle: candidates={len(candidates)} attempts={attempts} "
-                                                f"success={successes} skips={sum(skip_reasons.values())} "
-                                                f"skip_breakdown={skip_reasons}"
-                                            )
-                                            _broadcast('INFO', msg, 'ml_training')
-                                        except Exception:
-                                            pass
-                                    finally:
-                                        # Always release the global training lock
-                                        mlc.release_global_training_lock()
-                                        logger.info("🔓 ML training lock released by automation")
+                                if str(os.getenv('ENABLE_TRAINING_IN_CYCLE', '0')).lower() in ('1', 'true', 'yes'):
+                                    logger.info('⚠️ Training-in-cycle enabled by env; consider disabling in production')
+                                else:
+                                    logger.info('⏭️ Skipping ML training in cycle (cron-only policy active)')
                             except Exception:
                                 pass
 
@@ -734,10 +623,14 @@ class WorkingAutomationPipeline:
                 
                 def get_tier(v):
                     v = float(v or 0)
-                    if v >= p95: return 'very_high'
-                    if v >= p75: return 'high'
-                    if v >= p40: return 'medium'
-                    if v >= p15: return 'low'
+                    if v >= p95:
+                        return 'very_high'
+                    if v >= p75:
+                        return 'high'
+                    if v >= p40:
+                        return 'medium'
+                    if v >= p15:
+                        return 'low'
                     return 'very_low'
                 
                 # Build symbols with tiers

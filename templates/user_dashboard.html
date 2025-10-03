@@ -339,9 +339,12 @@
         let retryQueue = [];
         let lastPatternTs = 0; // epoch seconds
         let watchdogTimer = null;
-        const userId = 'user_' + Math.random().toString(36).substr(2, 9);
+        // Use bare random id; server prefixes with "user_" → avoids "user_user_..."
+        const userId = Math.random().toString(36).substr(2, 9);
         // Pattern analysis cache per symbol (to access ml_unified on cards)
         window.__analysisBySymbol = window.__analysisBySymbol || {};
+        // Batch predictions cache per symbol (to re-render on horizon change without refetch)
+        window.__predictionsBySymbol = window.__predictionsBySymbol || {};
         // Watched symbol fast lookup + debug flag
         let watchedSet = new Set();
         window.__DEBUG_UI = (localStorage.getItem('DEBUG_UI') === '1');
@@ -427,7 +430,8 @@
                     wsRequestedOnce = true;
                 }
                 try {
-                    if (watchedStocks && watchedStocks.length > 0) {
+                    // Detay panel gizli; tekil tahmin çağrısını gereksiz yere tetikleme
+                    if (watchedStocks && watchedStocks.length > 0 && isPredictionsPanelVisible()) {
                         loadPredictions(watchedStocks[0].symbol);
                     }
                 } catch (e) { /* ignore */ }
@@ -631,7 +635,7 @@
             saveWatchedStocks();
             rebuildWatchedSet();
             socket.emit('subscribe_stock', {symbol});
-            socket.emit('request_pattern_analysis', {symbol});
+            // İlk yükte analiz tetikleme yok; batch API cache'ten dolduracak
             renderWatchlist();
             
             // ⚡ FIX: Refresh predictions after render
@@ -674,7 +678,14 @@
                 const data = await res.json();
                 if (data.status === 'success') {
                     watchedStocks = (data.watchlist || []).map(w => ({ symbol: w.symbol, alertType: 'all', addedAt: w.created_at }));
-                    saveWatchedStocks();
+                    // Gereksiz tekrar yazımı azalt: yalnızca değişim varsa yaz
+                    try {
+                        const prev = JSON.stringify(JSON.parse(localStorage.getItem('watchedStocks')||'[]'));
+                        const next = JSON.stringify(watchedStocks);
+                        if (prev !== next) {
+                            saveWatchedStocks();
+                        }
+                    } catch (_) { saveWatchedStocks(); }
                     rebuildWatchedSet();
                 }
             } catch (e) { /* ignore */ }
@@ -712,6 +723,7 @@
                             <div id="price-${stock.symbol}" class="text-muted">Fiyat yükleniyor...</div>
                             <div id="signal-${stock.symbol}" class="text-muted">Sinyal bekleniyor...</div>
                             <div id="meta-${stock.symbol}" class="small text-muted"></div>
+                            <div id="ts-${stock.symbol}" class="small text-muted"></div>
                             <button class="btn btn-sm btn-outline-danger mt-1" onclick="removeStock('${stock.symbol}')">
                                 <i class="fas fa-trash"></i>
                             </button>
@@ -730,9 +742,9 @@
             // Mevcut analiz önbelleğinden rozetleri geri yükle (re-render sonrası kaybolmasın)
             try { hydratePatternsFromCache(); } catch (e) { /* ignore */ }
 
-            // İlk sembol için tahminleri otomatik yükle
+            // İlk sembol için tekil tahmin çağrısı yapma; kart altı batch ile geliyor
             try {
-                if (watchedStocks.length > 0) {
+                if (watchedStocks.length > 0 && isPredictionsPanelVisible()) {
                     loadPredictions(watchedStocks[0].symbol);
                 }
             } catch (e) { /* ignore */ }
@@ -764,7 +776,7 @@
                         console.log('✅ All symbols already cached');
                     }
                 } else {
-                    console.warn('⚠️ WebSocket not connected, using REST fallback');
+                    // Defer pattern batch until WebSocket connects (handled in subscribeToAllStocks)
                 }
             } catch (e) { console.error('Load error:', e); }
         }
@@ -836,79 +848,124 @@
             // Update last update time
             document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
 
-            // Load predictions for this symbol as soon as a fresh analysis arrives
-            try { loadPredictions(symbol); } catch (e) { /* ignore */ }
+            // Detay panel görünürse tekil tahminleri yükle
+            try { if (isPredictionsPanelVisible()) loadPredictions(symbol); } catch (e) { /* ignore */ }
 
-            // Render compact pattern badges for watchlist card
+            // Render compact badges for watchlist card (ML birleşik + teknik/görsel)
             try {
                 const pattEl = document.getElementById(`patt-${symbol}`);
-                if (pattEl && analysis && Array.isArray(analysis.patterns)) {
+                if (pattEl && analysis) {
                     const maxShow = 6;
-                    // Seçili ufka göre ML/ENH rozetleri filtrele (görsel/teknik her zaman görünür)
                     const horizon = (document.getElementById('pred-sort-horizon')?.value || '7d').toLowerCase();
-                    const horizonFilter = (p) => {
-                        const src = (p.source || '').toUpperCase();
-                        if (src === 'ML_PREDICTOR' || src === 'ENHANCED_ML') {
-                            const nm = String(p.pattern || '').toUpperCase();
-                            return nm.includes(horizon.toUpperCase()) || nm.includes(horizon.toUpperCase().replace('D','G'));
+
+                    // 1) ML birleşik rozetleri (seçili ufuk için Temel/Gelişmiş ve 'en iyi' vurgusu)
+                    const uni = analysis.ml_unified || {};
+                    const hu = uni && uni[horizon] ? uni[horizon] : null;
+                    const mlBadges = [];
+                    if (hu && (hu.basic || hu.enhanced)) {
+                        const best = (hu.best || '').toLowerCase();
+                        const badges = [];
+                        if (hu.basic) {
+                            const c = Math.round(((hu.basic.confidence || hu.basic.conf || 0) || 0) * 100);
+                            badges.push({ key: 'basic', html: `<span class="badge bg-info me-1 mb-1 ${best==='basic'?'fw-bold':''}" title="Temel • Güven %${c}">Temel ${horizon.toUpperCase()}</span>` });
                         }
-                        return true;
-                    };
-                    const items = analysis.patterns.filter(horizonFilter).slice(0, maxShow).map(p => {
-                        const src = (p.source || '').toUpperCase();
-                        const conf = Math.round((p.confidence || 0) * 100);
-                        const name = typeof translatePattern === 'function' ? translatePattern(p.pattern || '') : (p.pattern || '').toString().replace(/_/g, ' ');
-                        const color = src === 'VISUAL_YOLO' ? 'primary' : src === 'ENHANCED_ML' ? 'warning' : src === 'ML_PREDICTOR' ? 'info' : src === 'FINGPT' ? 'success' : src === 'ADVANCED_TA' ? 'danger' : 'secondary';
-                        return `<span class="badge bg-${color} me-1 mb-1" title="${translateSource(src)} • %${conf}">${name}</span>`;
-                    }).join('');
-                    pattEl.innerHTML = items || '<span class="text-muted small">Formasyon yok</span>';
+                        if (hu.enhanced) {
+                            const c = Math.round(((hu.enhanced.confidence || hu.enhanced.conf || 0) || 0) * 100);
+                            badges.push({ key: 'enhanced', html: `<span class="badge bg-warning text-dark me-1 mb-1 ${best==='enhanced'?'fw-bold':''}" title="Gelişmiş • Güven %${c}">Gelişmiş ${horizon.toUpperCase()}</span>` });
+                        }
+                        // En iyi olanı önce göster
+                        badges.sort((a,b)=> (a.key===best? -1 : b.key===best? 1 : 0));
+                        mlBadges.push(...badges.map(b=>b.html));
+                    }
+
+                    // 2) Teknik/Görsel formasyon rozetleri (ML kaynaklı olanları hariç tut)
+                    const patternsArr = Array.isArray(analysis.patterns) ? analysis.patterns : [];
+                    const others = patternsArr
+                        .filter(p => {
+                            const src = (p.source || '').toUpperCase();
+                            return src !== 'ML_PREDICTOR' && src !== 'ENHANCED_ML';
+                        })
+                        .slice(0, Math.max(0, maxShow - mlBadges.length))
+                        .map(p => {
+                            const src = (p.source || '').toUpperCase();
+                            const conf = Math.round((p.confidence || 0) * 100);
+                            const name = typeof translatePattern === 'function' ? translatePattern(p.pattern || '') : (p.pattern || '').toString().replace(/_/g, ' ');
+                            const color = src === 'VISUAL_YOLO' ? 'primary' : src === 'FINGPT' ? 'success' : src === 'ADVANCED_TA' ? 'danger' : 'secondary';
+                            return `<span class="badge bg-${color} me-1 mb-1" title="${translateSource(src)} • %${conf}">${name}</span>`;
+                        })
+                        .join('');
+
+                    // If no ML unified for selected horizon but predictions exist, show model from predictions map
+                    let html = mlBadges.join('') + others;
+                    if (!mlBadges.length) {
+                        try {
+                            const predEnt = (window.__predictionsBySymbol || {})[symbol];
+                            const model = predEnt && predEnt.model ? String(predEnt.model) : '';
+                            if (model) {
+                                const tag = model.toLowerCase()==='enhanced' ? 'Gelişmiş' : 'Temel';
+                                html = `<span class="badge ${model.toLowerCase()==='enhanced'?'bg-warning text-dark':'bg-info'} me-1 mb-1">${tag} ${horizon.toUpperCase()}</span>` + html;
+                            }
+                        } catch (_) { /* ignore */ }
+                    }
+                    // Eğer hiçbir rozet oluşmadıysa (veri yok/stale), kullanıcıya ipucu ver
+                    if (!html) {
+                        try {
+                            const ana = (window.__analysisBySymbol || {})[symbol];
+                            const staleTxt = (ana && (ana.stale || (ana.stale_seconds && ana.stale_seconds > 0))) ? ' • (önbellek)' : '';
+                            html = `<span class="text-muted small">Formasyon yok${staleTxt}</span>`;
+                        } catch(_) {
+                            html = '<span class="text-muted small">Formasyon yok</span>';
+                        }
+                    }
+                    pattEl.innerHTML = html || '<span class="text-muted small">Formasyon yok</span>';
                 }
             } catch (e) { /* ignore */ }
+
+            // Seçili ufuk etiketi ("En iyi: ...") için hızlı yeniden çizim
+            try { rerenderPredictionsFromCache(); } catch (e) { /* ignore */ }
         }
         
         function loadWatchedStocks() {
-            console.log('🔄 loadWatchedStocks() called');
+            if (String((window.APP_ENV || '').toLowerCase()) !== 'production') {
+                console.log('🔄 loadWatchedStocks() called');
+            }
             
             // LocalStorage'dan kullanıcı hisselerini yükle
             const savedStocks = localStorage.getItem('watchedStocks');
-            console.log('💾 Raw localStorage data:', savedStocks);
+            if (String((window.APP_ENV || '').toLowerCase()) !== 'production') {
+                console.log('💾 Raw localStorage data:', savedStocks);
+            }
             
             if (savedStocks) {
                 try {
                     const parsedStocks = JSON.parse(savedStocks);
-                    console.log('📂 Parsed stocks:', parsedStocks);
+                    if (String((window.APP_ENV || '').toLowerCase()) !== 'production') {
+                        console.log('📂 Parsed stocks:', parsedStocks);
+                    }
                     
                     // Mevcut stocks array'ini tamamen değiştir
                     watchedStocks.length = 0; // Array'i temizle
                     watchedStocks.push(...parsedStocks); // Yeni verileri ekle
                     
-                    console.log('✅ Saved stocks loaded:', watchedStocks.length, watchedStocks);
+                    if (String((window.APP_ENV || '').toLowerCase()) !== 'production') {
+                        console.log('✅ Saved stocks loaded:', watchedStocks.length, watchedStocks);
+                    }
                 } catch (e) {
                     console.error('❌ Error loading saved stocks:', e);
                     watchedStocks = [];
                 }
             } else {
-                console.log('📭 No saved stocks found in localStorage');
+                if (String((window.APP_ENV || '').toLowerCase()) !== 'production') {
+                    console.log('📭 No saved stocks found in localStorage');
+                }
             }
             
-            // Eğer hiç hisse yoksa demo hisseleri ekle
-            if (watchedStocks.length === 0) {
-                console.log('🆕 Initializing demo stocks...');
-                watchedStocks = [
-                    {symbol: 'THYAO', alertType: 'all', addedAt: new Date().toISOString()},
-                    {symbol: 'GARAN', alertType: 'all', addedAt: new Date().toISOString()},
-                    {symbol: 'AKBNK', alertType: 'all', addedAt: new Date().toISOString()}
-                ];
-                console.log('🆕 Demo stocks created, now saving...');
-                saveWatchedStocks(); // LocalStorage'a kaydet
-                console.log('🆕 Demo stocks initialized and saved:', watchedStocks.length);
-            } else {
-                // Eğer localStorage'dan yüklendiyse, tekrar kaydet (verification için)
-                console.log('💾 Re-saving loaded stocks for verification...');
-                saveWatchedStocks();
-            }
+            // Demo fallback KALDIRILDI: Giriş yapan kullanıcı için sunucudan gelen watchlist zorunlu.
+            // Eğer hiçbir hisse yoksa, kullanıcıya boş durumu gösterilecek.
             
-            console.log('🎯 Final watchedStocks:', watchedStocks);
+            if (String((window.APP_ENV || '').toLowerCase()) !== 'production') {
+                console.log('🎯 Final watchedStocks:', watchedStocks);
+            }
             rebuildWatchedSet();
             renderWatchlist();
         }
@@ -956,11 +1013,7 @@
                         }
                     }
                 } else {
-                    console.warn('⚠️ Batch API failed, falling back to individual requests');
-                    // Fallback: request first few individually
-                    watchedStocks.slice(0, 3).forEach(s => {
-                        socket.emit('request_pattern_analysis', {symbol: s.symbol});
-                    });
+                    console.warn('⚠️ Batch API failed; skipping compute fallback (cache-only mode)');
                 }
             } catch (e) {
                 console.error('❌ Batch load error:', e);
@@ -998,16 +1051,16 @@
                 if (el) {
                     el.addEventListener('change', () => { 
                         try { 
-                            // ⚡ OPTIMIZED: Only refresh predictions (instant!)
-                            // Pattern analysis is loaded once on page load (batch API)
-                            // No need to reload patterns when changing horizon filter
-                            updateWatchlistPredictions(true);  // force=true for instant refresh
+                            // Ağ isteği yapmadan, mevcut tahmin önbelleğinden anında yeniden çiz
+                            rerenderPredictionsFromCache();
+                            // Pattern rozetlerini de seçili ufka göre yeniden uygula
+                            hydratePatternsFromCache();
                         } catch (e) {
                             console.error('Filter change error:', e);
                         } 
                     });
                 }
-                if (el && el.type === 'range') el.addEventListener('input', () => { try { updateWatchlistPredictions(); } catch (e) {} });
+                if (el && el.type === 'range') el.addEventListener('input', () => { try { rerenderPredictionsFromCache(); } catch (e) {} });
             });
         });
         
@@ -1183,7 +1236,7 @@
                     });
                 } catch (e) { /* ignore chart errors */ }
 
-                // Load latest analysis (REST fallback, prefer cached; fallback to non-cached on error)
+                // Load latest analysis (cache-only; file cache accepted even if stale)
                 let patternsHtml = '';
                 let patternsArr = [];
                 let analysis = null;
@@ -1193,13 +1246,20 @@
                     const r1 = await fetch(`/api/pattern-analysis/${encodeURIComponent(symbol)}?fast=1`);
                     if (r1.ok) { analysis = await r1.json(); fetchedOk = true; }
                 } catch (e) { /* ignore network error */ }
-                // 2) Fallback fetch (cache-bypass)
+                // 2) Fallback fetch (still cache-only on server, may return stale)
                 if (!analysis || !Array.isArray(analysis.patterns)) {
                     try {
                         const r2 = await fetch(`/api/pattern-analysis/${encodeURIComponent(symbol)}?v=${Date.now()}`);
                         if (r2.ok) { analysis = await r2.json(); fetchedOk = true; }
                     } catch (e) { /* ignore */ }
                 }
+                // If still no patterns but we have recent in-memory cache from watchlist, reuse it
+                try {
+                    if ((!analysis || !Array.isArray(analysis.patterns)) && window.__analysisBySymbol && window.__analysisBySymbol[symbol]) {
+                        analysis = window.__analysisBySymbol[symbol];
+                        fetchedOk = true;
+                    }
+                } catch (e) { /* ignore */ }
                 const patterns = Array.isArray(analysis && analysis.patterns) ? analysis.patterns : [];
                 patternsArr = patterns;
                 // Normalize pattern ranges to the 0..(values.length-1) window (non-fatal)
@@ -1399,7 +1459,7 @@
                         const f = (n)=> typeof n==='number'? '₺'+n.toFixed(2): '-';
                         horizons.forEach(h => {
                             const item = uni && uni[h];
-                            if (!item) { rows.push(`<div class=\"mb-1\"><strong>${h.toUpperCase()}</strong>: -</div>`); return; }
+                            if (!item) { rows.push(`<div class="mb-1"><strong>${h.toUpperCase()}</strong>: -</div>`); return; }
                             const best = item.best || (item.enhanced? 'enhanced' : (item.basic? 'basic': null));
                             let segs = [];
                             ['basic','enhanced'].forEach(src => {
@@ -1407,8 +1467,29 @@
                                     const p = item[src].price;
                                     const dp = (typeof item[src].delta_pct==='number') ? (item[src].delta_pct*100) : null;
                                     const cf = (typeof item[src].confidence==='number') ? Math.round(item[src].confidence*100) : null;
+                                    const ev = item[src].evidence || {};
+                                    const patSc = (typeof ev.pattern_score==='number') ? ev.pattern_score : null;
+                                    const sentSc = (typeof ev.sentiment_score==='number') ? ev.sentiment_score : null;
+                                    const contribRaw = (typeof ev.contrib_conf==='number') ? ev.contrib_conf : (typeof ev.confidence_adjustment==='number' ? ev.confidence_adjustment : null);
+                                    const contrib = (contribRaw!==null) ? Math.round(contribRaw*100) : null;
+                                    const boosterProb = (typeof ev.booster_prob==='number') ? ev.booster_prob : null;
+                                    const boosterContrib = (typeof ev.contrib_booster==='number') ? Math.round(ev.contrib_booster*100) : null;
+                                    const deltaContrib = (typeof ev.contrib_delta==='number') ? Math.round(ev.contrib_delta*100) : null;
                                     const tag = src==='enhanced'? 'Gelişmiş':'Temel';
-                                    segs.push(`<span class=\"me-2\">${tag}: <strong>${f(p)}</strong>${typeof dp==='number'? ` (<span class=\"${dp>=0?'text-success':'text-danger'}\">${dp>=0?'+':''}${dp.toFixed(1)}%</span>)`:''}${cf!==null? ` • Güven %${cf}`:''}</span>`);
+                                    // Evidence breakdown (optional)
+                                    let evTxt = '';
+                                    const sgnTxt = (v)=> (v>=0? '+'+v.toFixed(2) : v.toFixed(2));
+                                    if (patSc!==null || sentSc!==null || contrib!==null || boosterProb!==null || boosterContrib!==null) {
+                                        const parts = [];
+                                        if (patSc!==null) parts.push(`Pat ${sgnTxt(patSc)}`);
+                                        if (sentSc!==null) parts.push(`Sent ${sgnTxt(sentSc)}`);
+                                        if (contrib!==null) parts.push(`Δgüv ${contrib>=0?'+':''}${contrib}`);
+                                        if (boosterProb!==null) parts.push(`Boost P${Math.round(boosterProb*100)}`);
+                                        if (boosterContrib!==null) parts.push(`Δboost ${boosterContrib>=0?'+':''}${boosterContrib}`);
+                                        if (deltaContrib!==null) parts.push(`Δ% ${deltaContrib>=0?'+':''}${(deltaContrib/100).toFixed(2)}`);
+                                        evTxt = ` • <span class="text-muted">Kanıt: ${parts.join(' | ')}</span>`;
+                                    }
+                                    segs.push(`<span class=\"me-2\">${tag}: <strong>${f(p)}</strong>${typeof dp==='number'? ` (<span class=\"${dp>=0?'text-success':'text-danger'}\">${dp>=0?'+':''}${dp.toFixed(1)}%</span>)`:''}${cf!==null? ` • Güven %${cf}`:''}${evTxt}</span>`);
                                 }
                             });
                             rows.push(`<div class=\"mb-1\"><strong>${h.toUpperCase()}</strong>: ${segs.join(' ')}${best? ` <span class=\"badge bg-light text-dark ms-1\">En iyi: ${best}</span>`:''}</div>`);
@@ -1613,6 +1694,103 @@
             }
         }
 
+        function getThresholdForHorizon(h) {
+            try {
+                const key = String(h || '').toLowerCase();
+                if (key === '1d') return 0.8;   // calibrated
+                if (key === '3d') return 2.1;   // calibrated
+                if (key === '7d') return 3.0;   // calibrated
+                if (key === '14d') return 3.0;  // calibrated
+                if (key === '30d') return 2.5;  // calibrated
+                return 1.0;
+            } catch(_) { return 1.0; }
+        }
+
+        function isPredictionsPanelVisible() {
+            try {
+                const el = document.getElementById('predictions-panel');
+                if (!el) return false;
+                const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+                return el.style.display !== 'none' && (!style || style.display !== 'none');
+            } catch (_) { return false; }
+        }
+
+        function rerenderPredictionsFromCache() {
+            try {
+                const map = window.__predictionsBySymbol || {};
+                const toPct = (p, base) => {
+                    if (typeof p !== 'number' || typeof base !== 'number' || base === 0) return NaN;
+                    return ((p - base) / base) * 100;
+                };
+                const horizon = (document.getElementById('pred-sort-horizon')?.value || '7d').toLowerCase();
+                const order = (document.getElementById('pred-sort-order')?.value || 'desc').toLowerCase();
+                const minAbsLabel = document.getElementById('pred-min-abs-val');
+                const minAbs = parseFloat(document.getElementById('pred-min-abs')?.value || '0') || 0;
+                if (minAbsLabel) minAbsLabel.textContent = String(minAbs);
+                const items = (watchedStocks || []).map(ws => {
+                    const entry = map[ws.symbol] || {};
+                    const preds = entry.predictions || {};
+                    const base = (typeof entry.current_price === 'number' && isFinite(entry.current_price)) ? entry.current_price : NaN;
+                    const val = typeof preds[horizon] === 'number' ? preds[horizon] : NaN;
+                    const pct = toPct(val, base);
+                    return { symbol: ws.symbol, _pct: pct, predictions: preds, current_price: base };
+                }).sort((a,b) => {
+                    const d = (b._pct - a._pct);
+                    return order === 'asc' ? -d : d;
+                });
+                items.forEach(it => {
+                    const el = document.getElementById(`pred-${it.symbol}`);
+                    if (!el) return;
+                    const p1 = it.predictions?.['1d'];
+                    const p3 = it.predictions?.['3d'];
+                    const p7 = it.predictions?.['7d'];
+                    const p14 = it.predictions?.['14d'];
+                    const p30 = it.predictions?.['30d'];
+                    const f = (v)=> typeof v==='number'? '₺'+v.toFixed(2): '-';
+                    const chosenPct = (typeof it._pct==='number' && isFinite(it._pct)) ? it._pct : NaN;
+                    const pctStr = isNaN(chosenPct) ? '-' : `${chosenPct>=0?'+':''}${chosenPct.toFixed(1)}%`;
+                    const cls = isNaN(chosenPct) ? 'text-muted' : (chosenPct>=0 ? 'text-success' : 'text-danger');
+                    el.innerHTML = `
+                        <span class="me-3">1G: <strong>${f(p1)}</strong></span>
+                        <span class="me-3">3G: <strong>${f(p3)}</strong></span>
+                        <span class="me-3">7G: <strong>${f(p7)}</strong></span>
+                        <span class="me-3">14G: <strong>${f(p14)}</strong></span>
+                        <span class="me-3">30G: <strong>${f(p30)}</strong></span>
+                        <span class="ms-2 ${cls}">Seçili ufuk ${horizon.toUpperCase()}: ${pctStr}</span>
+                    `;
+
+                    // Also update the main signal according to selected horizon (no network, from cache)
+                    try {
+                        const sigEl = document.getElementById(`signal-${it.symbol}`);
+                        if (sigEl) {
+                            const abs = Math.abs(chosenPct);
+                            let label = 'Bekleme';
+                            let icon = 'fas fa-minus';
+                            let scls = 'signal-hold text-muted';
+                            const threshold = getThresholdForHorizon(horizon);
+                            let sig = 0; // -1 sell, 0 hold, +1 buy
+                            if (!isNaN(chosenPct)) {
+                                if (chosenPct >= threshold) sig = +1; else if (chosenPct <= -threshold) sig = -1;
+                            }
+                            const conf = Math.min(95, Math.max(50, Math.round(Math.min(1, (isNaN(abs)?0:abs)/5)*100)));
+                            if (sig > 0) {
+                                label = (conf >= 85) ? 'Yüksek alım sinyali' : 'Alım sinyali';
+                                icon = 'fas fa-arrow-up';
+                                scls = 'signal-buy';
+                            } else if (sig < 0) {
+                                label = (conf >= 85) ? 'Yüksek satış sinyali' : 'Düşük satış sinyali';
+                                icon = 'fas fa-arrow-down';
+                                scls = 'signal-sell';
+                            }
+                            sigEl.innerHTML = `<span class="${scls}"><i class="${icon} me-1"></i>${label} (%${conf})</span>`;
+                        }
+                    } catch (_) { /* ignore */ }
+                });
+            } catch (e) {
+                console.error('rerenderPredictionsFromCache error', e);
+            }
+        }
+
         async function updateWatchlistPredictions(force = false) {
             try {
                 const nowTs = Date.now() / 1000;
@@ -1639,10 +1817,23 @@
                 // Convert batch results to watchlist format
                 const results = data.results || {};
                 let debugCount = 0;
+                const sourceTs = (data && data.source_timestamp) ? data.source_timestamp : null;
                 const items = watchedStocks.map(ws => {
-                    const result = results[ws.symbol];
-                    const preds = result?.predictions || {};
-                    const current = result?.current_price || ws.price || 0;
+                    const result = results[ws.symbol] || {};
+                    const preds = result.predictions || {};
+                    // Base fiyat için çoklu kaynak fallback: batch.current_price → analysis cache → ws.price
+                    let current = result.current_price;
+                    if (!(typeof current === 'number' && isFinite(current))) {
+                        try {
+                            const ana = (window.__analysisBySymbol || {})[ws.symbol];
+                            if (ana && typeof ana.current_price === 'number' && isFinite(ana.current_price)) {
+                                current = ana.current_price;
+                            }
+                        } catch (_) {}
+                    }
+                    if (!(typeof current === 'number' && isFinite(current))) {
+                        current = (typeof ws.price === 'number' && isFinite(ws.price)) ? ws.price : NaN;
+                    }
                     
                     // ⚡ DEBUG: Log first 3 symbols
                     if (debugCount < 3) {
@@ -1656,11 +1847,15 @@
                         debugCount++;
                     }
                     
+                    // Cache per symbol for instant re-render
+                    const fetchedAt = result.source_timestamp || sourceTs || null;
+                    try { window.__predictionsBySymbol[ws.symbol] = { predictions: preds, current_price: current, model: result.model || null, fetched_at: fetchedAt }; } catch (_) {}
                     return {
                         symbol: ws.symbol,
                         current_price: current,
                         predictions: preds,  // Should be {1d: 50.14, 7d: 51.00, ...}
-                        overall_signal: result?.overall_signal || {}
+                        overall_signal: result?.overall_signal || {},
+                        fetched_at: fetchedAt
                     };
                 });
                 
@@ -1684,7 +1879,7 @@
 
                 // Compute deltas for all items (filtre uygulamadan, tüm kartları güncelleyelim)
                 const decorated = items.map(it => {
-                    const base = it.current_price;
+                    const base = (typeof it.current_price === 'number' && isFinite(it.current_price)) ? it.current_price : NaN;
                     const preds = it.predictions || {};
                     const val = typeof preds[horizon] === 'number' ? preds[horizon] : NaN;
                     const pct = toPct(val, base);
@@ -1727,7 +1922,7 @@
                         return;
                     }
                     foundCount++;
-                    const chosenPct = (it._unified && typeof it._unified.pct==='number') ? it._unified.pct : it._pct;
+                    const chosenPct = (it._unified && typeof it._unified.pct==='number' && isFinite(it._unified.pct)) ? it._unified.pct : it._pct;
                     const pctStr = isNaN(chosenPct) ? '-' : `${chosenPct>=0?'+':''}${chosenPct.toFixed(1)}%`;
                     const cls = isNaN(chosenPct) ? 'text-muted' : (chosenPct>=0 ? 'text-success' : 'text-danger');
                     const p1 = it.predictions?.['1d'];
@@ -1763,8 +1958,18 @@
                         const metaEl = document.getElementById(`meta-${it.symbol}`);
                         if (metaEl) {
                             const days = (typeof it.data_days === 'number') ? it.data_days : undefined;
-                            const last = it.last_date || '-';
-                            metaEl.textContent = `${days? days+' gün':''} ${last? ' • '+last: ''}`.trim();
+                            const last = (it.last_date && it.last_date !== '-') ? String(it.last_date) : '';
+                            const parts = [];
+                            if (typeof days === 'number') parts.push(`${days} gün`);
+                            if (last) parts.push(`• ${last}`);
+                            metaEl.textContent = parts.join(' ').trim();
+                        }
+                        // Fetch timestamp
+                        const tsEl = document.getElementById(`ts-${it.symbol}`);
+                        const ts = (window.__predictionsBySymbol[it.symbol] && window.__predictionsBySymbol[it.symbol].fetched_at) || it.fetched_at;
+                        if (tsEl && ts) {
+                            const t = new Date(ts);
+                            tsEl.textContent = `• Analiz: ${t.toLocaleString('tr-TR')}`;
                         }
                         const nameEl = document.getElementById(`name-${it.symbol}`);
                         if (nameEl && it.name) {
@@ -1775,7 +1980,7 @@
                     // Last signal snapshot (fallback gösterim)
                     try {
                         const sigEl = document.getElementById(`signal-${it.symbol}`);
-                        if (sigEl && !sigEl.textContent || /Sinyal bekleniyor/i.test(sigEl.textContent)) {
+                        if (sigEl && (!sigEl.textContent || /Sinyal bekleniyor/i.test(sigEl.textContent))) {
                             const ls = it.last_signal || {};
                             if (ls && ls.signal) {
                                 const conf = Math.round((ls.confidence || 0) * 100);
@@ -1796,7 +2001,7 @@
                             let label = 'Bekleme';
                             let icon = 'fas fa-minus';
                             let scls = 'signal-hold text-muted';
-                            const threshold = 1.0; // %1 üzeri yön
+                            const threshold = getThresholdForHorizon(horizon);
                             let sig = 0; // -1 sell, 0 hold, +1 buy
                             if (it._pct >= threshold) sig = +1; else if (it._pct <= -threshold) sig = -1;
                             const conf = Math.min(95, Math.max(50, Math.round(Math.min(1, abs/5)*100)));
@@ -1815,10 +2020,7 @@
                         }
                     } catch(e) { }
 
-                    // WS yoksa sinyali REST ile tetikle
-                    if (!(socket && socket.connected)) {
-                        try { fetchPattern(it.symbol); } catch (e) {}
-                    }
+                    // WS yoksa REST ile analiz tetikleme: devre dışı (cache-only strateji)
                 });
                 
                 // ⚡ DEBUG: Summary

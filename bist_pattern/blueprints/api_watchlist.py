@@ -84,13 +84,12 @@ def register(app):
                 except Exception:
                     pass
             db.session.commit()
+            # Cache-only: no fresh analysis on add
             try:
-                from app import get_pattern_detector
-                result = get_pattern_detector().analyze_stock(symbol)
-                if hasattr(app, 'socketio') and result:
+                if hasattr(app, 'socketio'):
                     app.socketio.emit('pattern_analysis', {
                         'symbol': symbol,
-                        'data': result,
+                        'data': {'symbol': symbol, 'status': 'pending'},
                         'timestamp': datetime.now().isoformat()
                     }, to=f'stock_{symbol}')
             except Exception:
@@ -159,10 +158,10 @@ def register(app):
             predictions_map = {}
             try:
                 import json as _json
-                import os
-                log_dir = os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
-                fpath = os.path.join(log_dir, 'ml_bulk_predictions.json')
-                if os.path.exists(fpath):
+                import os as _os
+                log_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+                fpath = _os.path.join(log_dir, 'ml_bulk_predictions.json')
+                if _os.path.exists(fpath):
                     with open(fpath, 'r') as rf:
                         data = _json.load(rf) or {}
                         predictions_map = (data.get('predictions') or {}) if isinstance(data, dict) else {}
@@ -173,10 +172,10 @@ def register(app):
             last_signal_map = {}
             try:
                 import json as _json
-                import os
-                log_dir = os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
-                snap_path = os.path.join(log_dir, 'signals_last.json')
-                if os.path.exists(snap_path):
+                import os as _os
+                log_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+                snap_path = _os.path.join(log_dir, 'signals_last.json')
+                if _os.path.exists(snap_path):
                     with open(snap_path, 'r') as rf:
                         last_signal_map = _json.load(rf) or {}
             except Exception:
@@ -211,6 +210,8 @@ def register(app):
             last_close_by_symbol = {}
             days_count_by_symbol = {}
             last_date_by_symbol = {}
+            # Ensure symbols list derivations initialized for linter safety
+            stocks: list = []
             try:
                 from sqlalchemy import func
                 sym_set = set(symbols)
@@ -261,7 +262,7 @@ def register(app):
                 if not normalized and isinstance(pred_entry, dict) and pred_entry.get('basic'):
                     normalized = _normalize(pred_entry.get('basic'))
                     model_used = model_used or 'basic'
-                s_obj = next((s for s in stocks if s.symbol == sym), None) if 'stocks' in locals() else None
+                s_obj = next((s for s in stocks if getattr(s, 'symbol', None) == sym), None)
                 ls = last_signal_map.get(sym) if isinstance(last_signal_map, dict) else None
                 response_items.append({
                     'symbol': sym,
@@ -278,12 +279,97 @@ def register(app):
             try:
                 setter = getattr(app, '_api_cache_set', None)
                 if callable(setter):
-                    setter(cache_key, payload, ttl_seconds=float(os.getenv('API_CACHE_TTL_WATCHLIST', '5')))
+                    # Ensure cache_key is defined even if previous cache read failed
+                    import os as _os
+                    ck = locals().get('cache_key') or f"watchlist_predictions:{getattr(current_user, 'id', 'anon')}"
+                    setter(ck, payload, ttl_seconds=float(_os.getenv('API_CACHE_TTL_WATCHLIST', '5')))
             except Exception:
                 pass
             return jsonify(payload)
         except Exception as e:
             app.logger.error(f"Watchlist predictions error: {e}")
+            return jsonify({'status': 'error', 'message': str(e)}), 500
+
+    @bp.route('/watchlist/cache-report', methods=['GET'])
+    def watchlist_cache_report():
+        """Return server-side cache presence for current user's watchlist.
+
+        For each symbol: pattern_cache file existence + age, and bulk predictions presence.
+        Does not trigger any computation.
+        """
+        try:
+            # Resolve effective user (supports DEV_AUTH_BYPASS)
+            user = _get_effective_user()
+            if not user:
+                return jsonify({'status': 'unauthorized'}), 401
+
+            from sqlalchemy.orm import joinedload
+            items = (
+                Watchlist.query.options(joinedload(Watchlist.stock))
+                .filter_by(user_id=user.id)
+                .all()
+            )
+            symbols = [it.stock.symbol for it in items if getattr(it, 'stock', None)]
+
+            # Load bulk predictions map
+            predictions_map = {}
+            try:
+                import os
+                import json
+                log_dir = os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+                fpath = os.path.join(log_dir, 'ml_bulk_predictions.json')
+                if os.path.exists(fpath):
+                    with open(fpath, 'r') as rf:
+                        data = json.load(rf) or {}
+                        predictions_map = (data.get('predictions') or {}) if isinstance(data, dict) else {}
+                bulk_mtime = os.path.getmtime(fpath) if os.path.exists(fpath) else None
+            except Exception:
+                predictions_map = {}
+                bulk_mtime = None
+
+            # Pattern cache directory
+            import os
+            import time
+            log_dir = os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+            pat_dir = os.path.join(log_dir, 'pattern_cache')
+            try:
+                os.makedirs(pat_dir, exist_ok=True)
+            except Exception:
+                pass
+            now = time.time()
+
+            report_items = []
+            for sym in symbols:
+                sym = str(sym or '').upper().strip()
+                p = os.path.join(pat_dir, f'{sym}.json')
+                exists = os.path.exists(p)
+                age = None
+                if exists:
+                    try:
+                        age = float(now - os.path.getmtime(p))
+                    except Exception:
+                        age = None
+                report_items.append({
+                    'symbol': sym,
+                    'pattern_cache': {'exists': bool(exists), 'age_seconds': age},
+                    'predictions': {'exists': bool(sym in predictions_map)},
+                })
+
+            missing_pattern = [it['symbol'] for it in report_items if not it['pattern_cache']['exists']]
+            missing_predictions = [it['symbol'] for it in report_items if not it['predictions']['exists']]
+
+            return jsonify({
+                'status': 'success',
+                'user_id': user.id,
+                'email': user.email,
+                'count': len(report_items),
+                'bulk_predictions_mtime': bulk_mtime,
+                'missing_pattern': missing_pattern,
+                'missing_predictions': missing_predictions,
+                'items': report_items,
+            })
+        except Exception as e:
+            app.logger.error(f"Watchlist cache report error: {e}")
             return jsonify({'status': 'error', 'message': str(e)}), 500
 
     app.register_blueprint(bp)
