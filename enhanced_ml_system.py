@@ -552,11 +552,13 @@ class EnhancedMLSystem:
                 up_move = high - high.shift()
                 down_move = low.shift() - low
                 
-                plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
-                minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+                # Convert to Series with proper index
+                plus_dm = pd.Series(np.where((up_move > 0) & (up_move > down_move), up_move, 0), index=df.index)
+                minus_dm = pd.Series(np.where((down_move > 0) & (down_move > up_move), down_move, 0), index=df.index)
                 
-                plus_di = 100 * pd.Series(plus_dm).rolling(14).mean() / atr
-                minus_di = 100 * pd.Series(minus_dm).rolling(14).mean() / atr
+                # Directional Indicators
+                plus_di = 100 * plus_dm.rolling(14).mean() / (atr + 1e-10)
+                minus_di = 100 * minus_dm.rolling(14).mean() / (atr + 1e-10)
                 
                 # ADX
                 dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10)
