@@ -70,29 +70,33 @@ class PurgedTimeSeriesSplit:
 
 # Enhanced ML Models
 try:
-    import xgboost as xgb
+    import xgboost as xgb  # type: ignore[import]
     XGBOOST_AVAILABLE = True
 except ImportError:
     XGBOOST_AVAILABLE = False
+    xgb = None  # type: ignore[assignment]
 
 try:
-    import lightgbm as lgb
+    import lightgbm as lgb  # type: ignore[import]
     LIGHTGBM_AVAILABLE = True
 except ImportError:
     LIGHTGBM_AVAILABLE = False
+    lgb = None  # type: ignore[assignment]
 
 try:
-    import catboost as cb
+    import catboost as cb  # type: ignore[import]
     CATBOOST_AVAILABLE = True
 except ImportError:
     CATBOOST_AVAILABLE = False
+    cb = None  # type: ignore[assignment]
 
 # Base ML system
 try:
-    from ml_prediction_system import MLPredictionSystem
+    from ml_prediction_system import MLPredictionSystem  # type: ignore[import]
     BASE_ML_AVAILABLE = True
 except ImportError:
     BASE_ML_AVAILABLE = False
+    MLPredictionSystem = None  # type: ignore[misc,assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +160,7 @@ class EnhancedMLSystem:
         
         # Base ML system
         if BASE_ML_AVAILABLE:
-            self.base_ml = MLPredictionSystem()
+            self.base_ml = MLPredictionSystem()  # type: ignore[misc]
         
         # CatBoost çalışma dizini (write permission hatalarını önlemek için)
         try:
@@ -322,7 +326,10 @@ class EnhancedMLSystem:
             df['pat_net3'] = float(bull3 - bear3)
             # Normalize today's raw signal to [-1, 1]
             try:
-                today_raw = float(pats.iloc[-1]) if len(pats) else 0.0
+                if hasattr(pats, 'iloc') and hasattr(pats, '__len__') and len(pats) > 0:  # type: ignore[arg-type]
+                    today_raw = float(pats.iloc[-1])
+                else:
+                    today_raw = 0.0
             except Exception:
                 today_raw = 0.0
             df['pat_today'] = float(np.clip(today_raw / 100.0, -1.0, 1.0))
@@ -758,7 +765,7 @@ class EnhancedMLSystem:
                         # Previous: n_estimators=100 was too few, causing underfitting
                         # Added regularization to prevent overfitting
                         # Added early stopping for optimal model complexity
-                        xgb_model = xgb.XGBRegressor(
+                        xgb_model = xgb.XGBRegressor(  # type: ignore[union-attr]
                             n_estimators=500,           # Increased from 100
                             max_depth=8,                # Increased from 6 for more expressiveness
                             learning_rate=0.05,         # Decreased from 0.1 for stability
@@ -836,7 +843,7 @@ class EnhancedMLSystem:
                 if LIGHTGBM_AVAILABLE:
                     try:
                         # ✨ IMPROVED: Optimized hyperparameters (matched with XGBoost quality)
-                        lgb_model = lgb.LGBMRegressor(
+                        lgb_model = lgb.LGBMRegressor(  # type: ignore[union-attr]
                             n_estimators=500,           # Increased from 100
                             max_depth=8,                # Increased from 6
                             learning_rate=0.05,         # Decreased from 0.1 for stability
@@ -864,7 +871,7 @@ class EnhancedMLSystem:
                                     X_train, y_train,
                                     eval_set=[(X_val, y_val)],
                                     eval_metric='rmse',
-                                    callbacks=[lgb.early_stopping(self.early_stop_rounds, verbose=False)],
+                                    callbacks=[lgb.early_stopping(self.early_stop_rounds, verbose=False)],  # type: ignore[union-attr]
                                 )
                             else:
                                 lgb_model.fit(X_train, y_train)
@@ -903,7 +910,7 @@ class EnhancedMLSystem:
                 if CATBOOST_AVAILABLE:
                     try:
                         # ✨ IMPROVED: Optimized hyperparameters (matched with XGBoost quality)
-                        cat_model = cb.CatBoostRegressor(
+                        cat_model = cb.CatBoostRegressor(  # type: ignore[union-attr]
                             iterations=500,             # Increased from 100
                             depth=8,                    # Increased from 6
                             learning_rate=0.05,         # Decreased from 0.1
@@ -990,7 +997,7 @@ class EnhancedMLSystem:
                         symbol=symbol,
                         model_predictor=self,  # self has predict_enhanced method
                         historical_data=data,
-                        horizons=self.prediction_horizons
+                        horizons=[f"{h}d" for h in self.prediction_horizons]  # Convert to string format
                     )
                     
                     # Store backtest results
