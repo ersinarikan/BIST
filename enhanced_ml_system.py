@@ -766,7 +766,9 @@ class EnhancedMLSystem:
                 logger.warning("No macro data found in VT")
                 
         except Exception as e:
+            import traceback
             logger.error(f"Macro features error: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             # Fallback: zero features
             for col in ['usdtry', 'usdtry_change_1d', 'usdtry_change_5d', 'usdtry_change_20d',
                        'cds', 'cds_change_5d', 'rate', 'rate_change_20d']:
