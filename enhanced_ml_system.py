@@ -742,10 +742,10 @@ class EnhancedMLSystem:
                 macro_data = macro_data.reindex(df.index, method='ffill')
                 
                 # Add columns directly (in-place!) + Convert to float64!
-                df['usdtry'] = pd.to_numeric(macro_data['usdtry'], errors='coerce').fillna(method='ffill').fillna(method='bfill').fillna(0).astype('float64')
-                df['cds'] = pd.to_numeric(macro_data['cds'], errors='coerce').fillna(method='ffill').fillna(method='bfill').fillna(0).astype('float64')
-                df['rate'] = pd.to_numeric(macro_data['rate'], errors='coerce').fillna(method='ffill').fillna(method='bfill').fillna(0).astype('float64')
-                logger.info(f"✅ Macro base features added: usdtry, cds, rate (dtype=float64)")
+                df['usdtry'] = pd.to_numeric(macro_data['usdtry'], errors='coerce').ffill().bfill().fillna(0).astype('float64')
+                df['cds'] = pd.to_numeric(macro_data['cds'], errors='coerce').ffill().bfill().fillna(0).astype('float64')
+                df['rate'] = pd.to_numeric(macro_data['rate'], errors='coerce').ffill().bfill().fillna(0).astype('float64')
+                logger.info("✅ Macro base features added: usdtry, cds, rate (dtype=float64)")
                 
                 # Create derivative features
                 df['usdtry_change_1d'] = df['usdtry'].pct_change().fillna(0)
@@ -753,7 +753,7 @@ class EnhancedMLSystem:
                 df['usdtry_change_20d'] = df['usdtry'].pct_change(20).fillna(0)
                 df['cds_change_5d'] = df['cds'].pct_change(5).fillna(0)
                 df['rate_change_20d'] = df['rate'].pct_change(20).fillna(0)
-                logger.info(f"✅ Macro derivative features added (5 changes)")
+                logger.info("✅ Macro derivative features added (5 changes)")
                 
                 logger.info(f"✅ Macro features complete: {len(macro_data)} days merged, 8 features")
             else:
