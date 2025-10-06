@@ -1160,11 +1160,10 @@ class EnhancedMLSystem:
                                 cat_model.fit(
                                     X_train, y_train,
                                     eval_set=(X_val, y_val),
-                                    use_best_model=True,
-                                    verbose=False
-                                )
+                                    use_best_model=True
+                                )  # logging_level in model params
                             else:
-                                cat_model.fit(X_train, y_train, verbose=False)
+                                cat_model.fit(X_train, y_train)  # logging_level in model params
 
                             pred = cat_model.predict(X_val)
                             cat_oof_preds[val_idx] = pred  # Save OOF
@@ -1203,11 +1202,11 @@ class EnhancedMLSystem:
                                 cat_pred = np.mean(seed_predictions, axis=0)
                                 logger.info(f"CatBoost: Seed bagging with {len(seed_predictions)} seeds")
                             else:
-                                cat_model.fit(X, y, verbose=False)
+                                cat_model.fit(X, y)  # logging_level in params
                                 cat_pred = cat_model.predict(X[-100:])
                         else:
                             # Original: Single seed
-                            cat_model.fit(X, y, verbose=False)
+                            cat_model.fit(X, y)  # logging_level in params
                             cat_pred = cat_model.predict(X[-100:])
                         
                         # CRITICAL FIX: R² to confidence conversion
