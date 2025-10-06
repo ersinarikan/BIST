@@ -529,6 +529,17 @@ class EnhancedMLSystem:
                 df['vpt'] = df['volume'] * ((df['close'] - df['close'].shift()) / df['close'].shift())
                 df['vpt_sma'] = df['vpt'].rolling(10).mean()
             
+            # ⚡ NEW: Bollinger Bands (3 features)
+            sma_20 = df['close'].rolling(20).mean()
+            std_20 = df['close'].rolling(20).std()
+            df['bb_upper'] = sma_20 + (2 * std_20)
+            df['bb_lower'] = sma_20 - (2 * std_20)
+            df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / sma_20
+            
+            # ⚡ NEW: EMA (2 features)
+            df['ema_12'] = df['close'].ewm(span=12).mean()
+            df['ema_26'] = df['close'].ewm(span=26).mean()
+            
         except Exception as e:
             logger.error(f"Microstructure features hatası: {e}")
     
