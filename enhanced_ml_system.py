@@ -342,21 +342,11 @@ class EnhancedMLSystem:
             except Exception:
                 return
 
-            last3 = pats.tail(3)
-            bull3 = int((last3 > 0).sum())
-            bear3 = int((last3 < 0).sum())
-            df['pat_bull3'] = float(bull3)
-            df['pat_bear3'] = float(bear3)
-            df['pat_net3'] = float(bull3 - bear3)
-            # Normalize today's raw signal to [-1, 1]
-            try:
-                if hasattr(pats, 'iloc') and hasattr(pats, '__len__') and len(pats) > 0:  # type: ignore[arg-type]
-                    today_raw = float(pats.iloc[-1])
-                else:
-                    today_raw = 0.0
-            except Exception:
-                today_raw = 0.0
-            df['pat_today'] = float(np.clip(today_raw / 100.0, -1.0, 1.0))
+            # ⚠️ DISABLED: MAJOR DATA LEAKAGE!
+            # These features copy last 3 days to ALL rows → model sees future!
+            # MUST use rolling instead: pats.rolling(3).apply(...)
+            # For now: DISABLED to prevent leakage
+            pass
         except Exception as e:
             logger.debug(f"TA-Lib candlestick features skipped: {e}")
 
@@ -496,8 +486,46 @@ class EnhancedMLSystem:
                     money_ratio = positive_sum / negative_sum
                     df[f'mfi_{period}'] = 100 - (100 / (1 + money_ratio))
             
-            # Parabolic SAR (simplified)
-            df['sar'] = df['close'].copy()  # Simplified implementation
+            # Parabolic SAR (proper calculation)
+            try:
+                # Simple SAR approximation (trend following)
+                high = df['high']
+                low = df['low']
+                close = df['close']
+                
+                # Start with first close
+                sar = close.copy()
+                trend = 1  # 1 = uptrend, -1 = downtrend
+                af = 0.02  # acceleration factor
+                ep = high.iloc[0]  # extreme point
+                
+                for i in range(1, len(df)):
+                    # Update SAR based on trend
+                    if trend == 1:  # Uptrend
+                        sar.iloc[i] = sar.iloc[i-1] + af * (ep - sar.iloc[i-1])
+                        if low.iloc[i] < sar.iloc[i]:
+                            trend = -1
+                            sar.iloc[i] = ep
+                            ep = low.iloc[i]
+                            af = 0.02
+                        elif high.iloc[i] > ep:
+                            ep = high.iloc[i]
+                            af = min(af + 0.02, 0.2)
+                    else:  # Downtrend
+                        sar.iloc[i] = sar.iloc[i-1] - af * (sar.iloc[i-1] - ep)
+                        if high.iloc[i] > sar.iloc[i]:
+                            trend = 1
+                            sar.iloc[i] = ep
+                            ep = high.iloc[i]
+                            af = 0.02
+                        elif low.iloc[i] < ep:
+                            ep = low.iloc[i]
+                            af = min(af + 0.02, 0.2)
+                
+                df['sar'] = sar
+            except Exception:
+                # Fallback: simple EMA if SAR fails
+                df['sar'] = df['close'].ewm(span=20).mean()
             
             # Awesome Oscillator
             sma_5 = ((df['high'] + df['low']) / 2).rolling(5).mean()
@@ -771,9 +799,10 @@ class EnhancedMLSystem:
                 macro_data = macro_data.reindex(df.index, method='ffill')
                 
                 # Add columns directly (in-place!) + Convert to float64!
-                df['usdtry'] = pd.to_numeric(macro_data['usdtry'], errors='coerce').ffill().bfill().fillna(0).astype('float64')
-                df['cds'] = pd.to_numeric(macro_data['cds'], errors='coerce').ffill().bfill().fillna(0).astype('float64')
-                df['rate'] = pd.to_numeric(macro_data['rate'], errors='coerce').ffill().bfill().fillna(0).astype('float64')
+                # ⚡ FIX: Only ffill (no bfill - prevents lookahead!)
+                df['usdtry'] = pd.to_numeric(macro_data['usdtry'], errors='coerce').ffill().fillna(0).astype('float64')
+                df['cds'] = pd.to_numeric(macro_data['cds'], errors='coerce').ffill().fillna(0).astype('float64')
+                df['rate'] = pd.to_numeric(macro_data['rate'], errors='coerce').ffill().fillna(0).astype('float64')
                 logger.info("✅ Macro base features added: usdtry, cds, rate (dtype=float64)")
                 
                 # Create derivative features
