@@ -719,7 +719,7 @@ class EnhancedMLSystem:
             query = """
                 SELECT date, usdtry_close, turkey_cds, tcmb_policy_rate
                 FROM macro_indicators
-                WHERE date >= %s AND date <= %s
+                WHERE date >= :start_date AND date <= :end_date
                 ORDER BY date
             """
             
@@ -727,7 +727,7 @@ class EnhancedMLSystem:
             start_date = df.index.min().date() if hasattr(df.index.min(), 'date') else df.index.min()
             end_date = df.index.max().date() if hasattr(df.index.max(), 'date') else df.index.max()
             
-            # Execute query
+            # Execute query with named parameters
             result = db.session.execute(db.text(query), {'start_date': start_date, 'end_date': end_date})
             macro_data = pd.DataFrame(result.fetchall(), columns=['date', 'usdtry', 'cds', 'rate'])
             
