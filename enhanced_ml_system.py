@@ -776,7 +776,17 @@ class EnhancedMLSystem:
             
             # Feature engineering
             df_features = self.create_advanced_features(data, symbol=symbol)
-            df_features = df_features.dropna()
+            
+            # ⚡ CRITICAL FIX: Don't drop all NaN rows!
+            # Rolling features (ADX, realized_vol_60d) have NaN at start
+            # dropna() would remove 60-100 days unnecessarily!
+            # Instead: Fill NaN with 0 or forward fill for features
+            # Target NaN will be removed later (per horizon)
+            
+            # Forward fill for features (conservative approach)
+            for col in df_features.columns:
+                if df_features[col].dtype in ['float64', 'int64']:
+                    df_features[col] = df_features[col].fillna(method='ffill').fillna(0)
             
             # Clean infinite and large values
             df_features = self._clean_data(df_features)
