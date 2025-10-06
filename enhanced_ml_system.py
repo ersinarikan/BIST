@@ -274,6 +274,10 @@ class EnhancedMLSystem:
             # ⚡ NEW: Liquidity/Volume tier features
             self._add_liquidity_features(df)
             
+            # ⚡ NEW: Macro economic features (USDTRY, CDS, TCMB Rate)
+            if symbol:  # Only if symbol provided
+                self._add_macro_features(df)
+            
             # Optional: TA-Lib candlestick pattern features (lightweight subset)
             if self.enable_talib_patterns:
                 self._add_candlestick_features(df)
@@ -705,6 +709,63 @@ class EnhancedMLSystem:
             
         except Exception as e:
             logger.error(f"Liquidity features hatası: {e}")
+    
+    def _add_macro_features(self, df):
+        """Macro economic features from VT (USDTRY, CDS, TCMB Rate)"""
+        try:
+            from models import db
+            
+            # Get macro data from VT (SQL query)
+            query = """
+                SELECT date, usdtry_close, turkey_cds, tcmb_policy_rate
+                FROM macro_indicators
+                WHERE date >= %s AND date <= %s
+                ORDER BY date
+            """
+            
+            # Date range from df
+            start_date = df.index.min().date() if hasattr(df.index.min(), 'date') else df.index.min()
+            end_date = df.index.max().date() if hasattr(df.index.max(), 'date') else df.index.max()
+            
+            # Execute query
+            result = db.session.execute(db.text(query), {'start_date': start_date, 'end_date': end_date})
+            macro_data = pd.DataFrame(result.fetchall(), columns=['date', 'usdtry', 'cds', 'rate'])
+            
+            if len(macro_data) > 0:
+                # Convert date to datetime for merge
+                macro_data['date'] = pd.to_datetime(macro_data['date'])
+                macro_data = macro_data.set_index('date')
+                
+                # Merge by date (left join - keep all stock dates)
+                df = df.join(macro_data, how='left')
+                
+                # Forward fill for weekends/holidays
+                df['usdtry'] = df['usdtry'].fillna(method='ffill').fillna(method='bfill')
+                df['cds'] = df['cds'].fillna(method='ffill').fillna(method='bfill')
+                df['rate'] = df['rate'].fillna(method='ffill').fillna(method='bfill')
+                
+                # Create derivative features
+                df['usdtry_change_1d'] = df['usdtry'].pct_change()
+                df['usdtry_change_5d'] = df['usdtry'].pct_change(5)
+                df['usdtry_change_20d'] = df['usdtry'].pct_change(20)
+                df['cds_change_5d'] = df['cds'].pct_change(5)
+                df['rate_change_20d'] = df['rate'].pct_change(20)
+                
+                # Fill derivative NaNs
+                for col in ['usdtry_change_1d', 'usdtry_change_5d', 'usdtry_change_20d', 'cds_change_5d', 'rate_change_20d']:
+                    df[col] = df[col].fillna(0)
+                
+                logger.debug(f"Macro features added: {len(macro_data)} days merged")
+            else:
+                logger.warning("No macro data found in VT")
+                
+        except Exception as e:
+            logger.error(f"Macro features error: {e}")
+            # Fallback: zero features
+            for col in ['usdtry', 'usdtry_change_1d', 'usdtry_change_5d', 'usdtry_change_20d',
+                       'cds', 'cds_change_5d', 'rate', 'rate_change_20d']:
+                if col not in df.columns:
+                    df[col] = 0.0
     
     def _clean_data(self, df):
         """Veri temizleme - INF, NaN ve aşırı değerleri temizle"""
