@@ -848,7 +848,7 @@ class EnhancedMLSystem:
             
             # Forward fill for features (conservative approach)
             for col in df_features.columns:
-                if df_features[col].dtype in ['float64', 'int64']:
+                if df_features[col].dtype in ['float64', 'float32', 'int64', 'int32']:  # ⚡ FIX: Include all numeric!
                     df_features[col] = df_features[col].fillna(method='ffill').fillna(0)
             
             # Clean infinite and large values
