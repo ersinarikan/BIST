@@ -864,7 +864,7 @@ class EnhancedMLSystem:
             # Feature selection
             feature_cols = [col for col in df_features.columns 
                           if col not in ['open', 'high', 'low', 'close', 'volume']
-                          and df_features[col].dtype in ['float64', 'int64']
+                          and df_features[col].dtype in ['float64', 'float32', 'int64', 'int32']  # ⚡ FIX: Include int32!
                           and not df_features[col].isnull().all()]
             
             logger.info(f"📊 {len(feature_cols)} feature kullanılacak")
