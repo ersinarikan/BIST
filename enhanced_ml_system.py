@@ -129,8 +129,8 @@ class EnhancedMLSystem:
         except Exception:
             self.enable_fingpt_features = True
         try:
-            # ⚡ NEW: Meta-stacking with Ridge learner (default: disabled for safety)
-            self.enable_meta_stacking = str(os.getenv('ENABLE_META_STACKING', 'False')).lower() in ('1', 'true', 'yes')
+            # ⚡ NEW: Meta-stacking with Ridge learner OOF (default: enabled!)
+            self.enable_meta_stacking = str(os.getenv('ENABLE_META_STACKING', 'True')).lower() in ('1', 'true', 'yes')
         except Exception:
             self.enable_meta_stacking = False
         try:
@@ -924,8 +924,9 @@ class EnhancedMLSystem:
                             eval_metric='rmse'          # NEW: Explicit metric
                         )
                         
-                        # Cross-validation (on returns)
+                        # Cross-validation (on returns) + OOF collection for meta-learner
                         xgb_scores = []
+                        xgb_oof_preds = np.zeros(len(X))  # OOF predictions storage
                         for fold, (train_idx, val_idx) in enumerate(tscv.split(X)):
                             try:
                                 X_train, X_val = X[train_idx], X[val_idx]
@@ -946,6 +947,7 @@ class EnhancedMLSystem:
                                     xgb_model.fit(X_train, y_train)
                                 
                                 pred = xgb_model.predict(X_val)
+                                xgb_oof_preds[val_idx] = pred  # ⚡ Save OOF predictions!
                                 score = r2_score(y_val, pred)
                                 xgb_scores.append(score)
                                 logger.info(f"XGBoost fold {fold}: R² = {score:.3f}")
@@ -1025,8 +1027,9 @@ class EnhancedMLSystem:
                             verbose=-1
                         )
                         
-                        # Cross-validation (on returns)
+                        # Cross-validation (on returns) + OOF
                         lgb_scores = []
+                        lgb_oof_preds = np.zeros(len(X))
                         for train_idx, val_idx in tscv.split(X):
                             X_train, X_val = X[train_idx], X[val_idx]
                             y_train, y_val = y[train_idx], y[val_idx]
@@ -1043,6 +1046,7 @@ class EnhancedMLSystem:
                                 lgb_model.fit(X_train, y_train)
 
                             pred = lgb_model.predict(X_val)
+                            lgb_oof_preds[val_idx] = pred  # Save OOF
                             score = r2_score(y_val, pred)
                             lgb_scores.append(score)
                         
@@ -1114,8 +1118,9 @@ class EnhancedMLSystem:
                             od_wait=self.early_stop_rounds
                         )
                         
-                        # Cross-validation (on returns)
+                        # Cross-validation (on returns) + OOF
                         cat_scores = []
+                        cat_oof_preds = np.zeros(len(X))
                         for train_idx, val_idx in tscv.split(X):
                             X_train, X_val = X[train_idx], X[val_idx]
                             y_train, y_val = y[train_idx], y[val_idx]
@@ -1131,6 +1136,7 @@ class EnhancedMLSystem:
                                 cat_model.fit(X_train, y_train, verbose=False)
 
                             pred = cat_model.predict(X_val)
+                            cat_oof_preds[val_idx] = pred  # Save OOF
                             score = r2_score(y_val, pred)
                             cat_scores.append(score)
                         
@@ -1180,6 +1186,45 @@ class EnhancedMLSystem:
                         
                     except Exception as e:
                         logger.error(f"CatBoost eğitim hatası: {e}")
+                
+                # ⚡ META-LEARNER: Train Ridge on OOF predictions
+                if self.enable_meta_stacking and len(horizon_models) >= 2:
+                    try:
+                        # Collect OOF predictions from all models (check if exist)
+                        oof_list = []
+                        if 'xgboost' in horizon_models:
+                            try:
+                                oof_list.append(xgb_oof_preds)  # type: ignore[name-defined]
+                            except NameError:
+                                pass
+                        if 'lightgbm' in horizon_models:
+                            try:
+                                oof_list.append(lgb_oof_preds)  # type: ignore[name-defined]
+                            except NameError:
+                                pass
+                        if 'catboost' in horizon_models:
+                            try:
+                                oof_list.append(cat_oof_preds)  # type: ignore[name-defined]
+                            except NameError:
+                                pass
+                        
+                        if len(oof_list) >= 2:
+                            # Stack OOF predictions as features
+                            meta_X = np.column_stack(oof_list)  # Shape: (n_samples, n_models)
+                            meta_y = y  # True targets
+                            
+                            # Train Ridge meta-learner
+                            from sklearn.linear_model import Ridge
+                            meta_model = Ridge(alpha=1.0)
+                            meta_model.fit(meta_X, meta_y)
+                            
+                            # Store meta-learner
+                            meta_key = f"{symbol}_{horizon}d_meta"
+                            self.meta_learners[meta_key] = meta_model
+                            
+                            logger.info(f"✅ Meta-learner trained for {symbol} {horizon}d (OOF-based Ridge)")
+                    except Exception as e:
+                        logger.error(f"Meta-learner training error: {e}")
                 
                 # Store models and results
                 self.models[f"{symbol}_{horizon}d"] = horizon_models
@@ -1415,6 +1460,13 @@ class EnhancedMLSystem:
             symbol_importance = {k: v for k, v in self.feature_importance.items() if k.startswith(symbol)}
             joblib.dump(symbol_importance, importance_file)
             
+            # ⚡ META-LEARNERS kaydet
+            symbol_meta = {k: v for k, v in self.meta_learners.items() if k.startswith(symbol)}
+            if symbol_meta:
+                meta_file = f"{self.model_directory}/{symbol}_meta_learners.pkl"
+                joblib.dump(symbol_meta, meta_file)
+                logger.debug(f"Meta-learners saved: {len(symbol_meta)} models")
+            
             # Feature columns'ı ayrı JSON olarak kaydet (prediction için gerekli)
             try:
                 cols_file = f"{self.model_directory}/{symbol}_feature_columns.json"
@@ -1518,6 +1570,17 @@ class EnhancedMLSystem:
                     cols = []
             if cols:
                 self.feature_columns = list(cols)
+            
+            # ⚡ Load meta-learners
+            meta_file = f"{self.model_directory}/{symbol}_meta_learners.pkl"
+            if os.path.exists(meta_file):
+                try:
+                    symbol_meta = joblib.load(meta_file)
+                    self.meta_learners.update(symbol_meta)
+                    logger.debug(f"Meta-learners loaded: {len(symbol_meta)} models")
+                except Exception as e:
+                    logger.error(f"Meta-learner load error: {e}")
+            
             return loaded_any
         except Exception:
             return False
