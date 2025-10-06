@@ -540,6 +540,24 @@ class EnhancedMLSystem:
             df['ema_12'] = df['close'].ewm(span=12).mean()
             df['ema_26'] = df['close'].ewm(span=26).mean()
             
+            # ⚡ NEW: Stochastic Oscillator (2 features)
+            low_14 = df['low'].rolling(14).min()
+            high_14 = df['high'].rolling(14).max()
+            df['stoch_k'] = 100 * (df['close'] - low_14) / (high_14 - low_14 + 1e-10)
+            df['stoch_d'] = df['stoch_k'].rolling(3).mean()
+            
+            # ⚡ NEW: ROC - Rate of Change (1 feature)
+            df['roc'] = df['close'].pct_change(12) * 100  # 12-period ROC
+            
+            # ⚡ NEW: Williams %R (1 feature)
+            df['williams_r'] = -100 * (high_14 - df['close']) / (high_14 - low_14 + 1e-10)
+            
+            # ⚡ NEW: TRIX (1 feature)
+            ema1 = df['close'].ewm(span=15).mean()
+            ema2 = ema1.ewm(span=15).mean()
+            ema3 = ema2.ewm(span=15).mean()
+            df['trix'] = ema3.pct_change() * 100
+            
         except Exception as e:
             logger.error(f"Microstructure features hatası: {e}")
     
