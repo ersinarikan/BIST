@@ -741,11 +741,11 @@ class EnhancedMLSystem:
                 # Don't use join - use reindex for alignment
                 macro_data = macro_data.reindex(df.index, method='ffill')
                 
-                # Add columns directly (in-place!)
-                df['usdtry'] = macro_data['usdtry'].fillna(method='ffill').fillna(method='bfill').fillna(0)
-                df['cds'] = macro_data['cds'].fillna(method='ffill').fillna(method='bfill').fillna(0)
-                df['rate'] = macro_data['rate'].fillna(method='ffill').fillna(method='bfill').fillna(0)
-                logger.info(f"✅ Macro base features added: usdtry, cds, rate")
+                # Add columns directly (in-place!) + Convert to float64!
+                df['usdtry'] = pd.to_numeric(macro_data['usdtry'], errors='coerce').fillna(method='ffill').fillna(method='bfill').fillna(0).astype('float64')
+                df['cds'] = pd.to_numeric(macro_data['cds'], errors='coerce').fillna(method='ffill').fillna(method='bfill').fillna(0).astype('float64')
+                df['rate'] = pd.to_numeric(macro_data['rate'], errors='coerce').fillna(method='ffill').fillna(method='bfill').fillna(0).astype('float64')
+                logger.info(f"✅ Macro base features added: usdtry, cds, rate (dtype=float64)")
                 
                 # Create derivative features
                 df['usdtry_change_1d'] = df['usdtry'].pct_change().fillna(0)
