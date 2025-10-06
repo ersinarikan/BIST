@@ -745,19 +745,17 @@ class EnhancedMLSystem:
                 df['usdtry'] = macro_data['usdtry'].fillna(method='ffill').fillna(method='bfill').fillna(0)
                 df['cds'] = macro_data['cds'].fillna(method='ffill').fillna(method='bfill').fillna(0)
                 df['rate'] = macro_data['rate'].fillna(method='ffill').fillna(method='bfill').fillna(0)
+                logger.info(f"✅ Macro base features added: usdtry, cds, rate")
                 
                 # Create derivative features
-                df['usdtry_change_1d'] = df['usdtry'].pct_change()
-                df['usdtry_change_5d'] = df['usdtry'].pct_change(5)
-                df['usdtry_change_20d'] = df['usdtry'].pct_change(20)
-                df['cds_change_5d'] = df['cds'].pct_change(5)
-                df['rate_change_20d'] = df['rate'].pct_change(20)
+                df['usdtry_change_1d'] = df['usdtry'].pct_change().fillna(0)
+                df['usdtry_change_5d'] = df['usdtry'].pct_change(5).fillna(0)
+                df['usdtry_change_20d'] = df['usdtry'].pct_change(20).fillna(0)
+                df['cds_change_5d'] = df['cds'].pct_change(5).fillna(0)
+                df['rate_change_20d'] = df['rate'].pct_change(20).fillna(0)
+                logger.info(f"✅ Macro derivative features added (5 changes)")
                 
-                # Fill derivative NaNs
-                for col in ['usdtry_change_1d', 'usdtry_change_5d', 'usdtry_change_20d', 'cds_change_5d', 'rate_change_20d']:
-                    df[col] = df[col].fillna(0)
-                
-                logger.debug(f"Macro features added: {len(macro_data)} days merged")
+                logger.info(f"✅ Macro features complete: {len(macro_data)} days merged, 8 features")
             else:
                 logger.warning("No macro data found in VT")
                 
