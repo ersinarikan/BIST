@@ -713,6 +713,7 @@ class EnhancedMLSystem:
     def _add_macro_features(self, df):
         """Macro economic features from VT (USDTRY, CDS, TCMB Rate)"""
         try:
+            logger.debug("_add_macro_features() called")
             from models import db
             
             # Get macro data from VT (SQL query)
@@ -736,19 +737,14 @@ class EnhancedMLSystem:
                 macro_data['date'] = pd.to_datetime(macro_data['date'])
                 macro_data = macro_data.set_index('date')
                 
-                # ⚡ FIX: Remove timezone for join (tz-naive)
-                if hasattr(df.index, 'tz') and df.index.tz is not None:
-                    df.index = df.index.tz_localize(None)
-                if hasattr(macro_data.index, 'tz') and macro_data.index.tz is not None:
-                    macro_data.index = macro_data.index.tz_localize(None)
+                # ⚡ FIX: Merge macro data (reindex to match df dates)
+                # Don't use join - use reindex for alignment
+                macro_data = macro_data.reindex(df.index, method='ffill')
                 
-                # Merge by date (left join - keep all stock dates)
-                df = df.join(macro_data, how='left')
-                
-                # Forward fill for weekends/holidays
-                df['usdtry'] = df['usdtry'].fillna(method='ffill').fillna(method='bfill')
-                df['cds'] = df['cds'].fillna(method='ffill').fillna(method='bfill')
-                df['rate'] = df['rate'].fillna(method='ffill').fillna(method='bfill')
+                # Add columns directly (in-place!)
+                df['usdtry'] = macro_data['usdtry'].fillna(method='ffill').fillna(method='bfill').fillna(0)
+                df['cds'] = macro_data['cds'].fillna(method='ffill').fillna(method='bfill').fillna(0)
+                df['rate'] = macro_data['rate'].fillna(method='ffill').fillna(method='bfill').fillna(0)
                 
                 # Create derivative features
                 df['usdtry_change_1d'] = df['usdtry'].pct_change()
