@@ -1436,6 +1436,36 @@ class EnhancedMLSystem:
                 except Exception as e:
                     logger.error(f"Sentiment adjustment error: {e}")
             
+            # ⚡ NEW: Volatility-based calibration (tanh scaling)
+            try:
+                # Calculate recent volatility
+                returns = current_data['close'].pct_change().tail(20)
+                vol_20d = float(returns.std()) if len(returns) > 5 else 0.02
+                
+                # Calibration factor (higher vol → wider predictions)
+                for h_key in predictions:
+                    pred = predictions[h_key]['ensemble_prediction']
+                    current_price = predictions[h_key]['current_price']
+                    
+                    # Delta in percentage
+                    delta_pct = (pred - current_price) / current_price
+                    
+                    # Tanh calibration (compress extreme predictions)
+                    # High vol → less compression
+                    # Low vol → more compression
+                    scale = 1.0 + vol_20d * 10  # vol 0.02 → scale 1.2, vol 0.05 → scale 1.5
+                    calibrated_delta = np.tanh(delta_pct * scale) / scale
+                    
+                    # Apply calibrated delta
+                    calibrated_pred = current_price * (1 + calibrated_delta)
+                    predictions[h_key]['ensemble_prediction'] = float(calibrated_pred)
+                    predictions[h_key]['calibrated'] = True
+                    predictions[h_key]['vol_20d'] = float(vol_20d)
+                    
+                logger.debug(f"Volatility calibration applied (vol={vol_20d:.4f})")
+            except Exception as e:
+                logger.error(f"Calibration error: {e}")
+            
             return predictions
             
         except Exception as e:
