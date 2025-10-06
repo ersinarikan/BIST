@@ -1174,12 +1174,28 @@ class EnhancedMLSystem:
                         # Final training with seed bagging
                         if self.enable_seed_bagging and self.n_seeds > 1:
                             # ⚡ SEED BAGGING: Train with multiple seeds and average
+                            # CatBoost needs NEW model for each seed (can't change params after fit)
                             seed_predictions = []
                             for seed in self.base_seeds:
                                 try:
-                                    cat_model.set_params(random_seed=seed)  # CatBoost uses random_seed
-                                    cat_model.fit(X, y, verbose=False)
-                                    pred = cat_model.predict(X[-100:])
+                                    # Create NEW CatBoost model for each seed
+                                    cat_seed_model = cb.CatBoostRegressor(  # type: ignore[union-attr]
+                                        iterations=500,
+                                        depth=8,
+                                        learning_rate=0.05,
+                                        l2_leaf_reg=2.0,
+                                        border_count=128,
+                                        thread_count=self.train_threads,
+                                        random_seed=seed,  # Different seed!
+                                        verbose=False,
+                                        allow_writing_files=False,
+                                        train_dir=self.catboost_train_dir,
+                                        logging_level='Silent',
+                                        od_type='Iter',
+                                        od_wait=self.early_stop_rounds
+                                    )
+                                    cat_seed_model.fit(X, y, verbose=False)
+                                    pred = cat_seed_model.predict(X[-100:])
                                     seed_predictions.append(pred)
                                 except Exception as e:
                                     logger.error(f"CatBoost seed {seed} error: {e}")
@@ -1188,7 +1204,6 @@ class EnhancedMLSystem:
                                 cat_pred = np.mean(seed_predictions, axis=0)
                                 logger.info(f"CatBoost: Seed bagging with {len(seed_predictions)} seeds")
                             else:
-                                cat_model.set_params(random_seed=42)
                                 cat_model.fit(X, y, verbose=False)
                                 cat_pred = cat_model.predict(X[-100:])
                         else:
