@@ -36,10 +36,10 @@ def register_all_blueprints(app: Any, csrf: Any) -> None:
     _try_register('bist_pattern.blueprints.admin_dashboard')
     
     # Additional API modules (from api_modules)
-    _try_register('bist_pattern.api_modules.stocks')
+    # REMOVED: stocks (duplicate or unused)
     _try_register('bist_pattern.api_modules.automation')
     # REMOVED: watchlist (duplicate - blueprints.api_watchlist is primary)
-    _try_register('bist_pattern.api_modules.dashboard')
+    # REMOVED: dashboard (duplicate or unused)
     
     # High-performance batch API (NEW!)
     _try_register('bist_pattern.blueprints.api_batch')

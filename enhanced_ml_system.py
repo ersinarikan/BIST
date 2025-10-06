@@ -736,6 +736,12 @@ class EnhancedMLSystem:
                 macro_data['date'] = pd.to_datetime(macro_data['date'])
                 macro_data = macro_data.set_index('date')
                 
+                # ⚡ FIX: Remove timezone for join (tz-naive)
+                if hasattr(df.index, 'tz') and df.index.tz is not None:
+                    df.index = df.index.tz_localize(None)
+                if hasattr(macro_data.index, 'tz') and macro_data.index.tz is not None:
+                    macro_data.index = macro_data.index.tz_localize(None)
+                
                 # Merge by date (left join - keep all stock dates)
                 df = df.join(macro_data, how='left')
                 
