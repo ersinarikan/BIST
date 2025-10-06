@@ -549,7 +549,7 @@ class EnhancedMLSystem:
             # Volatility regime
             vol_20 = df['close'].pct_change().rolling(20).std()
             vol_ma = vol_20.rolling(60).mean()
-            df['vol_regime'] = (vol_20 / vol_ma - 1)
+            df['vol_regime'] = (vol_20 / vol_ma - 1).fillna(method='ffill').fillna(0)  # ⚡ FIX: Fill NaN!
             
             # ⚡ NEW: ADX (Average Directional Index) - Trend Strength
             try:
