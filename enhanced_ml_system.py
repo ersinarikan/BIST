@@ -1187,14 +1187,13 @@ class EnhancedMLSystem:
                                         border_count=128,
                                         thread_count=self.train_threads,
                                         random_seed=seed,  # Different seed!
-                                        verbose=False,
+                                        logging_level='Silent',  # Use only logging_level (not verbose!)
                                         allow_writing_files=False,
                                         train_dir=self.catboost_train_dir,
-                                        logging_level='Silent',
                                         od_type='Iter',
                                         od_wait=self.early_stop_rounds
                                     )
-                                    cat_seed_model.fit(X, y, verbose=False)
+                                    cat_seed_model.fit(X, y)  # logging_level='Silent' already set
                                     pred = cat_seed_model.predict(X[-100:])
                                     seed_predictions.append(pred)
                                 except Exception as e:
