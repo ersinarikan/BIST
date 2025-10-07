@@ -34,7 +34,10 @@ with app.app_context():
     try:
         # Optional stop-sentinel file path for graceful halt
         STOP_FILE = os.getenv('TRAIN_STOP_FILE', '/opt/bist-pattern/.cache/STOP_TRAIN')
-        symbols = [s.symbol for s in Stock.query.filter_by(is_active=True).all()]
+        # Allow forcing a full retrain that bypasses coordinator gating
+        FORCE_FULL_RETRAIN = str(os.getenv('FORCE_FULL_RETRAIN', '0')).lower() in ('1', 'true', 'yes')
+        # Ensure deterministic A→Z order
+        symbols = sorted([s.symbol for s in Stock.query.filter_by(is_active=True).all()])
         ok_ml = fail_ml = skipped = 0
         ok_enh = fail_enh = 0
         log_dir = '/opt/bist-pattern/logs'
@@ -63,8 +66,8 @@ with app.app_context():
                 
                 # ✨ IMPROVED: Use ml_coordinator logic (like automation)
                 # Only train if model is old, missing, or needs update
-                if mlc:
-                    # Check training gate (age, cooldown, completeness)
+                if mlc and not FORCE_FULL_RETRAIN:
+                    # Check training gate (age, cooldown, completeness) unless forced
                     try:
                         ok_gate, reason = mlc.evaluate_training_gate(sym, len(df))
                         if not ok_gate:
@@ -101,13 +104,18 @@ with app.app_context():
                     pass
 
                 try:
-                    if enh and mlc:
+                    if enh and mlc and not FORCE_FULL_RETRAIN:
                         # Use coordinator's smart training (respects cooldown, age)
                         res_enh = mlc.train_enhanced_model_if_needed(sym, df)
                         ok_enh += 1 if res_enh else 0
                     elif enh:
-                        # Fallback: direct training (old behavior)
+                        # Forced or coordinator unavailable: train directly and persist
                         res_enh = enh.train_enhanced_models(sym, df)
+                        if res_enh:
+                            try:
+                                enh.save_enhanced_models(sym)
+                            except Exception:
+                                pass
                         ok_enh += 1 if res_enh else 0
                     else:
                         skipped += 1

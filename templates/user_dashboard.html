@@ -742,6 +742,27 @@
             // Mevcut analiz önbelleğinden rozetleri geri yükle (re-render sonrası kaybolmasın)
             try { hydratePatternsFromCache(); } catch (e) { /* ignore */ }
 
+            // Hızlı cache fetch: Bellekte yoksa her sembol için disk cache'i (fast) çek ve uygula
+            try {
+                const missing = (watchedStocks || []).filter(s => {
+                    try { return !(window.__analysisBySymbol && window.__analysisBySymbol[s.symbol]); } catch (_) { return true; }
+                });
+                if (missing.length > 0) {
+                    await Promise.all(missing.map(async (s) => {
+                        try {
+                            const resp = await fetch(`/api/pattern-analysis/${encodeURIComponent(s.symbol)}?fast=1&v=${Date.now()}`);
+                            if (resp.ok) {
+                                const a = await resp.json();
+                                if (a && a.status === 'success') {
+                                    window.__analysisBySymbol[s.symbol] = a;
+                                    handlePatternUpdate({ symbol: s.symbol, data: a });
+                                }
+                            }
+                        } catch (_) {}
+                    }));
+                }
+            } catch (_) { /* ignore */ }
+
             // İlk sembol için tekil tahmin çağrısı yapma; kart altı batch ile geliyor
             try {
                 if (watchedStocks.length > 0 && isPredictionsPanelVisible()) {
@@ -757,6 +778,9 @@
             } catch (e) { 
                 console.error('❌ updateWatchlistPredictions error:', e);
             }
+
+            //⚡ Kart sinyallerini mevcut cache'ten ilk anda zorla güncelle (ARCLK gibi mevcut dosyalar için)
+            try { hydratePatternsFromCache(); } catch (e) { /* ignore */ }
 
             // ⚡ OPTIMIZED: Use batch API instead of individual requests
             try {
@@ -795,6 +819,47 @@
             } catch (e) { /* ignore */ }
         }
         
+        // Horizon-based signal resolver (prefers enhanced → basic → predictions)
+        function computeHorizonSignal(analysis, horizon) {
+            try {
+                const h = String(horizon || '7d').toLowerCase();
+                const cur = Number(analysis.current_price || analysis.price || 0);
+                const uni = analysis.ml_unified || {};
+                const hu = uni && uni[h] ? uni[h] : null;
+                const pick = (hu && (hu.enhanced || hu.basic)) ? (hu.enhanced || hu.basic) : null;
+                let delta = null, conf = null, reliab = null;
+
+                if (pick && typeof pick.delta_pct === 'number') {
+                    delta = Number(pick.delta_pct);
+                    conf = (typeof pick.confidence === 'number') ? Number(pick.confidence) : null;
+                    reliab = (typeof pick.reliability === 'number') ? Number(pick.reliability) : null;
+                } else if (analysis.enhanced_predictions && analysis.enhanced_predictions[h]) {
+                    const ep = analysis.enhanced_predictions[h];
+                    if (typeof ep.ensemble_prediction === 'number' && cur) {
+                        delta = (Number(ep.ensemble_prediction) - cur) / cur;
+                        conf = (typeof ep.confidence === 'number') ? Number(ep.confidence) : null;
+                    }
+                } else if (analysis.ml_predictions && analysis.ml_predictions[h]) {
+                    const mp = analysis.ml_predictions[h];
+                    if (typeof mp.price === 'number' && cur) {
+                        delta = (Number(mp.price) - cur) / cur;
+                    }
+                }
+
+                if (delta === null || !isFinite(delta)) return null;
+                const dir = delta > 0 ? 'bullish' : (delta < 0 ? 'bearish' : 'hold');
+                const abs = Math.abs(delta);
+                const threshold = 0.002; // 0.2%: küçük hareketler bekleme
+                const label = (abs < threshold) ? 'hold' : dir;
+                let confidence = conf ?? reliab;
+                if (!(typeof confidence === 'number') || !isFinite(confidence)) {
+                    // Fallback confidence from delta magnitude (cap at ~5%)
+                    confidence = 0.5 + Math.min(abs / 0.05, 1) * 0.45; // 0.5..0.95
+                }
+                return { label, delta, confidence };
+            } catch (_) { return null; }
+        }
+
         function handlePatternUpdate(data) {
             const symbol = data.symbol;
             const analysis = data.data;
@@ -810,26 +875,38 @@
             
             // Update signal
             const signalEl = document.getElementById(`signal-${symbol}`);
-            if (signalEl && analysis.overall_signal) {
-                const sig = (analysis.overall_signal.signal || '').toUpperCase();
-                const confidence = Math.round((analysis.overall_signal.confidence || 0) * 100);
-                let label = 'Bekleme';
-                let icon = 'fas fa-minus';
-                let cls = 'signal-hold';
-                if (sig === 'BULLISH') {
-                    if (confidence >= 85) { label = 'Yüksek alım sinyali'; }
-                    else if (confidence >= 55) { label = 'Alım sinyali'; }
-                    else { label = 'Bekleme'; }
-                    icon = (label === 'Bekleme') ? 'fas fa-minus' : 'fas fa-arrow-up';
-                    cls = (label === 'Bekleme') ? 'signal-hold' : 'signal-buy';
-                } else if (sig === 'BEARISH') {
-                    if (confidence >= 85) { label = 'Yüksek satış sinyali'; }
-                    else if (confidence >= 55) { label = 'Düşük satış sinyali'; }
-                    else { label = 'Bekleme'; }
-                    icon = (label === 'Bekleme') ? 'fas fa-minus' : 'fas fa-arrow-down';
-                    cls = (label === 'Bekleme') ? 'signal-hold' : 'signal-sell';
+            if (signalEl) {
+                // Horizon preference over overall signal
+                const horizon = (document.getElementById('pred-sort-horizon')?.value || '7d').toLowerCase();
+                const hs = computeHorizonSignal(analysis, horizon);
+                let html = '';
+                if (hs) {
+                    const confidence = Math.round((hs.confidence || 0) * 100);
+                    let labelText = 'Bekleme', icon = 'fas fa-minus', cls = 'signal-hold';
+                    if (hs.label === 'bullish') {
+                        labelText = confidence >= 85 ? 'Yüksek alım sinyali' : (confidence >= 55 ? 'Alım sinyali' : 'Bekleme');
+                        icon = (labelText === 'Bekleme') ? 'fas fa-minus' : 'fas fa-arrow-up';
+                        cls = (labelText === 'Bekleme') ? 'signal-hold' : 'signal-buy';
+                    } else if (hs.label === 'bearish') {
+                        labelText = confidence >= 85 ? 'Yüksek satış sinyali' : (confidence >= 55 ? 'Düşük satış sinyali' : 'Bekleme');
+                        icon = (labelText === 'Bekleme') ? 'fas fa-minus' : 'fas fa-arrow-down';
+                        cls = (labelText === 'Bekleme') ? 'signal-hold' : 'signal-sell';
+                    }
+                    html = `<span class="${cls}" title="${horizon.toUpperCase()} • Güven: %${confidence}"><i class="${icon} me-1"></i>${labelText} (%${confidence})</span>`;
+                } else if (analysis.overall_signal) {
+                    const sig = (analysis.overall_signal.signal || '').toUpperCase();
+                    const confidence = Math.round((analysis.overall_signal.confidence || 0) * 100);
+                    let label = 'Bekleme', icon = 'fas fa-minus', cls = 'signal-hold';
+                    if (sig === 'BULLISH') { label = confidence >= 85 ? 'Yüksek alım sinyali' : (confidence >= 55 ? 'Alım sinyali' : 'Bekleme'); icon = (label === 'Bekleme') ? 'fas fa-minus' : 'fas fa-arrow-up'; cls = (label === 'Bekleme') ? 'signal-hold' : 'signal-buy'; }
+                    else if (sig === 'BEARISH') { label = confidence >= 85 ? 'Yüksek satış sinyali' : (confidence >= 55 ? 'Düşük satış sinyali' : 'Bekleme'); icon = (label === 'Bekleme') ? 'fas fa-minus' : 'fas fa-arrow-down'; cls = (label === 'Bekleme') ? 'signal-hold' : 'signal-sell'; }
+                    html = `<span class="${cls}" title="Güven: %${confidence}"><i class="${icon} me-1"></i>${label} (%${confidence})</span>`;
                 }
-                signalEl.innerHTML = `<span class="${cls}" title="Güven: %${confidence}"><i class="${icon} me-1"></i>${label} (%${confidence})</span>`;
+                if (html) {
+                    signalEl.innerHTML = html;
+                } else {
+                    // Retry once if element not ready
+                    setTimeout(() => { try { handlePatternUpdate(data); } catch (_) {} }, 0);
+                }
                 
                 // Tooltip'i yeniden initialize et
                 setTimeout(() => {
@@ -840,9 +917,12 @@
                 }, 100);
                 
                 // Show notification for strong signals
-                if (confidence > 70) {
-                    showNotification('info', `🎯 ${symbol}: ${label}`);
-                }
+                try {
+                    const txt = signalEl.textContent || '';
+                    const m = txt.match(/%(\d+)/);
+                    const confNow = m ? parseInt(m[1], 10) : 0;
+                    if (confNow > 70) { showNotification('info', `🎯 ${symbol}: ${txt.trim()}`); }
+                } catch (_) {}
             }
             
             // Update last update time
@@ -1503,7 +1583,7 @@
                     const volTierEl = document.getElementById('detailVolumeTier');
                     const volAvgEl = document.getElementById('detailAvgVolume');
                     if (volTierEl && volAvgEl) {
-                        const vres = await fetch(`/api/automation/volume/tiers?symbol=${encodeURIComponent(symbol)}&v=${Date.now()}`);
+                    const vres = await fetch(`/api/internal/automation/volume/tiers?symbol=${encodeURIComponent(symbol)}&v=${Date.now()}` , { headers: { 'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' } });
                         if (vres.ok) {
                             const vdata = await vres.json();
                             const tier = (vdata && vdata.tier) ? String(vdata.tier).replace('_',' ') : '-';

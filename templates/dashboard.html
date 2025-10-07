@@ -648,7 +648,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 while (retryCount < maxRetries) {
                     try {
-                        const automationResponse = await fetch('/api/automation/status?source=internal&cache=1&v=' + Date.now());
+                        const automationResponse = await fetch('/api/internal/automation/status?v=' + Date.now(), {
+                            headers: { 'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' }
+                        });
                         if (automationResponse.ok) {
                             automationData = await automationResponse.json();
                             break; // Success, exit retry loop
@@ -696,18 +698,26 @@ document.addEventListener('DOMContentLoaded', function() {
                 } else {
                     // Fallback when automation data is unavailable
                     console.warn('⚠️ Automation data unavailable, using fallback');
-                    document.getElementById('automation-status').textContent = 'CHECKING...';
-                    document.getElementById('scheduled-jobs').textContent = '?';
+                    const _as = document.getElementById('automation-status'); if (_as) { _as.textContent = 'CHECKING...'; }
+                    const _sj = document.getElementById('scheduled-jobs'); if (_sj) { _sj.textContent = '?'; }
                 }
 
-                // Get system info
-                const systemResponse = await fetch('/api/system-info');
-                const systemData = await systemResponse.json();
-                
-                if (systemData.database) {
-                    document.getElementById('stocks-count').textContent = systemData.database.stocks || 0;
-                    document.getElementById('price-records').textContent = (systemData.database.price_records || 0).toLocaleString();
-                }
+                // Get system info (safe parse)
+                let __dbLooksConnected = false;
+                try {
+                    const systemResponse = await fetch('/api/system-info');
+                    if (systemResponse.ok) {
+                        const systemData = await systemResponse.json();
+                        if (systemData && systemData.database) {
+                            const sc = document.getElementById('stocks-count');
+                            const pr = document.getElementById('price-records');
+                            if (sc) sc.textContent = systemData.database.stocks || 0;
+                            if (pr) pr.textContent = (systemData.database.price_records || 0).toLocaleString();
+                            // If DB counts are returned, DB is reachable
+                            __dbLooksConnected = true;
+                        }
+                    }
+                } catch (_) { /* ignore */ }
 
                 // Bulk predictions freshness (internal endpoint)
                 try {
@@ -739,10 +749,26 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 } catch (e) { /* ignore */ }
 
-                // Get health status
-                const healthResponse = await fetch('/api/automation/health');
-                const healthData = await healthResponse.json();
-                
+                // Get health status using internal endpoint (tokened) to enable CPU/RAM/Disk
+                let healthData = { health_check: { systems: {}, overall_status: 'unknown' } };
+                try {
+                    const healthResponse = await fetch('/api/internal/automation/health?v=' + Date.now(), {
+                        headers: { 'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' }
+                    });
+                    if (healthResponse.ok) {
+                        healthData = await healthResponse.json();
+                    }
+                } catch (_) { /* ignore, keep default */ }
+
+                // If DB looked connected via /api/system-info, reflect it in health block
+                try {
+                    if (__dbLooksConnected) {
+                        if (!healthData.health_check) healthData.health_check = { systems: {}, overall_status: 'unknown' };
+                        if (!healthData.health_check.systems) healthData.health_check.systems = {};
+                        healthData.health_check.systems.database = { status: 'connected' };
+                    }
+                } catch (_) { /* ignore */ }
+
                 updateHealthStatus(healthData);
                 updatePerformanceChart(healthData);
                 
@@ -980,7 +1006,9 @@ document.addEventListener('DOMContentLoaded', function() {
         async function updatePipelineInfo() {
             try {
                 // Read current automation status first to avoid stale phase display
-                const statusRes = await fetch('/api/automation/status');
+                const statusRes = await fetch('/api/internal/automation/status', {
+                    headers: { 'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' }
+                });
                 const statusJson = statusRes.ok ? await statusRes.json() : null;
                 let isRunning = false;
                 if (statusJson) {
@@ -990,7 +1018,9 @@ document.addEventListener('DOMContentLoaded', function() {
                                !!(statusJson.running);
                 }
 
-                const res = await fetch('/api/automation/pipeline-history');
+                const res = await fetch('/api/internal/automation/pipeline-history', {
+                    headers: { 'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' }
+                });
                 if (!res.ok) return;
                 const data = await res.json();
                 const hist = (data.history || []);
@@ -1035,13 +1065,12 @@ document.addEventListener('DOMContentLoaded', function() {
         async function startAutomation() {
             try {
                 addLog('INFO', 'Starting automation...');
-                console.log('🚀 Starting automation via /api/automation/start');
-                const response = await fetch('/api/automation/start?v=1.1', { 
+                console.log('🚀 Starting automation via /api/internal/automation/start');
+                const response = await fetch('/api/internal/automation/start?v=1.1', { 
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw',
-                        'X-Internal-Request': 'true'
+                        'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw'
                     }
                 });
                 let data;
@@ -1058,13 +1087,12 @@ document.addEventListener('DOMContentLoaded', function() {
         async function stopAutomation() {
             try {
                 addLog('INFO', 'Stopping automation...');
-                console.log('🛑 Stopping automation via /api/automation/stop');
-                const response = await fetch('/api/automation/stop?v=1.1', { 
+                console.log('🛑 Stopping automation via /api/internal/automation/stop');
+                const response = await fetch('/api/internal/automation/stop?v=1.1', { 
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw',
-                        'X-Internal-Request': 'true'
+                        'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw'
                     }
                 });
                 let data;

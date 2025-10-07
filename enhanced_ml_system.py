@@ -146,6 +146,24 @@ class EnhancedMLSystem:
             self.enable_yolo_features = str(os.getenv('ENABLE_YOLO_FEATURES', 'True')).lower() in ('1', 'true', 'yes')
         except Exception:
             self.enable_yolo_features = True
+        # Prediction-time feature guard (schema drift tolerance)
+        try:
+            self.enable_pred_feature_guard = str(os.getenv('ENABLE_PREDICTION_FEATURE_GUARD', 'False')).lower() in ('1', 'true', 'yes')
+        except Exception:
+            self.enable_pred_feature_guard = False
+        try:
+            _guard_pref = os.getenv('GUARD_ALLOWED_PREFIXES', 'fingpt_,yolo_,usdtry,cds,rate') or 'fingpt_,yolo_,usdtry,cds,rate'
+            self.guard_allowed_prefixes = [p.strip() for p in _guard_pref.split(',') if p.strip()]
+        except Exception:
+            self.guard_allowed_prefixes = ['fingpt_', 'yolo_', 'usdtry', 'cds', 'rate']
+        try:
+            self.guard_max_missing_ratio = float(os.getenv('GUARD_MAX_MISSING_RATIO', '0.1'))
+        except Exception:
+            self.guard_max_missing_ratio = 0.1
+        try:
+            self.guard_penalty_max = float(os.getenv('GUARD_PENALTY_MAX', '0.2'))
+        except Exception:
+            self.guard_penalty_max = 0.2
         # External features directory (backfilled files live here)
         try:
             self.external_feature_dir = os.getenv('EXTERNAL_FEATURE_DIR', '/opt/bist-pattern/logs/feature_backfill')
@@ -342,11 +360,17 @@ class EnhancedMLSystem:
             except Exception:
                 return
 
-            # ⚠️ DISABLED: MAJOR DATA LEAKAGE!
-            # These features copy last 3 days to ALL rows → model sees future!
-            # MUST use rolling instead: pats.rolling(3).apply(...)
-            # For now: DISABLED to prevent leakage
-            pass
+            # Leakage-safe rolling features per row (uses only up-to-date info)
+            try:
+                bull_flag = (pats > 0).astype(float)
+                bear_flag = (pats < 0).astype(float)
+                df['pat_bull3'] = bull_flag.rolling(3, min_periods=1).sum().astype(float)
+                df['pat_bear3'] = bear_flag.rolling(3, min_periods=1).sum().astype(float)
+                df['pat_net3'] = (df['pat_bull3'] - df['pat_bear3']).astype(float)
+                df['pat_today'] = np.clip(pats / 100.0, -1.0, 1.0).astype(float)
+            except Exception:
+                # If any issue occurs, skip silently to avoid breaking pipeline
+                pass
         except Exception as e:
             logger.debug(f"TA-Lib candlestick features skipped: {e}")
 
@@ -986,7 +1010,7 @@ class EnhancedMLSystem:
                         
                         # Cross-validation (on returns) + OOF collection for meta-learner
                         xgb_scores = []
-                        xgb_oof_preds = np.zeros(len(X))  # OOF predictions storage
+                        xgb_oof_preds = np.full(len(X), np.nan)  # OOF predictions storage
                         for fold, (train_idx, val_idx) in enumerate(tscv.split(X)):
                             try:
                                 X_train, X_val = X[train_idx], X[val_idx]
@@ -1015,6 +1039,19 @@ class EnhancedMLSystem:
                                 logger.error(f"XGBoost fold {fold} error: {e}")
                                 # Don't raise - continue with other folds
                         
+                        # Compute OOF metrics (more realistic than train-tail)
+                        try:
+                            _mask = ~np.isnan(xgb_oof_preds)
+                            if np.any(_mask):
+                                xgb_rmse_oof = float(np.sqrt(mean_squared_error(y[_mask], xgb_oof_preds[_mask])))
+                                xgb_mape_oof = float(self._smape(y[_mask], xgb_oof_preds[_mask]))
+                            else:
+                                xgb_rmse_oof = float('nan')
+                                xgb_mape_oof = float('nan')
+                        except Exception:
+                            xgb_rmse_oof = float('nan')
+                            xgb_mape_oof = float('nan')
+
                         # Final training with seed bagging (variance reduction)
                         if self.enable_seed_bagging and self.n_seeds > 1:
                             # ⚡ SEED BAGGING: Train with multiple seeds and average
@@ -1029,13 +1066,12 @@ class EnhancedMLSystem:
                                     logger.error(f"XGBoost seed {seed} error: {e}")
                             
                             if seed_predictions:
-                                xgb_pred = np.mean(seed_predictions, axis=0)  # Average across seeds
+                                _ = np.mean(seed_predictions, axis=0)  # averaged preds unused; kept for potential debug
                                 logger.info(f"XGBoost: Seed bagging with {len(seed_predictions)} seeds")
                             else:
                                 # Fallback to single seed
                                 xgb_model.set_params(random_state=42, early_stopping_rounds=None)
                                 xgb_model.fit(X, y)
-                                xgb_pred = xgb_model.predict(X[-100:])
                         else:
                             # Original: Single seed (faster)
                             try:
@@ -1043,7 +1079,6 @@ class EnhancedMLSystem:
                             except Exception:
                                 pass
                             xgb_model.fit(X, y)
-                            xgb_pred = xgb_model.predict(X[-100:])  # Last 100 returns for validation
                         
                         # CRITICAL FIX: R² to confidence conversion
                         raw_r2 = np.mean(xgb_scores)
@@ -1053,8 +1088,8 @@ class EnhancedMLSystem:
                             'model': xgb_model,
                             'score': confidence,  # Confidence [0-1]
                             'raw_r2': float(raw_r2),  # Keep raw R² for debugging
-                            'rmse': float(np.sqrt(mean_squared_error(y[-100:], xgb_pred))),
-                            'mape': float(self._smape(y[-100:], xgb_pred)),
+                            'rmse': xgb_rmse_oof,
+                            'mape': xgb_mape_oof,
                         }
                         
                         # Feature importance
@@ -1089,7 +1124,7 @@ class EnhancedMLSystem:
                         
                         # Cross-validation (on returns) + OOF
                         lgb_scores = []
-                        lgb_oof_preds = np.zeros(len(X))
+                        lgb_oof_preds = np.full(len(X), np.nan)
                         for train_idx, val_idx in tscv.split(X):
                             X_train, X_val = X[train_idx], X[val_idx]
                             y_train, y_val = y[train_idx], y[val_idx]
@@ -1110,6 +1145,19 @@ class EnhancedMLSystem:
                             score = r2_score(y_val, pred)
                             lgb_scores.append(score)
                         
+                        # Compute OOF metrics
+                        try:
+                            _mask = ~np.isnan(lgb_oof_preds)
+                            if np.any(_mask):
+                                lgb_rmse_oof = float(np.sqrt(mean_squared_error(y[_mask], lgb_oof_preds[_mask])))
+                                lgb_mape_oof = float(self._smape(y[_mask], lgb_oof_preds[_mask]))
+                            else:
+                                lgb_rmse_oof = float('nan')
+                                lgb_mape_oof = float('nan')
+                        except Exception:
+                            lgb_rmse_oof = float('nan')
+                            lgb_mape_oof = float('nan')
+
                         # Final training with seed bagging
                         if self.enable_seed_bagging and self.n_seeds > 1:
                             # ⚡ SEED BAGGING: Train with multiple seeds and average
@@ -1124,16 +1172,14 @@ class EnhancedMLSystem:
                                     logger.error(f"LightGBM seed {seed} error: {e}")
                             
                             if seed_predictions:
-                                lgb_pred = np.mean(seed_predictions, axis=0)
+                                _ = np.mean(seed_predictions, axis=0)
                                 logger.info(f"LightGBM: Seed bagging with {len(seed_predictions)} seeds")
                             else:
                                 lgb_model.set_params(random_state=42)
                                 lgb_model.fit(X, y)
-                                lgb_pred = lgb_model.predict(X[-100:])
                         else:
                             # Original: Single seed
                             lgb_model.fit(X, y)
-                            lgb_pred = lgb_model.predict(X[-100:])
                         
                         # CRITICAL FIX: R² to confidence conversion
                         raw_r2 = np.mean(lgb_scores)
@@ -1143,8 +1189,8 @@ class EnhancedMLSystem:
                             'model': lgb_model,
                             'score': confidence,  # Confidence [0-1]
                             'raw_r2': float(raw_r2),
-                            'rmse': float(np.sqrt(mean_squared_error(y[-100:], lgb_pred))),
-                            'mape': float(self._smape(y[-100:], lgb_pred)),
+                            'rmse': lgb_rmse_oof,
+                            'mape': lgb_mape_oof,
                         }
                         
                         # Feature importance
@@ -1180,7 +1226,7 @@ class EnhancedMLSystem:
                         
                         # Cross-validation (on returns) + OOF
                         cat_scores = []
-                        cat_oof_preds = np.zeros(len(X))
+                        cat_oof_preds = np.full(len(X), np.nan)
                         for train_idx, val_idx in tscv.split(X):
                             X_train, X_val = X[train_idx], X[val_idx]
                             y_train, y_val = y[train_idx], y[val_idx]
@@ -1228,26 +1274,37 @@ class EnhancedMLSystem:
                                     logger.error(f"CatBoost seed {seed} error: {e}")
                             
                             if seed_predictions:
-                                cat_pred = np.mean(seed_predictions, axis=0)
+                                _ = np.mean(seed_predictions, axis=0)
                                 logger.info(f"CatBoost: Seed bagging with {len(seed_predictions)} seeds")
                             else:
                                 cat_model.fit(X, y)  # logging_level in params
-                                cat_pred = cat_model.predict(X[-100:])
                         else:
                             # Original: Single seed
                             cat_model.fit(X, y)  # logging_level in params
-                            cat_pred = cat_model.predict(X[-100:])
                         
                         # CRITICAL FIX: R² to confidence conversion
                         raw_r2 = np.mean(cat_scores)
                         confidence = self._r2_to_confidence(raw_r2)
                         
+                        # Compute OOF metrics
+                        try:
+                            _mask = ~np.isnan(cat_oof_preds)
+                            if np.any(_mask):
+                                cat_rmse_oof = float(np.sqrt(mean_squared_error(y[_mask], cat_oof_preds[_mask])))
+                                cat_mape_oof = float(self._smape(y[_mask], cat_oof_preds[_mask]))
+                            else:
+                                cat_rmse_oof = float('nan')
+                                cat_mape_oof = float('nan')
+                        except Exception:
+                            cat_rmse_oof = float('nan')
+                            cat_mape_oof = float('nan')
+
                         horizon_models['catboost'] = {
                             'model': cat_model,
                             'score': confidence,  # Confidence [0-1]
                             'raw_r2': float(raw_r2),
-                            'rmse': float(np.sqrt(mean_squared_error(y[-100:], cat_pred))),
-                            'mape': float(self._smape(y[-100:], cat_pred)),
+                            'rmse': cat_rmse_oof,
+                            'mape': cat_mape_oof,
                         }
                         
                         # Feature importance
@@ -1284,12 +1341,21 @@ class EnhancedMLSystem:
                         if len(oof_list) >= 2:
                             # Stack OOF predictions as features
                             meta_X = np.column_stack(oof_list)  # Shape: (n_samples, n_models)
-                            meta_y = y  # True targets
+                            # Filter rows where all models have valid OOF preds
+                            try:
+                                _valid_mask = ~np.any(np.isnan(meta_X), axis=1)
+                            except Exception:
+                                _valid_mask = np.ones(meta_X.shape[0], dtype=bool)
+                            meta_X = meta_X[_valid_mask]
+                            meta_y = y[_valid_mask]  # True targets are returns
                             
                             # Train Ridge meta-learner
                             from sklearn.linear_model import Ridge
                             meta_model = Ridge(alpha=1.0)
-                            meta_model.fit(meta_X, meta_y)
+                            if len(meta_X) >= self.early_stop_min_val:
+                                meta_model.fit(meta_X, meta_y)
+                            else:
+                                raise RuntimeError("Insufficient OOF rows for meta-learner")
                             
                             # Store meta-learner
                             meta_key = f"{symbol}_{horizon}d_meta"
@@ -1393,9 +1459,45 @@ class EnhancedMLSystem:
                 
             # Check if all feature columns exist
             missing_cols = [col for col in self.feature_columns if col not in df_features.columns]
+            confidence_scale = 1.0
+            guard_info = None
             if missing_cols:
-                logger.error(f"Missing feature columns: {missing_cols}")
-                return None
+                # Attempt guard if enabled and only allowed prefixes are missing
+                if self.enable_pred_feature_guard:
+                    allowed_missing = []
+                    disallowed_missing = []
+                    for col in missing_cols:
+                        if any(col.startswith(pref) for pref in self.guard_allowed_prefixes):
+                            allowed_missing.append(col)
+                        else:
+                            disallowed_missing.append(col)
+                    missing_ratio = float(len(missing_cols)) / float(max(1, len(self.feature_columns)))
+                    if disallowed_missing or missing_ratio > self.guard_max_missing_ratio:
+                        logger.error(
+                            f"Missing disallowed features or too many missing (ratio={missing_ratio:.3f}): disallowed={disallowed_missing} allowed_missing={allowed_missing}"
+                        )
+                        return None
+                    # Create allowed missing columns with neutral fills (0.0)
+                    for col in allowed_missing:
+                        try:
+                            df_features[col] = 0.0
+                        except Exception:
+                            pass
+                    # Confidence penalty proportional to missing ratio (capped)
+                    penalty = min(self.guard_penalty_max, missing_ratio * 2.0)
+                    confidence_scale = max(0.5, 1.0 - penalty)
+                    guard_info = {
+                        'missing_total': len(missing_cols),
+                        'missing_allowed': len(allowed_missing),
+                        'missing_ratio': missing_ratio,
+                        'confidence_scale': confidence_scale,
+                    }
+                    logger.warning(
+                        f"Prediction feature guard applied: missing={len(missing_cols)} ratio={missing_ratio:.3f} scale={confidence_scale:.2f}"
+                    )
+                else:
+                    logger.error(f"Missing feature columns: {missing_cols}")
+                    return None
                 
             latest_features = df_features[self.feature_columns].iloc[-1:].values
             
@@ -1417,6 +1519,7 @@ class EnhancedMLSystem:
 
                             model_predictions[model_name] = {
                                 'prediction': float(pred),
+                                'pred_ret': float(pred_ret),
                                 'confidence': float(model_info['score']),
                                 'rmse': float(model_info['rmse']),
                                 'mape': float(model_info['mape'])
@@ -1428,6 +1531,7 @@ class EnhancedMLSystem:
                     if model_predictions:
                         weights = [info['confidence'] for info in model_predictions.values()]
                         predictions_list = [info['prediction'] for info in model_predictions.values()]
+                        returns_list = [info.get('pred_ret', 0.0) for info in model_predictions.values()]
                         
                         # ⚡ NEW: Meta-Stacking with Ridge Learner (if enabled)
                         if self.enable_meta_stacking and len(predictions_list) >= 2:
@@ -1438,25 +1542,27 @@ class EnhancedMLSystem:
                                 # Check if meta-learner exists (trained during model training)
                                 if meta_key in self.meta_learners:
                                     meta_model = self.meta_learners[meta_key]
-                                    # Stack predictions as features
-                                    meta_X = np.array(predictions_list).reshape(1, -1)
-                                    ensemble_pred = float(meta_model.predict(meta_X)[0])
-                                    avg_confidence = np.mean(weights) * 1.1  # Meta-stacking bonus
+                                    # Stack predictions as features (returns domain)
+                                    meta_X = np.array(returns_list, dtype=float).reshape(1, -1)
+                                    ensemble_ret = float(meta_model.predict(meta_X)[0])
+                                    current_px = float(current_data['close'].iloc[-1])
+                                    ensemble_pred = float(current_px * (1.0 + ensemble_ret))
+                                    avg_confidence = (np.mean(weights) * 1.1) * confidence_scale  # Meta-stacking bonus + guard penalty
                                     logger.debug(f"Meta-stacking used for {symbol} {horizon}d")
                                 else:
                                     # Fallback to weighted average if meta-learner not trained yet
                                     ensemble_pred = np.average(predictions_list, weights=weights) if sum(weights) > 0 else float(np.mean(predictions_list))
-                                    avg_confidence = np.mean(weights) if sum(weights) > 0 else 0.55
+                                    avg_confidence = (np.mean(weights) if sum(weights) > 0 else 0.55) * confidence_scale
                             except Exception as e:
                                 logger.error(f"Meta-stacking error: {e}, falling back to weighted average")
                                 ensemble_pred = np.average(predictions_list, weights=weights) if sum(weights) > 0 else float(np.mean(predictions_list))
-                                avg_confidence = np.mean(weights) if sum(weights) > 0 else 0.55
+                                avg_confidence = (np.mean(weights) if sum(weights) > 0 else 0.55) * confidence_scale
                         
                         else:
                             # Original: Performance-based weighting + disagreement penalty
                             if sum(weights) > 0:
                                 ensemble_pred = np.average(predictions_list, weights=weights)
-                                avg_confidence = np.mean(weights)
+                                avg_confidence = np.mean(weights) * confidence_scale
                                 
                                 # ✨ NEW: Reduce confidence if models disagree significantly
                                 if len(predictions_list) > 1:
@@ -1472,13 +1578,14 @@ class EnhancedMLSystem:
                             else:
                                 ensemble_pred = float(np.mean(predictions_list))
                                 # conservative default confidence
-                                avg_confidence = 0.55
+                                avg_confidence = 0.55 * confidence_scale
                         predictions[f"{horizon}d"] = {
                             'ensemble_prediction': float(ensemble_pred),
                             'confidence': float(avg_confidence),
                             'models': model_predictions,
                             'current_price': float(current_data['close'].iloc[-1]),
-                            'model_count': len(model_predictions)
+                            'model_count': len(model_predictions),
+                            **({'guard': guard_info} if guard_info else {}),
                         }
             
             # ⚡ NEW: Sentiment-based prediction adjustment (optional)
@@ -1558,6 +1665,30 @@ class EnhancedMLSystem:
                         filename = f"{self.model_directory}/{model_key}_{model_name}.pkl"
                         joblib.dump(model_info['model'], filename)
             
+            # Save per-horizon metrics (score/rmse/mape/raw_r2) to a JSON in model directory
+            try:
+                metrics = {}
+                for h in self.prediction_horizons:
+                    key = f"{symbol}_{h}d"
+                    if key in self.models:
+                        entry = {}
+                        for m, info in (self.models.get(key, {}) or {}).items():
+                            try:
+                                entry[m] = {
+                                    'score': float(info.get('score', 0.0)),
+                                    'rmse': float(info.get('rmse', 0.0)),
+                                    'mape': float(info.get('mape', 0.0)),
+                                    'raw_r2': float(info.get('raw_r2', 0.0)),
+                                }
+                            except Exception:
+                                continue
+                        metrics[f"{h}d"] = entry
+                metrics_file = f"{self.model_directory}/{symbol}_metrics.json"
+                with open(metrics_file, 'w') as wf:
+                    json.dump(metrics, wf)
+            except Exception:
+                pass
+
             # Feature importance kaydet
             importance_file = f"{self.model_directory}/{symbol}_feature_importance.pkl"
             symbol_importance = {k: v for k, v in self.feature_importance.items() if k.startswith(symbol)}
@@ -1646,6 +1777,29 @@ class EnhancedMLSystem:
                             continue
                 if horizon_models:
                     self.models[model_key] = horizon_models
+
+            # Reload metrics if available to restore scores/metrics for weighting
+            try:
+                metrics_file = f"{self.model_directory}/{symbol}_metrics.json"
+                if os.path.exists(metrics_file):
+                    with open(metrics_file, 'r') as rf:
+                        metrics_obj = json.load(rf) or {}
+                    for h in self.prediction_horizons:
+                        key = f"{symbol}_{h}d"
+                        hkey = f"{h}d"
+                        if key in self.models and hkey in metrics_obj:
+                            for m, vals in (metrics_obj[hkey] or {}).items():
+                                try:
+                                    if m in self.models[key]:
+                                        self.models[key][m]['score'] = float(vals.get('score', 0.0))
+                                        self.models[key][m]['rmse'] = float(vals.get('rmse', 0.0))
+                                        self.models[key][m]['mape'] = float(vals.get('mape', 0.0))
+                                        if 'raw_r2' in vals:
+                                            self.models[key][m]['raw_r2'] = float(vals.get('raw_r2', 0.0))
+                                except Exception:
+                                    continue
+            except Exception:
+                pass
 
             # Feature columns: JSON → fallback importance → fallback empty
             cols_file = f"{self.model_directory}/{symbol}_feature_columns.json"

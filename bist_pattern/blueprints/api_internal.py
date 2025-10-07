@@ -135,6 +135,234 @@ def register(app):
             app.logger.error(f"Internal automation status error: {e}")
             return jsonify({'status': 'error', 'error': str(e)}), 500
 
+    # Internal health endpoint (mirrors public /api/automation/health)
+    @bp.route('/automation/health')
+    @_allow_or_token(app)
+    def automation_health_internal():
+        try:
+            # Prefer pipeline-provided health if available
+            try:
+                from app import get_pipeline_with_context  # type: ignore
+                pipeline = get_pipeline_with_context()
+            except Exception:
+                pipeline = None
+
+            health_data = {'systems': {}}
+            # API/WebSocket assumed healthy if this endpoint responds
+            health_data['systems']['flask_api'] = {'status': 'healthy'}
+            health_data['systems']['websocket'] = {'status': 'connected'}
+
+            # DB connectivity quick check
+            try:
+                from sqlalchemy import text  # type: ignore
+                from models import db  # type: ignore
+                db.session.execute(text('SELECT 1'))
+                health_data['systems']['database'] = {'status': 'connected'}
+            except Exception as db_err:
+                health_data['systems']['database'] = {'status': 'error', 'details': str(db_err)}
+
+            # Automation engine
+            try:
+                status_map = pipeline.get_scheduler_status() if (pipeline and hasattr(pipeline, 'get_scheduler_status')) else {}
+                is_running = bool(status_map.get('is_running', getattr(pipeline, 'is_running', False)))
+                health_data['systems']['automation_engine'] = {'status': 'running' if is_running else 'stopped'}
+            except Exception as auto_err:
+                health_data['systems']['automation_engine'] = {'status': 'error', 'details': str(auto_err)}
+
+            # System resources via psutil (best-effort)
+            try:
+                import psutil  # type: ignore
+                cpu_percent = float(psutil.cpu_percent(interval=0.1))
+                vm = psutil.virtual_memory()
+                mem_percent = float(getattr(vm, 'percent', 0.0))
+                mem_total_mb = float(getattr(vm, 'total', 0.0)) / (1024 * 1024)
+                mem_used_mb = float(getattr(vm, 'used', 0.0)) / (1024 * 1024)
+                du = psutil.disk_usage('/')
+                disk_percent = float(getattr(du, 'percent', 0.0))
+                disk_free_gb = float(getattr(du, 'free', 0.0)) / (1024 * 1024 * 1024)
+                disk_used_gb = float(getattr(du, 'used', 0.0)) / (1024 * 1024 * 1024)
+            except Exception:
+                cpu_percent = None
+                mem_percent = None
+                mem_total_mb = None
+                mem_used_mb = None
+                disk_percent = None
+                disk_free_gb = None
+                disk_used_gb = None
+
+            try:
+                load_avg = None
+                import os as _os
+                if hasattr(_os, 'getloadavg'):
+                    la = _os.getloadavg()
+                    load_avg = [float(la[0]), float(la[1]), float(la[2])]
+            except Exception:
+                load_avg = None
+
+            health_data['system_resources'] = {
+                'cpu_percent': cpu_percent,
+                'memory_percent': mem_percent,
+                'memory_total_mb': mem_total_mb,
+                'memory_used_mb': mem_used_mb,
+                'disk_percent': disk_percent,
+                'disk_free_gb': disk_free_gb,
+                'disk_used_gb': disk_used_gb,
+                'load_avg': load_avg,
+            }
+
+            # Derive overall status similar to public endpoint
+            try:
+                def _norm(val: str) -> str:
+                    return (str(val or '').strip().lower())
+
+                s = health_data.get('systems', {}) or {}
+                st_db = _norm(s.get('database', {}).get('status'))
+                st_api = _norm(s.get('flask_api', {}).get('status'))
+                st_ws = _norm(s.get('websocket', {}).get('status'))
+                st_auto = _norm(s.get('automation_engine', {}).get('status'))
+
+                critical = any(x in ('error', 'disconnected') for x in (st_db, st_api))
+                if critical:
+                    overall = 'critical'
+                else:
+                    healthy = (st_db in ('healthy', 'connected')) and (st_api == 'healthy') and (st_ws in ('connected', 'healthy'))
+                    if healthy and st_auto == 'running':
+                        overall = 'healthy'
+                    elif healthy and st_auto != 'running':
+                        overall = 'warning'
+                    else:
+                        overall = 'warning'
+            except Exception:
+                overall = 'unknown'
+            health_data['overall_status'] = overall
+
+            return jsonify({'status': 'success', 'health_check': health_data})
+        except Exception as e:
+            app.logger.error(f"Internal health endpoint error: {e}")
+            return jsonify({'status': 'error', 'error': str(e)}), 500
+
+    # Internal pipeline history (alias of public /api/automation/pipeline-history)
+    @bp.route('/automation/pipeline-history')
+    @_allow_or_token(app)
+    def automation_pipeline_history_internal():
+        try:
+            import os as _os
+            import json as _json
+            log_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+            status_file = _os.path.join(log_dir, 'pipeline_status.json')
+
+            history = []
+            if _os.path.exists(status_file):
+                try:
+                    with open(status_file, 'r') as f:
+                        data = _json.load(f) or {}
+                        history = data.get('history', []) if isinstance(data, dict) else []
+                except Exception:
+                    history = []
+
+            resp = jsonify({'status': 'success', 'history': history, 'tasks': []})
+            resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+            return resp
+        except Exception as e:
+            return jsonify({'status': 'error', 'error': str(e)}), 500
+
+    # Internal alias for volume tiers (mirrors public /api/automation/volume/tiers)
+    @bp.route('/automation/volume/tiers')
+    @_allow_or_token(app)
+    def automation_volume_tiers_internal():
+        try:
+            from models import db, Stock, StockPrice  # type: ignore
+            from sqlalchemy import func  # type: ignore
+            from datetime import timedelta
+            import os as _os
+            from datetime import datetime as _dt
+
+            lookback_days = int(_os.getenv('VOLUME_LOOKBACK_DAYS', '30'))
+            cutoff_date = (_dt.utcnow() - timedelta(days=lookback_days)).date()
+
+            rows = (
+                db.session.query(Stock.symbol, func.avg(StockPrice.volume).label('avg_vol'))
+                .join(StockPrice, Stock.id == StockPrice.stock_id)
+                .filter(Stock.is_active.is_(True), StockPrice.date >= cutoff_date)
+                .group_by(Stock.id, Stock.symbol)
+                .all()
+            )
+            vols = [float(r[1] or 0) for r in rows]
+
+            def _pct(values, p):
+                try:
+                    if not values:
+                        return 0.0
+                    s = sorted(values)
+                    k = (len(s) - 1) * (p / 100.0)
+                    f = int(k)
+                    c = min(f + 1, len(s) - 1)
+                    if f == c:
+                        return float(s[int(k)])
+                    d0 = s[f] * (c - k)
+                    d1 = s[c] * (k - f)
+                    return float(d0 + d1)
+                except Exception:
+                    return 0.0
+
+            p15 = _pct(vols, 15)
+            p40 = _pct(vols, 40)
+            p75 = _pct(vols, 75)
+            p95 = _pct(vols, 95)
+
+            def _tier(v):
+                try:
+                    v = float(v or 0)
+                    if v >= p95:
+                        return 'very_high'
+                    if v >= p75:
+                        return 'high'
+                    if v >= p40:
+                        return 'medium'
+                    if v >= p15:
+                        return 'low'
+                    return 'very_low'
+                except Exception:
+                    return 'very_low'
+
+            resp = {
+                'status': 'success',
+                'lookback_days': lookback_days,
+                'percentiles': {'p15': p15, 'p40': p40, 'p75': p75, 'p95': p95},
+            }
+
+            sym = (request.args.get('symbol') or '').upper().strip()
+            if sym:
+                try:
+                    sym_avg = (
+                        db.session.query(func.avg(StockPrice.volume))
+                        .join(Stock, Stock.id == StockPrice.stock_id)
+                        .filter(Stock.symbol == sym, Stock.is_active.is_(True), StockPrice.date >= cutoff_date)
+                        .scalar()
+                    )
+                    sym_avg = float(sym_avg or 0)
+                except Exception:
+                    sym_avg = 0.0
+                resp['symbol'] = sym
+                resp['avg_volume'] = sym_avg
+                resp['tier'] = _tier(sym_avg)
+            else:
+                summary = {'very_high': 0, 'high': 0, 'medium': 0, 'low': 0, 'very_low': 0}
+                try:
+                    for s, avg in rows:
+                        t = _tier(float(avg or 0))
+                        summary[t] = summary.get(t, 0) + 1
+                except Exception:
+                    pass
+                resp['summary'] = summary
+
+            out = jsonify(resp)
+            out.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+            return out
+        except Exception as e:
+            app.logger.error(f"internal volume_tiers error: {e}")
+            return jsonify({'status': 'error', 'message': str(e)}), 500
+
     @bp.route('/bulk-predictions/status')
     @_allow_or_token(app)
     def bulk_predictions_status():
