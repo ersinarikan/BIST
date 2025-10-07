@@ -1937,7 +1937,7 @@
                     
                     // Cache per symbol for instant re-render
                     const fetchedAt = result.source_timestamp || sourceTs || null;
-                    try { window.__predictionsBySymbol[ws.symbol] = { predictions: preds, current_price: current, model: result.model || null, fetched_at: fetchedAt }; } catch (_) {}
+                    try { window.__predictionsBySymbol[ws.symbol] = { predictions: preds, confidences: (result.confidences || {}), current_price: current, model: result.model || null, fetched_at: fetchedAt }; } catch (_) {}
                     return {
                         symbol: ws.symbol,
                         current_price: current,
