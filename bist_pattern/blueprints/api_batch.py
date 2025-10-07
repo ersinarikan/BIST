@@ -221,6 +221,11 @@ def register(app):
                                     ep = v['ensemble_prediction']
                                     if ep is not None:
                                         out[kk] = float(ep)
+                                        # Store confidence separately (will be added to result later)
+                                        conf_key = f'{kk}_conf'
+                                        conf = v.get('confidence', 0.5)
+                                        if isinstance(conf, (int, float)):
+                                            out[conf_key] = float(conf)
                                 elif 'price' in v and isinstance(v['price'], (int, float)):
                                     price_val = v['price']
                                     if price_val is not None:
@@ -268,9 +273,20 @@ def register(app):
                         normalized = _normalize(pred_entry.get('basic'))
 
                     if normalized:
+                        # Extract confidences from normalized (1d_conf, 3d_conf, etc.)
+                        confidences = {}
+                        predictions = {}
+                        for k, v in normalized.items():
+                            if k.endswith('_conf'):
+                                horizon = k.replace('_conf', '')
+                                confidences[horizon] = v
+                            else:
+                                predictions[k] = v
+                        
                         results[sym] = {
                             'status': 'success',
-                            'predictions': normalized,
+                            'predictions': predictions,
+                            'confidences': confidences,
                             'current_price': last_close_by_symbol.get(sym),
                             'source_timestamp': (datetime.fromtimestamp(bulk_mtime).isoformat() if bulk_mtime else None),
                             'analysis_timestamp': analysis_ts
