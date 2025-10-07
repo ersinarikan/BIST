@@ -1861,14 +1861,29 @@
                             if (it.confidences && it.confidences[horizon] && typeof it.confidences[horizon] === 'number') {
                                 conf = Math.round(it.confidences[horizon] * 100);
                             }
-                            if (sig > 0) {
-                                label = (conf >= 85) ? 'Yüksek alım sinyali' : 'Alım sinyali';
-                                icon = 'fas fa-arrow-up';
-                                scls = 'signal-buy';
-                            } else if (sig < 0) {
-                                label = (conf >= 85) ? 'Yüksek satış sinyali' : 'Düşük satış sinyali';
-                                icon = 'fas fa-arrow-down';
-                                scls = 'signal-sell';
+                            // ⚡ FIX: Same confidence-first logic as other function!
+                            if (conf >= 70 && abs >= 0.5) {
+                                if (chosenPct > 0) {
+                                    label = conf >= 85 ? 'Yüksek alım sinyali' : 'Alım sinyali';
+                                    icon = 'fas fa-arrow-up';
+                                    scls = 'signal-buy';
+                                } else {
+                                    label = conf >= 85 ? 'Yüksek satış sinyali' : 'Satış sinyali';
+                                    icon = 'fas fa-arrow-down';
+                                    scls = 'signal-sell';
+                                }
+                            } else if (conf >= 60 && abs >= 1.5) {
+                                if (chosenPct > 0) {
+                                    label = 'Alım sinyali';
+                                    icon = 'fas fa-arrow-up';
+                                    scls = 'signal-buy';
+                                } else {
+                                    label = 'Satış sinyali';
+                                    icon = 'fas fa-arrow-down';
+                                    scls = 'signal-sell';
+                                }
+                            } else {
+                                label = conf >= 65 ? 'Güvenli bekleme' : 'Bekleme';
                             }
                             sigEl.innerHTML = `<span class="${scls}"><i class="${icon} me-1"></i>${label} (%${conf})</span>`;
                         }
@@ -2089,26 +2104,38 @@
                             let label = 'Bekleme';
                             let icon = 'fas fa-minus';
                             let scls = 'signal-hold text-muted';
-                            const threshold = getThresholdForHorizon(horizon);
-                            let sig = 0; // -1 sell, 0 hold, +1 buy
-                            if (it._pct >= threshold) sig = +1; else if (it._pct <= -threshold) sig = -1;
-                            
                             // ⚡ NEW: Use API confidence if available!
                             let conf = Math.min(95, Math.max(50, Math.round(Math.min(1, abs/5)*100))); // fallback
                             if (it.confidences && it.confidences[horizon]) {
                                 conf = Math.round(it.confidences[horizon] * 100);
                             }
                             
-                            if (sig > 0) {
-                                if (conf >= 85) label = 'Yüksek alım sinyali';
-                                else if (conf >= 60) label = 'Alım sinyali';
-                                icon = (label === 'Bekleme') ? 'fas fa-minus' : 'fas fa-arrow-up';
-                                scls = (label === 'Bekleme') ? 'signal-hold text-muted' : 'signal-buy';
-                            } else if (sig < 0) {
-                                if (conf >= 85) label = 'Yüksek satış sinyali';
-                                else if (conf >= 60) label = 'Düşük satış sinyali';
-                                icon = (label === 'Bekleme') ? 'fas fa-minus' : 'fas fa-arrow-down';
-                                scls = (label === 'Bekleme') ? 'signal-hold text-muted' : 'signal-sell';
+                            // ⚡ FIX: Confidence-first logic (not threshold-first!)
+                            // High confidence → signal even with small delta
+                            // Low confidence → bekleme even with big delta
+                            if (conf >= 70 && abs >= 0.5) {  // High confidence + some movement
+                                if (it._pct > 0) {
+                                    label = conf >= 85 ? 'Yüksek alım sinyali' : 'Alım sinyali';
+                                    icon = 'fas fa-arrow-up';
+                                    scls = 'signal-buy';
+                                } else {
+                                    label = conf >= 85 ? 'Yüksek satış sinyali' : 'Satış sinyali';
+                                    icon = 'fas fa-arrow-down';
+                                    scls = 'signal-sell';
+                                }
+                            } else if (conf >= 60 && abs >= 1.5) {  // Medium confidence + good movement
+                                if (it._pct > 0) {
+                                    label = 'Alım sinyali';
+                                    icon = 'fas fa-arrow-up';
+                                    scls = 'signal-buy';
+                                } else {
+                                    label = 'Satış sinyali';
+                                    icon = 'fas fa-arrow-down';
+                                    scls = 'signal-sell';
+                                }
+                            } else {
+                                // Low confidence or small movement
+                                label = conf >= 65 ? 'Güvenli bekleme' : 'Bekleme';
                             }
                             sigEl.innerHTML = `<span class="${scls}"><i class="${icon} me-1"></i>${label} (%${conf})</span>`;
                         }
