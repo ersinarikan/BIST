@@ -1071,13 +1071,17 @@
                 const symbols = watchedStocks.map(s => s.symbol);
                 if (symbols.length === 0) return;
                 
-                console.log('⚡ Loading batch pattern analysis for', symbols.length, 'symbols...');
+                console.log('⚡ DISABLED: Pattern analysis (to prevent signal conflicts)');
+                // Pattern analysis disabled - using only ML prediction-based signals
+                return;
                 
+                /* DISABLED - was causing race condition
                 const response = await fetch('/api/batch/pattern-analysis', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({symbols: symbols})
                 });
+                */
                 
                 if (response.ok) {
                     const data = await response.json();
