@@ -229,7 +229,7 @@ class Config:
     @staticmethod
     def init_app(app):
         """Initialize application with config"""
-        pass
+        return None
 
  
 class DevelopmentConfig(Config):
@@ -241,8 +241,9 @@ class ProductionConfig(Config):
     """Production configuration"""
     DEBUG = False
     
-    @classmethod
-    def init_app(cls, app):
+    @staticmethod
+    def init_app(app):
+        # Delegate to base init (staticmethod) for compatibility
         Config.init_app(app)
         
         # Log to syslog in production

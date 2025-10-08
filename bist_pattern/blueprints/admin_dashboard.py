@@ -18,7 +18,7 @@ def register(app):
     """Register admin dashboard blueprint"""
     
     # Import dependencies inside register to avoid circular imports
-    from models import db, User, Stock, StockPrice
+    from models import db, User, Stock, StockPrice, MetricsDaily
     from bist_pattern.core.decorators import admin_required
     from bist_pattern.core.auth_manager import AuthManager
     
@@ -133,9 +133,13 @@ def register(app):
             from bist_pattern.core.unified_collector import get_unified_collector
             collector = get_unified_collector()
             
-            # Get parameters from request
-            symbol_limit = request.json.get('symbol_limit', 10) if request.is_json else 10
-            period = request.json.get('period', '5d') if request.is_json else '5d'
+            # Get parameters from request (safe)
+            try:
+                body = request.get_json(silent=True) or {}
+            except Exception:
+                body = {}
+            symbol_limit = body.get('symbol_limit', 10)
+            period = body.get('period', '5d')
             
             # Manual data collection
             symbols = collector.get_bist_symbols()
@@ -234,6 +238,98 @@ def register(app):
         except Exception as e:
             logger.error(f"Automation report error: {e}")
             return jsonify({'error': 'Failed to generate automation report'}), 500
+
+    @bp.route('/calibration/summary')
+    @login_required
+    @admin_required
+    def calibration_summary():
+        """Return param_store summary and recent (7d,30d) metrics per horizon."""
+        from datetime import date, timedelta
+        import os as _os
+        import json as _json
+        try:
+            # Load param_store.json
+            base = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+            ppath = _os.path.join(base, 'param_store.json')
+            pstore = {}
+            if _os.path.exists(ppath):
+                try:
+                    with open(ppath, 'r') as rf:
+                        pstore = _json.load(rf) or {}
+                except Exception:
+                    pstore = {}
+
+            # Helper to aggregate metrics for the last N days
+            def _aggregate_last_ndays(n_days: int):
+                _today = date.today()
+                _start = _today - timedelta(days=n_days - 1)
+                _rows = (
+                    db.session.query(MetricsDaily)
+                    .filter(MetricsDaily.date >= _start)
+                    .filter(MetricsDaily.date <= _today)
+                    .all()
+                )
+                _by_h: dict[str, list] = {}
+                for _r in _rows:
+                    _key = (_r.horizon or '').strip()
+                    if not _key:
+                        continue
+                    _by_h.setdefault(_key, []).append(_r)
+                _metrics = {}
+                _acc_vals = []
+                for _h, _items in _by_h.items():
+                    _acc_list = [float(getattr(_it, 'acc')) for _it in _items if getattr(_it, 'acc') is not None]
+                    _acc = (sum(_acc_list) / len(_acc_list)) if _acc_list else None
+                    _metrics[_h] = {'acc': _acc, 'count': len(_items)}
+                    if _acc is not None:
+                        _acc_vals.append(_acc)
+                _overall = (sum(_acc_vals) / len(_acc_vals)) if _acc_vals else None
+                return _metrics, _overall
+
+            metrics_7d, overall_acc_7d = _aggregate_last_ndays(7)
+            metrics_30d, overall_acc_30d = _aggregate_last_ndays(30)
+
+            # A/B summary for last 7d (based on PredictionsLog.param_version tag and OutcomesLog.dir_hit)
+            from models import PredictionsLog, OutcomesLog  # type: ignore
+            hkeys = ['1d', '3d', '7d', '14d', '30d']
+            ab_7d = {h: {'prod': {'acc': None, 'n': 0}, 'chall': {'acc': None, 'n': 0}} for h in hkeys}
+            dt_today = date.today()
+            dt_start = dt_today - timedelta(days=6)
+            rows = (
+                db.session.query(PredictionsLog, OutcomesLog)
+                .join(OutcomesLog, OutcomesLog.prediction_id == PredictionsLog.id)
+                .filter(OutcomesLog.ts_eval >= dt_start)
+                .all()
+            )
+            tmp = {h: {'prod': [], 'chall': []} for h in hkeys}
+            for p, o in rows:
+                try:
+                    h = (p.horizon or '').strip()
+                    if h not in tmp:
+                        continue
+                    pv = str(getattr(p, 'param_version', '') or '')
+                    grp = 'chall' if 'ab:chall' in pv else 'prod'
+                    tmp[h][grp].append(1.0 if bool(getattr(o, 'dir_hit')) else 0.0)
+                except Exception:
+                    continue
+            for h in hkeys:
+                for grp in ('prod', 'chall'):
+                    vals = tmp[h][grp]
+                    n = len(vals)
+                    ab_7d[h][grp]['n'] = n
+                    ab_7d[h][grp]['acc'] = (sum(vals) / n) if n else None
+
+            return jsonify({
+                'param_store': pstore,
+                'metrics_7d': metrics_7d,
+                'overall_acc_7d': overall_acc_7d,
+                'metrics_30d': metrics_30d,
+                'overall_acc_30d': overall_acc_30d,
+                'ab_7d': ab_7d,
+            })
+        except Exception as e:
+            logger.error(f"Calibration summary error: {e}")
+            return jsonify({'error': 'Failed to load calibration summary'}), 500
     
     @bp.route('/users/management')
     @login_required

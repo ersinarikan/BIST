@@ -13,6 +13,8 @@ import os
 import logging
 
 # Persistence support
+joblib = None
+JOBLIB_AVAILABLE = False
 try:
     import joblib
     JOBLIB_AVAILABLE = True
@@ -22,6 +24,9 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # Optional statsmodels for ETS/ARIMA baseline
+ExponentialSmoothing = None
+ARIMA = None
+STATSMODELS_AVAILABLE = False
 try:
     from statsmodels.tsa.holtwinters import ExponentialSmoothing  # type: ignore
     from statsmodels.tsa.arima.model import ARIMA  # type: ignore
@@ -66,7 +71,7 @@ class MLPredictionSystem:
                 return None
             
             # Load model
-            models = joblib.load(model_path)
+            models = joblib.load(model_path)  # type: ignore
             logger.debug(f"✅ Basic ML model loaded from disk for {symbol}")
             return models
             
@@ -81,7 +86,7 @@ class MLPredictionSystem:
         
         try:
             model_path = self._get_model_path(symbol)
-            joblib.dump(models, model_path)
+            joblib.dump(models, model_path)  # type: ignore
             logger.debug(f"💾 Basic ML model saved to disk for {symbol}")
             return True
         except Exception as e:
@@ -128,7 +133,7 @@ class MLPredictionSystem:
                 close = df['close'].astype(float)
                 # Weekly-ish seasonal pattern ~5 trading days
                 seasonal_periods = 5
-                ets_model = ExponentialSmoothing(close, trend='add', seasonal='add', seasonal_periods=seasonal_periods)
+                ets_model = ExponentialSmoothing(close, trend='add', seasonal='add', seasonal_periods=seasonal_periods)  # type: ignore
                 ets_fit = ets_model.fit(optimized=True, use_brute=True)
                 for h in self.prediction_horizons:
                     fc = float(ets_fit.forecast(steps=h).iloc[-1])
@@ -147,7 +152,7 @@ class MLPredictionSystem:
                 close = df['close'].astype(float)
                 # Simple automatically selected (p,d,q) candidate; conservative
                 order = (1, 1, 1)
-                arima_fit = ARIMA(close, order=order).fit()
+                arima_fit = ARIMA(close, order=order).fit()  # type: ignore
                 for h in self.prediction_horizons:
                     fc = float(arima_fit.forecast(steps=h).iloc[-1])
                     # Prefer ETS for short horizons; ARIMA for long

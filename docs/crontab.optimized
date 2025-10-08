@@ -1,0 +1,21 @@
+# BIST-Pattern Optimized Cron Schedule
+# Reduces redundant executions and improves timing
+
+# Populate outcomes every 20 minutes (reduced from 10)
+# This is frequent enough for most horizons (1d, 3d, 7d, 14d, 30d)
+*/20 * * * * /opt/bist-pattern/scripts/run_populate_outcomes.sh
+
+# Nightly master maintenance job
+# Runs at 2 AM to avoid conflicts and ensure fresh data
+# Environment flags control which sub-jobs run (see systemd override)
+0 2 * * * /opt/bist-pattern/scripts/nightly_master.sh
+
+# Weekly full model retraining (Sunday 3 AM)
+# Ensures all models are refreshed weekly
+0 3 * * 0 /opt/bist-pattern/scripts/run_bulk_train.sh
+
+# Note: Removed standalone evaluate_metrics and calibrate_confidence
+# These now run only via nightly_master to avoid redundancy
+# If you need them standalone, use environment flags:
+#   RUN_EVALUATE_METRICS=0 RUN_CALIBRATE_CONFIDENCE=0 nightly_master.sh
+

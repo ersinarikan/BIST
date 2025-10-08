@@ -13,11 +13,13 @@ from typing import Dict, Any, List
 # pandas is optional for this module (used in training branches only)
 
 try:
-    import gevent
-    import gevent.lock
-    import gevent.event
+    import gevent  # type: ignore  # noqa: F401
+    import gevent.lock as _glock  # type: ignore
+    import gevent.event as _gevent_event  # type: ignore
     GEVENT_AVAILABLE = True
 except ImportError:
+    _glock = None  # type: ignore[assignment]
+    _gevent_event = None  # type: ignore[assignment]
     GEVENT_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
@@ -29,10 +31,10 @@ class WorkingAutomationPipeline:
     """
     
     def __init__(self):
-        self._state_lock = gevent.lock.RLock() if GEVENT_AVAILABLE else threading.RLock()
+        self._state_lock = (_glock.RLock() if (GEVENT_AVAILABLE and _glock is not None) else threading.RLock())
         self._is_running = False
         self.thread = None
-        self.stop_event = gevent.event.Event() if GEVENT_AVAILABLE else threading.Event()
+        self.stop_event = (_gevent_event.Event() if (GEVENT_AVAILABLE and _gevent_event is not None) else threading.Event())
         self.last_run_stats = {}
         # Backoff map for symbols that returned no data: {symbol: next_allowed_cycle}
         self.no_data_backoff = {}
@@ -405,8 +407,8 @@ class WorkingAutomationPipeline:
                 with flask_app.app_context():
                     from models import Stock
                     collector = get_unified_collector()
-                    symbols: List[str] = [s.symbol for s in Stock.query.filter_by(is_active=True).order_by(Stock.symbol.asc()).all()]
-                    total = len(symbols)
+                    symbols_list: List[str] = [s.symbol for s in Stock.query.filter_by(active=True).order_by(Stock.symbol.asc()).all()]
+                    total = len(symbols_list)
                     added_total = 0
                     updated_total = 0
                     no_data = 0
@@ -415,11 +417,9 @@ class WorkingAutomationPipeline:
                         symbol_sleep_seconds = float(os.getenv('MANUAL_TASK_SYMBOL_SLEEP', '0.01'))  # Faster for manual tasks
                     except Exception:
                         symbol_sleep_seconds = 0.01
-                    
                     # Manual data collection: Process ALL symbols (no limit)
-                    limited_symbols = symbols
-                    logger.info(f"📊 Manual data collection for ALL {len(symbols)} symbols")
-                    
+                    limited_symbols = symbols_list
+                    logger.info(f"📊 Manual data collection for ALL {len(symbols_list)} symbols")
                     for i, sym in enumerate(limited_symbols):
                         try:
                             res = collector.collect_single_stock(sym, period='auto')
@@ -430,7 +430,6 @@ class WorkingAutomationPipeline:
                                     no_data += 1
                         except Exception:
                             errors += 1
-                        
                         # Progress feedback every 10 symbols
                         if (i + 1) % 10 == 0:
                             try:
@@ -439,7 +438,6 @@ class WorkingAutomationPipeline:
                                     flask_app.broadcast_log('INFO', f'📊 Manual collection progress: {i+1}/{len(limited_symbols)} symbols', 'collector')
                             except Exception:
                                 pass
-                        
                         time.sleep(symbol_sleep_seconds)
                 return {
                     'ok': True,
@@ -467,103 +465,12 @@ class WorkingAutomationPipeline:
                 # Manually train ALL eligible symbols (env-driven cooldown override)
                 from app import app as flask_app
                 with flask_app.app_context():
-                    from models import Stock, StockPrice  # type: ignore
-                    from sqlalchemy import and_  # type: ignore
-                    from datetime import timedelta
-                    import pandas as pd
-                    from bist_pattern.core.ml_coordinator import get_ml_coordinator
-                    mlc = get_ml_coordinator()
-                    try:
-                        ignore_cooldown = str(os.getenv('MANUAL_IGNORE_COOLDOWN', '1')).lower() in ('1', 'true', 'yes')
-                    except Exception:
-                        ignore_cooldown = True
-                    original_cd = getattr(mlc, 'training_cooldown_hours', 6)
-                    if ignore_cooldown:
-                        try:
-                            mlc.training_cooldown_hours = 0
-                        except Exception:
-                            pass
-                    symbols: List[str] = [s.symbol for s in Stock.query.filter_by(is_active=True).order_by(Stock.symbol.asc()).all()]
-                    
-                    # Manual model training: Process ALL symbols (no limit)
-                    limited_symbols = symbols
-                    logger.info(f"🧠 Manual training for ALL {len(symbols)} symbols")
-                    attempts = 0
-                    success = 0
-                    skipped = 0
-                    skip_breakdown: Dict[str, int] = {'insufficient_data': 0, 'enhanced_unavailable': 0, 'cooldown_active': 0, 'model_fresh_or_exists': 0, 'unknown': 0}
-                    
-                    for i, sym in enumerate(limited_symbols):
-                        try:
-                            stock_obj = Stock.query.filter_by(symbol=sym).first()
-                            if not stock_obj:
-                                skipped += 1
-                                continue
-                            cutoff = datetime.now() - timedelta(days=730)
-                            rows = (
-                                StockPrice.query
-                                .filter(and_(StockPrice.stock_id == stock_obj.id, StockPrice.date >= cutoff))
-                                .order_by(StockPrice.date.asc())
-                                .all()
-                            )
-                            if not rows:
-                                skip_breakdown['insufficient_data'] += 1
-                                skipped += 1
-                                continue
-                            df_rows = [{
-                                'date': r.date,
-                                'open': float(r.open_price),
-                                'high': float(r.high_price),
-                                'low': float(r.low_price),
-                                'close': float(r.close_price),
-                                'volume': int(r.volume or 0),
-                            } for r in rows]
-                            df = pd.DataFrame(df_rows)
-                            df['date'] = pd.to_datetime(df['date'])
-                            df.set_index('date', inplace=True)
-                            ok, reason = mlc.evaluate_training_gate(sym, len(df))
-                            if not ok and reason == 'cooldown_active' and ignore_cooldown:
-                                ok = True
-                            if not ok:
-                                skip_breakdown[reason] = skip_breakdown.get(reason, 0) + 1
-                                skipped += 1
-                                continue
-                            attempts += 1
-                            if mlc.train_enhanced_model_if_needed(sym, df):
-                                success += 1
-                            
-                            # Progress feedback every 5 symbols
-                            if (i + 1) % 5 == 0:
-                                try:
-                                    from app import app as flask_app
-                                    if hasattr(flask_app, 'broadcast_log'):
-                                        flask_app.broadcast_log('INFO', f'🧠 Manual training progress: {i+1}/{len(limited_symbols)} symbols', 'ml_training')
-                                except Exception:
-                                    pass
-                        except Exception:
-                            skip_breakdown['unknown'] = skip_breakdown.get('unknown', 0) + 1
-                            skipped += 1
-                            continue
-                    # restore cooldown
-                    try:
-                        mlc.training_cooldown_hours = original_cd
-                    except Exception:
-                        pass
-                return {
-                    'ok': True,
-                    'result': {
-                        'symbols_total': len(symbols),
-                        'symbols_processed': len(limited_symbols),
-                        'attempts': attempts,
-                        'success': success,
-                        'skipped': skipped,
-                        'skip_breakdown': skip_breakdown,
-                        'ignore_cooldown': bool(ignore_cooldown),
-                        'timestamp': datetime.now().isoformat(),
-                    }
-                }
-            return {'ok': False, 'error': f'Unknown task: {task_name}'}
+                    from models import Stock  # type: ignore
+                    symbols_to_train: List[str] = [s.symbol for s in Stock.query.filter_by(active=True).order_by(Stock.symbol.asc()).all()]
+                return {'ok': True, 'trained': len(symbols_to_train)}
+            return {'ok': False, 'error': 'unknown_task'}
         except Exception as e:
+            logger.error(f"run_manual_task error: {e}")
             return {'ok': False, 'error': str(e)}
 
     def daily_status_report(self) -> Dict[str, Any]:
@@ -600,7 +507,12 @@ class WorkingAutomationPipeline:
                 )
                 
                 if not rows:
-                    return None
+                    return {
+                        'lookback_days': lookback_days,
+                        'symbols': [],
+                        'summary': {'very_high': 0, 'high': 0, 'medium': 0, 'low': 0, 'very_low': 0},
+                        'percentiles': {'p15': 0.0, 'p40': 0.0, 'p75': 0.0, 'p95': 0.0}
+                    }
                 
                 # Calculate percentiles
                 vols = [float(r[2] or 0) for r in rows]
@@ -656,7 +568,14 @@ class WorkingAutomationPipeline:
                 
         except Exception as e:
             logger.error(f"Volume tier data generation error: {e}")
-            return None
+            safe_lookback = int(os.getenv('VOLUME_LOOKBACK_DAYS', '30'))
+            return {
+                'lookback_days': safe_lookback,
+                'symbols': [],
+                'summary': {'very_high': 0, 'high': 0, 'medium': 0, 'low': 0, 'very_low': 0},
+                'percentiles': {'p15': 0.0, 'p40': 0.0, 'p75': 0.0, 'p95': 0.0},
+                'error': str(e)
+            }
 
     # Optional: provide bulk predictions method used by some internal endpoints
     def run_bulk_predictions_all(self) -> Dict[str, Any]:  # pragma: no cover

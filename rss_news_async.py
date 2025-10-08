@@ -165,7 +165,7 @@ class AsyncRSSNewsProvider:
                 self._last_fetch_time = time.time()
                 self._stats['fetches_completed'] += 1
                 self._stats['news_items_cached'] = len(all_news_items)
-                self._stats['last_fetch_duration'] = time.time() - fetch_start_time
+                self._stats['last_fetch_duration'] = int(time.time() - fetch_start_time)
                 
                 logger.info(f"✅ RSS fetch completed: {len(all_news_items)} news items cached in {self._stats['last_fetch_duration']:.1f}s")
         

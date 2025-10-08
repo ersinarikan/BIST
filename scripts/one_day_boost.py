@@ -22,15 +22,17 @@ from typing import Dict, Any
 
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc_auc_score
+from sklearn.model_selection import TimeSeriesSplit
 
+lgb = None  # type: ignore
+_HAS_LGB = False
 try:
     import lightgbm as lgb  # type: ignore
     _HAS_LGB = True
 except Exception:
     _HAS_LGB = False
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc_auc_score
-from sklearn.model_selection import TimeSeriesSplit
 
 
 def _to_df(rows) -> pd.DataFrame:
@@ -50,7 +52,7 @@ def _to_df(rows) -> pd.DataFrame:
     return df
 
 
-def _features_1d(df: pd.DataFrame) -> pd.DataFrame:
+def _features_1d(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:  # type: ignore
     out = pd.DataFrame(index=df.index)
     close = df['close']
     high = df['high']
@@ -69,12 +71,13 @@ def _features_1d(df: pd.DataFrame) -> pd.DataFrame:
     out['mom3'] = ((close / close.rolling(3).mean()) - 1.0) * 100.0
 
     # Volatility band
-    out['rv5'] = np.log(close).diff().rolling(5).std() * np.sqrt(252) * 100.0
+    log_close = np.log(close)
+    out['rv5'] = log_close.diff().rolling(5).std() * np.sqrt(252) * 100.0  # type: ignore
 
     # RSI(3)
     delta = close.diff()
-    up = delta.clip(lower=0).rolling(3).mean()
-    down = (-delta.clip(upper=0)).rolling(3).mean()
+    up = delta.clip(lower=0).rolling(3).mean()  # type: ignore
+    down = (-delta.clip(upper=0)).rolling(3).mean()  # type: ignore
     rs = up / (down + 1e-9)
     out['rsi3'] = 100.0 - (100.0 / (1.0 + rs))
 
@@ -138,8 +141,8 @@ def _fit_predict_proba(feats: pd.DataFrame, y: pd.Series) -> Dict[str, Any]:
         X_train, X_test = feats.iloc[train_idx], feats.iloc[test_idx]
         y_train = y.iloc[train_idx]
 
-        if _HAS_LGB:
-            model = lgb.LGBMClassifier(
+        if _HAS_LGB and lgb is not None:
+            model = lgb.LGBMClassifier(  # type: ignore
                 n_estimators=400,
                 learning_rate=0.05,
                 num_leaves=31,
@@ -149,14 +152,16 @@ def _fit_predict_proba(feats: pd.DataFrame, y: pd.Series) -> Dict[str, Any]:
                 class_weight='balanced'
             )
             model.fit(X_train, y_train)
-            p = model.predict_proba(X_test)[:, 1]
+            proba_result = model.predict_proba(X_test)
+            p = proba_result[:, 1] if hasattr(proba_result, 'shape') and len(proba_result.shape) > 1 else proba_result  # type: ignore
         else:
             model = LogisticRegression(max_iter=400, solver='liblinear')
             model.fit(X_train, y_train)
             p = model.predict_proba(X_test)[:, 1]
         probas.iloc[test_idx] = p
         # placeholder; threshold will be optimized globally after CV
-        preds.iloc[test_idx] = (p >= 0.5).astype(int)
+        pred_vals = (p >= 0.5).astype(int)  # type: ignore
+        preds.iloc[test_idx] = pred_vals
     # Optimize probability cutoff on out-of-fold predictions
     valid = (~probas.isna()) & (~y.loc[probas.index].isna())
     best_thr = 0.5
@@ -208,7 +213,7 @@ def evaluate_symbol(symbol: str, lookback_days: int = 730) -> Dict[str, Any]:
     p = res['probas'].loc[idx].astype(float)
 
     acc = accuracy_score(y_true, y_pred)
-    prec, rec, f1, _ = precision_recall_fscore_support(y_true, y_pred, average='binary', zero_division=0)
+    prec, rec, f1, _ = precision_recall_fscore_support(y_true, y_pred, average='binary', zero_division="warn")  # type: ignore
     try:
         auc = roc_auc_score(y_true, p)
     except Exception:
@@ -282,4 +287,3 @@ def main() -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main())
-

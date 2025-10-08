@@ -4,8 +4,7 @@ Centralized authentication utilities and user management
 """
 
 import logging
-from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 from flask import current_app
 from flask_login import current_user
 

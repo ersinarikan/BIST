@@ -10,7 +10,7 @@ import os
 import logging
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ class MLBacktester:
         symbol: str,
         model_predictor: Any,  # ML system with predict method
         historical_data: pd.DataFrame,
-        horizons: List[str] = None
+        horizons: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Perform walk-forward backtesting
@@ -284,7 +284,7 @@ class MLBacktester:
             if not errors:
                 return 100.0
             
-            return np.mean(errors) * 100.0  # As percentage
+            return float(np.mean(errors) * 100.0)  # As percentage
         except Exception:
             return 100.0
     

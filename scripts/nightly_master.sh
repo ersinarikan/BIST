@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SYSTEMCTL="$(command -v systemctl || echo /bin/systemctl)"
+ENV_LINE="$($SYSTEMCTL show bist-pattern --property=Environment --value || true)"
+if [[ -n "${ENV_LINE:-}" ]]; then
+  eval "export ${ENV_LINE}"
+fi
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
+export BIST_LOG_PATH="${BIST_LOG_PATH:-/opt/bist-pattern/logs}"
+mkdir -p "$BIST_LOG_PATH"
+cd /opt/bist-pattern
+
+log() { echo "[nightly-master] $(date -Iseconds) $*" | tee -a "$BIST_LOG_PATH/nightly_master.log"; }
+
+PY="/opt/bist-pattern/venv/bin/python3"
+if [ ! -x "$PY" ]; then PY="python3"; fi
+
+log "start"
+
+# 1) outcomes (matured predictions)
+if [ "${RUN_POPULATE_OUTCOMES:-1}" != "0" ]; then
+  log "populate_outcomes"
+  if ! /opt/bist-pattern/scripts/run_populate_outcomes.sh; then
+    log "populate_outcomes FAILED"
+  fi
+else
+  log "populate_outcomes SKIPPED"
+fi
+
+# 2) metrics for yesterday
+DAY_YESTERDAY="$(date -d "yesterday" -I)"
+if [ "${RUN_EVALUATE_METRICS:-1}" != "0" ]; then
+  log "evaluate_metrics $DAY_YESTERDAY"
+  if ! /opt/bist-pattern/scripts/run_evaluate_metrics.sh "$DAY_YESTERDAY"; then
+    log "evaluate_metrics FAILED for $DAY_YESTERDAY"
+  fi
+else
+  log "evaluate_metrics SKIPPED"
+fi
+
+# 3) calibration (uses go_live/min_samples from wrapper)
+if [ "${RUN_CALIBRATE_CONFIDENCE:-1}" != "0" ]; then
+  log "calibrate_confidence"
+  if ! /opt/bist-pattern/scripts/run_calibrate_confidence.sh; then
+    log "calibrate_confidence FAILED"
+  fi
+else
+  log "calibrate_confidence SKIPPED"
+fi
+
+# 4) optimize evidence weights (lightweight)
+if [ "${RUN_OPTIMIZE_WEIGHTS:-1}" != "0" ]; then
+  log "optimize_evidence_weights"
+  if ! "$PY" scripts/optimize_evidence_weights.py; then
+    log "optimize_evidence_weights FAILED"
+  fi
+else
+  log "optimize_evidence_weights SKIPPED"
+fi
+
+# 5) publish versioned params
+if [ "${RUN_PUBLISH_PARAMS:-1}" != "0" ]; then
+  log "publish_params"
+  if ! /opt/bist-pattern/scripts/publish_params.sh; then
+    log "publish_params FAILED"
+  fi
+else
+  log "publish_params SKIPPED"
+fi
+
+# 6) drift check and optional rollback
+if [ "${RUN_DRIFT_CHECK:-1}" != "0" ]; then
+  log "check_drift_and_alert"
+  if ! "$PY" scripts/check_drift_and_alert.py; then
+    log "check_drift_and_alert FAILED"
+  fi
+else
+  log "check_drift_and_alert SKIPPED"
+fi
+
+log "done"
+
+

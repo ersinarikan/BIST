@@ -67,8 +67,8 @@ def _features_1d(df: pd.DataFrame) -> pd.DataFrame:
     out['rv5'] = np.log(close).diff().rolling(5).std() * np.sqrt(252) * 100.0
 
     delta = close.diff()
-    up = delta.clip(lower=0).rolling(3).mean()
-    down = (-delta.clip(upper=0)).rolling(3).mean()
+    up = delta.clip(lower=0).rolling(3).mean()  # type: ignore
+    down = (-delta.clip(upper=0)).rolling(3).mean()  # type: ignore
     rs = up / (down + 1e-9)
     out['rsi3'] = 100.0 - (100.0 / (1.0 + rs))
 

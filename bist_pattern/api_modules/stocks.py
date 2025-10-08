@@ -77,8 +77,8 @@ def api_stocks_search():
             return jsonify({'status': 'success', 'stocks': []})
         
         # Cache by query
+        cache_key = f"fts:{q.lower()}"
         try:
-            cache_key = f"fts:{q.lower()}"
             cached = _cache_get(cache_key)
             if cached:
                 return jsonify({'status': 'success', 'stocks': cached})

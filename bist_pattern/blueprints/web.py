@@ -52,7 +52,21 @@ def register(app):
     @login_required
     def user_dashboard():
         try:
-            resp = make_response(render_template('user_dashboard.html'))
+            # Inject real user info for UI display and websocket room subscription
+            try:
+                uid = getattr(current_user, 'id', None)
+                email = getattr(current_user, 'email', None)
+                username = getattr(current_user, 'username', None)
+                full_name = getattr(current_user, 'full_name', None) or username or (email.split('@')[0] if email else 'Kullanıcı')
+            except Exception:
+                uid = None
+                email = None
+                full_name = 'Kullanıcı'
+            
+            resp = make_response(render_template('user_dashboard.html', 
+                                                  user_id=uid,
+                                                  user_email=email,
+                                                  user_name=full_name))
             resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
             resp.headers['Pragma'] = 'no-cache'
             resp.headers['Expires'] = '0'

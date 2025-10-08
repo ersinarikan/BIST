@@ -54,7 +54,17 @@
                 // Join admin room
                 socket.emit('join_admin');
                 
-                // Update connection status
+                // Update connection status in navbar
+                try {
+                    const connectionStatusElement = document.getElementById('connection-status');
+                    if (connectionStatusElement) {
+                        connectionStatusElement.innerHTML = '<i class="fas fa-wifi text-success"></i> Connected';
+                    }
+                } catch (e) {
+                    console.warn('Navbar connection status update error:', e);
+                }
+                
+                // Update connection status in panel
                 try {
                     const wsStatusElement = document.getElementById('websocket-status');
                     if (wsStatusElement) {
@@ -71,7 +81,17 @@
                 console.log('❌ WebSocket disconnected');
                 addLog('ERROR', '❌ Real-time connection lost');
                 
-                // Update connection status
+                // Update connection status in navbar
+                try {
+                    const connectionStatusElement = document.getElementById('connection-status');
+                    if (connectionStatusElement) {
+                        connectionStatusElement.innerHTML = '<i class="fas fa-wifi text-danger"></i> Disconnected';
+                    }
+                } catch (e) {
+                    console.warn('Navbar connection status update error:', e);
+                }
+                
+                // Update connection status in panel
                 try {
                     const wsStatusElement = document.getElementById('websocket-status');
                     if (wsStatusElement) {
@@ -99,6 +119,12 @@
                     const msg = (err && (err.message || err.description || err.type || err.name)) || String(err);
                     console.error('❌ WebSocket connect_error:', err);
                     addLog('ERROR', `❌ WebSocket connect_error: ${msg}`);
+                    
+                    // Update connection status in navbar on connect error
+                    const connectionStatusElement = document.getElementById('connection-status');
+                    if (connectionStatusElement) {
+                        connectionStatusElement.innerHTML = '<i class="fas fa-wifi text-danger"></i> Connection Error';
+                    }
                 } catch (_) {}
             });
 
@@ -109,7 +135,17 @@
                 // Rejoin admin room after reconnection
                 socket.emit('join_admin');
                 
-                // Update connection status
+                // Update connection status in navbar
+                try {
+                    const connectionStatusElement = document.getElementById('connection-status');
+                    if (connectionStatusElement) {
+                        connectionStatusElement.innerHTML = '<i class="fas fa-wifi text-success"></i> Connected';
+                    }
+                } catch (e) {
+                    console.warn('Navbar connection status update error:', e);
+                }
+                
+                // Update connection status in panel
                 try {
                     const wsStatusElement = document.getElementById('websocket-status');
                     if (wsStatusElement) {
@@ -124,11 +160,31 @@
             socket.on('reconnect_attempt', function() {
                 console.log('🔄 Attempting to reconnect...');
                 addLog('INFO', '🔄 Attempting to reconnect...');
+                
+                // Update connection status in navbar during reconnect attempt
+                try {
+                    const connectionStatusElement = document.getElementById('connection-status');
+                    if (connectionStatusElement) {
+                        connectionStatusElement.innerHTML = '<i class="fas fa-wifi text-warning"></i> Reconnecting...';
+                    }
+                } catch (e) {
+                    console.warn('Navbar connection status update error:', e);
+                }
             });
 
             socket.on('reconnect_failed', function() {
                 console.log('❌ Reconnection failed');
                 addLog('ERROR', '❌ Reconnection failed - please refresh page');
+                
+                // Update connection status in navbar when reconnection fails
+                try {
+                    const connectionStatusElement = document.getElementById('connection-status');
+                    if (connectionStatusElement) {
+                        connectionStatusElement.innerHTML = '<i class="fas fa-wifi text-danger"></i> Connection Failed';
+                    }
+                } catch (e) {
+                    console.warn('Navbar connection status update error:', e);
+                }
             });
             
             socket.on('room_joined', function(data) {
@@ -244,11 +300,13 @@
             max-height: 300px;
             overflow-y: auto;
         }
-        /* Recent tasks panel: fixed height with scroll to avoid page growing infinitely */
+        /* Recent tasks panel: let flexbox control height */
         #recent-tasks {
-            max-height: 420px;
             overflow-y: auto;
         }
+        /* Stretch recent tasks list to fill its card height */
+        .recent-card { display: flex; flex-direction: column; }
+        .recent-card #recent-tasks { flex: 1 1 auto; max-height: none; min-height: 0; overflow-y: auto; }
         
         .navbar-brand {
             font-weight: bold;
@@ -257,8 +315,111 @@
         
         .chart-container {
             position: relative;
-            height: 300px;
-            margin: 20px 0;
+            height: 150px;
+            margin: 12px 0;
+        }
+
+        .gauge-box { height: 120px; display:flex; align-items:center; justify-content:center; }
+        .mid-six {
+            min-height: 540px;
+            height: 540px;
+            overflow: hidden;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        /* Make mid-six panels content flexible without scrollbars */
+        .mid-six > div:last-child {
+            flex: 1 1 auto;
+            overflow: hidden;
+        }
+        
+        /* Hide scrollbars in all panel content areas */
+        .dashboard-card {
+            overflow: hidden;
+        }
+        
+        .dashboard-card * {
+            scrollbar-width: none; /* Firefox */
+            -ms-overflow-style: none; /* Internet Explorer 10+ */
+        }
+        
+        .dashboard-card *::-webkit-scrollbar {
+            display: none; /* WebKit */
+        }
+
+        /* Match all panels' height to System Health card height on desktop */
+        /* reset row sync */
+
+        /* Make Recent Tasks fill card */
+        .recent-fixed { position: relative; }
+        #recent-card #recent-tasks { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+        /* Make columns equal height for the 3-up row */
+        .equal-panels > [class^="col-"],
+        .equal-panels > [class*=" col-"] {
+            display: flex;            /* make columns flex containers */
+        }
+        .equal-panels .dashboard-card {
+            flex: 1 1 auto;          /* let cards stretch to column height */
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        /* Ensure proper spacing and alignment for middle 6 panels */
+        .equal-panels.g-4 {
+            margin-bottom: 2rem;
+        }
+        
+        /* Make content areas flexible within cards */
+        .equal-panels .dashboard-card > div:last-child {
+            flex: 1 1 auto;
+        }
+
+        /* Equalize top metric cards */
+        .metric-grid .metric-card {
+            height: 120px;
+            box-sizing: border-box;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+        }
+        .metric-grid .metric-card .metric-value { margin-bottom: 4px; line-height: 1; }
+        #bulk-age { position: absolute; bottom: 10px; left: 10px; }
+        
+        /* Responsive improvements */
+        @media (max-width: 991.98px) {
+            .mid-six {
+                min-height: 350px;
+                height: auto;
+                overflow: hidden;
+            }
+            
+            .equal-panels .dashboard-card {
+                margin-bottom: 1.5rem;
+            }
+        }
+        
+        @media (max-width: 767.98px) {
+            .mid-six {
+                min-height: 300px;
+                height: auto;
+                overflow: hidden;
+            }
+            
+            .metric-grid .metric-card {
+                height: 100px;
+            }
+            
+            .container-fluid {
+                padding-left: 15px;
+                padding-right: 15px;
+            }
         }
     </style>
 </head>
@@ -266,7 +427,7 @@
     <!-- Navigation -->
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
         <div class="container">
-            <a class="navbar-brand" href="#"><i class="fas fa-robot me-2"></i>BIST AI System Dashboard</a>
+            <a class="navbar-brand" href="#"><i class="fas fa-robot me-2"></i>lotlot.net yönetim paneli</a>
             <div class="navbar-nav ms-auto">
                 <span class="navbar-text me-3" id="connection-status">
                     <i class="fas fa-wifi text-warning"></i> Connecting...
@@ -282,15 +443,15 @@
     </nav>
 
     <div class="container-fluid mt-4">
-        <div class="row">
+        <div class="row equal-panels">
             <!-- System Overview -->
             <div class="col-12 mb-4">
                 <div class="dashboard-card p-4">
                     <h3><i class="fas fa-tachometer-alt me-2"></i>System Overview</h3>
-                    <div class="row mt-3">
+                    <div class="row mt-3 metric-grid">
                 <div class="col-md-3">
                             <div class="metric-card text-center">
-                                <div class="metric-value" id="automation-status">--</div>
+                                <div class="metric-value" id="automation-status-header">--</div>
                                 <div class="metric-label">Automation Status</div>
                             </div>
                         </div>
@@ -299,10 +460,8 @@
                                 <div class="metric-value" id="bulk-count">--</div>
                                 <div class="metric-label">Bulk Predictions (records)</div>
                                 <div class="small" id="bulk-age" style="opacity:.9">Age: --</div>
-                                <span class="badge bg-secondary" id="bulk-stale">--</span>
-                                <div class="mt-2">
-                                    <button class="btn btn-sm btn-light" id="btn-refresh-bulk" onclick="refreshBulkNow()"><i class="fas fa-rotate"></i> Refresh</button>
-                                </div>
+                                <span class="badge bg-secondary" id="bulk-stale" style="position:absolute; top:10px; right:10px;">--</span>
+                                <button class="btn btn-sm btn-light" style="position:absolute; bottom:10px; right:10px;" id="btn-refresh-bulk" onclick="refreshBulkNow()"><i class="fas fa-rotate"></i> Refresh</button>
                             </div>
                         </div>
                 <div class="col-md-3">
@@ -323,57 +482,58 @@
             </div>
         </div>
 
-        <div class="row">
+        <!-- Middle 6 Panels in 2x3 Grid -->
+        <div class="row equal-panels g-4 mb-4">
             <!-- System Health -->
-            <div class="col-lg-4 mb-4">
-                <div class="dashboard-card p-4 h-100" style="background: white; border: 2px solid #e9ecef; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+            <div class="col-lg-4 d-flex align-items-stretch">
+                <div class="dashboard-card mid-six p-4 w-100 recent-card" style="background: white; border: 2px solid #e9ecef; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
                     <h4><i class="fas fa-heartbeat me-2 text-success"></i>System Health</h4>
                     <div id="health-status" class="mt-3">
-                        <!-- Modern card layout (Overall, Automation, Flask, DB, WebSocket) -->
-                        <div class="row g-3">
+                        <!-- Compact card layout (Overall, Automation, Flask, DB, WebSocket) -->
+                        <div class="row g-2">
                             <div class="col-12">
-                                <div class="p-3 rounded d-flex justify-content-between align-items-center" style="background:#f8fff9;border:1px solid #e2f3e7;">
+                                <div class="p-2 rounded d-flex justify-content-between align-items-center" style="background:#f8fff9;border:1px solid #e2f3e7;">
                                     <div>
-                                        <div class="fw-bold">Overall Status</div>
-                                        <small class="text-muted">System Integration</small>
+                                        <div class="fw-bold small">Overall Status</div>
+                                        <small class="text-muted" style="font-size: 0.75rem;">System Integration</small>
                                     </div>
-                                    <span class="badge bg-success" id="overall-status">MIGRATED</span>
+                                    <span class="badge bg-success" id="overall-status" style="font-size: 0.7rem;">MIGRATED</span>
                                 </div>
                             </div>
                             <div class="col-12">
-                                <div class="p-3 rounded d-flex justify-content-between align-items-center" style="background:#f6fbff;border:1px solid #e3f0fb;">
+                                <div class="p-2 rounded d-flex justify-content-between align-items-center" style="background:#f6fbff;border:1px solid #e3f0fb;">
                                     <div>
-                                        <div class="fw-bold">Automation Engine</div>
-                                        <small class="text-muted">Background Processing</small>
+                                        <div class="fw-bold small">Automation Engine</div>
+                                        <small class="text-muted" style="font-size: 0.75rem;">Background Processing</small>
                                     </div>
-                                    <span class="badge bg-info" id="automation-status">active</span>
+                                    <span class="badge bg-info" id="automation-status" style="font-size: 0.7rem;">active</span>
                                 </div>
                             </div>
                             <div class="col-12">
-                                <div class="p-3 rounded d-flex justify-content-between align-items-center" style="background:#fffaf6;border:1px solid #fde8d9;">
+                                <div class="p-2 rounded d-flex justify-content-between align-items-center" style="background:#fffaf6;border:1px solid #fde8d9;">
                                     <div>
-                                        <div class="fw-bold">Flask API</div>
-                                        <small class="text-muted">Web Service</small>
+                                        <div class="fw-bold small">Flask API</div>
+                                        <small class="text-muted" style="font-size: 0.75rem;">Web Service</small>
                                     </div>
-                                    <span class="badge bg-success" id="flask-status">healthy</span>
+                                    <span class="badge bg-success" id="flask-status" style="font-size: 0.7rem;">healthy</span>
                                 </div>
                             </div>
                             <div class="col-12">
-                                <div class="p-3 rounded d-flex justify-content-between align-items-center" style="background:#fdf9ff;border:1px solid #efe3fb;">
+                                <div class="p-2 rounded d-flex justify-content-between align-items-center" style="background:#fdf9ff;border:1px solid #efe3fb;">
                                     <div>
-                                        <div class="fw-bold">Database</div>
-                                        <small class="text-muted">PostgreSQL Connection</small>
+                                        <div class="fw-bold small">Database</div>
+                                        <small class="text-muted" style="font-size: 0.75rem;">PostgreSQL Connection</small>
                                     </div>
-                                    <span class="badge bg-success" id="db-status">connected</span>
+                                    <span class="badge bg-success" id="db-status" style="font-size: 0.7rem;">connected</span>
                                 </div>
                             </div>
                             <div class="col-12">
-                                <div class="p-3 rounded d-flex justify-content-between align-items-center" style="background:#f9fdff;border:1px solid #e3f7ff;">
+                                <div class="p-2 rounded d-flex justify-content-between align-items-center" style="background:#f9fdff;border:1px solid #e3f7ff;">
                                     <div>
-                                        <div class="fw-bold">WebSocket</div>
-                                        <small class="text-muted">Real-time Updates</small>
+                                        <div class="fw-bold small">WebSocket</div>
+                                        <small class="text-muted" style="font-size: 0.75rem;">Real-time Updates</small>
                                     </div>
-                                    <span class="badge bg-success" id="websocket-status">connected</span>
+                                    <span class="badge bg-success" id="websocket-status" style="font-size: 0.7rem;">connected</span>
                                 </div>
                             </div>
                         </div>
@@ -382,166 +542,196 @@
             </div>
             
             <!-- Automation Control -->
-            <div class="col-lg-4 mb-4">
-                <div class="dashboard-card p-4 h-100" style="background: white; border: 2px solid #e9ecef; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+            <div class="col-lg-4 d-flex align-items-stretch">
+                <div id="automation-control-card" class="dashboard-card mid-six p-4 w-100" style="background: white; border: 2px solid #e9ecef; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
                     <h4><i class="fas fa-cogs me-2 text-primary"></i>Automation Control</h4>
-                    <div class="d-grid gap-3 mt-4">
-                        <button class="btn btn-success btn-lg py-3" onclick="startAutomation()">
-                            <i class="fas fa-play me-2"></i>Start Automation
-                        </button>
-                        <button class="btn btn-danger btn-lg py-3" onclick="stopAutomation()">
-                            <i class="fas fa-stop me-2"></i>Stop Automation
-                        </button>
-                        <button class="btn btn-warning btn-lg py-3" onclick="runTask('health_check')">
-                            <i class="fas fa-stethoscope me-2"></i>Health Check
-                        </button>
-                        <button class="btn btn-info btn-lg py-3" onclick="runTask('data_collection')">
-                            <i class="fas fa-database me-2"></i>Data Collection
-                        </button>
-                        <button class="btn btn-primary btn-lg py-3" onclick="runTask('model_retraining')">
-                            <i class="fas fa-brain me-2"></i>Retrain Models
-                        </button>
-                        <button class="btn btn-secondary btn-lg py-3" onclick="generateReport()">
-                            <i class="fas fa-file-alt me-2"></i>Generate Report
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Coverage + Simulation Panel -->
-            <div class="col-lg-4 mb-4">
-                <div class="dashboard-card p-4 h-100" style="background: white; border: 2px solid #e9ecef; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
-                    <h4>
-                        <i class="fas fa-database me-2 text-info"></i>Cache Coverage
-                    </h4>
-                    <div id="coverage-box" class="mb-3">
-                        <div class="d-flex justify-content-between align-items-center p-3 rounded" style="background:#f8f9fa;border:1px solid #dee2e6;">
-                            <div>
-                                <div class="small text-muted">Pattern cache coverage</div>
-                                <div class="h5 mb-0" id="coverage-stats">-- / --</div>
-                            </div>
-                            <div class="text-end">
-                                <span class="badge bg-secondary" id="coverage-age">--</span>
-                            </div>
-                        </div>
-                        <div class="mt-2 d-flex gap-2">
-                            <button class="btn btn-sm btn-outline-secondary" onclick="loadCoverage()"><i class="fas fa-sync"></i> Reload</button>
-                            <button class="btn btn-sm btn-outline-primary" onclick="refreshBulkNow()"><i class="fas fa-rotate"></i> Rebuild Bulk</button>
-                        </div>
-                    </div>
-                    <h4><i class="fas fa-robot me-2 text-info"></i>AI Simulation</h4>
-                    <p class="mb-3 small text-muted">Test AI model with virtual trading - TÜM 606 hisse takip</p>
-                    
-                    <!-- Duration Selection -->
-                    <div class="mb-3">
-                        <label class="form-label small text-muted">Test Duration:</label>
-                        <select class="form-select form-select-sm" id="simulation-duration">
-                            <option value="12">12 Hours</option>
-                            <option value="24">24 Hours</option>
-                            <option value="48" selected>48 Hours</option>
-                            <option value="72">72 Hours</option>
-                            <option value="168">1 Week</option>
-                        </select>
-                    </div>
-                    
-                    <!-- Current Simulation Status -->
-                    <div id="simulation-status" class="mb-3">
-                        <div class="d-flex justify-content-between align-items-center p-3 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
-                            <div>
-                                <div class="h6 mb-1 text-dark" id="sim-status-text">No Active Test</div>
-                                <small class="text-muted" id="sim-details">Select duration & click start</small>
-                            </div>
-                            <div class="text-end">
-                                <div class="h5 mb-0 text-dark" id="sim-balance">₺0.00</div>
-                                <small class="text-success" id="sim-profit">±0%</small>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- Simulation Controls -->
-                    <div class="row">
+                    <div class="row g-2 mt-3">
                         <div class="col-6">
-                            <button class="btn btn-success w-100 mb-2" id="start-simulation-btn" onclick="startSimulation()">
-                                <i class="fas fa-play me-2"></i>Start Test
+                            <button class="btn btn-success w-100 py-2" onclick="startAutomation()">
+                                <i class="fas fa-play me-1"></i><small>Start</small>
                             </button>
-                            <div class="input-group input-group-sm">
-                                <span class="input-group-text">₺</span>
-                                <input type="number" class="form-control" id="trade-amount" value="10000" min="1000" max="50000" placeholder="Trade Amount">
-                                <small class="text-muted">Per Signal Amount</small>
-                            </div>
                         </div>
                         <div class="col-6">
-                            <button class="btn btn-danger w-100 mb-2" id="stop-simulation-btn" onclick="stopSimulation()" disabled>
-                                <i class="fas fa-stop me-2"></i>Stop
-                            </button>
-                            <button class="btn btn-outline-info w-100" onclick="viewSimulationDetails()">
-                                <i class="fas fa-eye me-2"></i>Details
+                            <button class="btn btn-danger w-100 py-2" onclick="stopAutomation()">
+                                <i class="fas fa-stop me-1"></i><small>Stop</small>
                             </button>
                         </div>
-                    </div>
-                    
-                    <!-- Quick Stats -->
-                    <div class="row mt-3" id="simulation-stats" style="display: none;">
-                        <div class="col-4 text-center">
-                            <div class="p-2 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
-                                <div class="small text-muted">Trades</div>
-                                <div class="fw-bold text-dark" id="sim-trades">0</div>
-                            </div>
+                        <div class="col-6">
+                            <button class="btn btn-warning w-100 py-2" onclick="runTask('health_check')">
+                                <i class="fas fa-stethoscope me-1"></i><small>Health</small>
+                            </button>
                         </div>
-                        <div class="col-4 text-center">
-                            <div class="p-2 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
-                                <div class="small text-muted">Win Rate</div>
-                                <div class="fw-bold text-success" id="sim-winrate">0%</div>
-                            </div>
+                        <div class="col-6">
+                            <button class="btn btn-info w-100 py-2" onclick="runTask('data_collection')">
+                                <i class="fas fa-database me-1"></i><small>Data</small>
+                            </button>
                         </div>
-                        <div class="col-4 text-center">
-                            <div class="p-2 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
-                                <div class="small text-muted">Time</div>
-                                <div class="fw-bold text-dark" id="sim-runtime">0h</div>
-                            </div>
+                        <div class="col-6">
+                            <button class="btn btn-primary w-100 py-2" onclick="runTask('model_retraining')">
+                                <i class="fas fa-brain me-1"></i><small>Retrain</small>
+                            </button>
+                        </div>
+                        <div class="col-6">
+                            <button class="btn btn-secondary w-100 py-2" onclick="generateReport()">
+                                <i class="fas fa-file-alt me-1"></i><small>Report</small>
+                            </button>
                         </div>
                     </div>
                 </div>
             </div>
 
-        <div class="row">
-            <!-- Performance Chart -->
-            <div class="col-lg-8 mb-4">
-                <div class="dashboard-card p-4">
+            <!-- Calibration Summary Panel -->
+            <div class="col-lg-4 d-flex align-items-stretch">
+                <div id="recent-card" class="dashboard-card mid-six p-4 recent-fixed w-100" style="background: white; border: 2px solid #e9ecef; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+                    <h4><i class="fas fa-sliders-h me-2 text-success"></i>Calibration Summary</h4>
+                    <div id="calibration-summary" class="mt-3 small text-muted" style="max-height: 430px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable both-edges;">Loading...</div>
+                </div>
+            </div>
+
+            <!-- System Performance -->
+            <div class="col-lg-4 d-flex align-items-stretch">
+                <div class="dashboard-card mid-six p-4 w-100" style="background: white; border: 2px solid #e9ecef; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
                     <h4><i class="fas fa-chart-line me-2"></i>System Performance</h4>
-                    <div class="chart-container">
-                        <canvas id="performanceChart"></canvas>
+                    <div class="row g-3">
+                        <div class="col-6 text-center">
+                            <div class="gauge-box"><canvas id="gaugeCpu"></canvas></div>
+                            <div class="small mt-1"><strong>CPU</strong>: <span id="valCpu">-</span>%</div>
+                        </div>
+                        <div class="col-6 text-center">
+                            <div class="gauge-box"><canvas id="gaugeRam"></canvas></div>
+                            <div class="small mt-1"><strong>RAM</strong>: <span id="valRam">-</span>%</div>
+                        </div>
+                        <div class="col-6 text-center">
+                            <div class="gauge-box"><canvas id="gaugeDisk"></canvas></div>
+                            <div class="small mt-1"><strong>Disk</strong>: <span id="valDisk">-</span>%</div>
+                        </div>
+                        <div class="col-6 text-center">
+                            <div class="gauge-box"><canvas id="gaugeLoad"></canvas></div>
+                            <div class="small mt-1"><strong>Load</strong>: <span id="valLoad">-</span></div>
+                        </div>
                     </div>
                 </div>
             </div>
-            
+
+            <!-- Cache Coverage + AI Simulation Panel -->
+            <div class="col-lg-4 d-flex align-items-stretch">
+                <div class="dashboard-card mid-six p-4 w-100" style="background: white; border: 2px solid #e9ecef; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+                    <h5><i class="fas fa-database me-2 text-info"></i>Cache Coverage</h5>
+                    <div id="coverage-box" class="mb-2">
+                        <div class="d-flex justify-content-between align-items-center p-2 rounded" style="background:#f8f9fa;border:1px solid #dee2e6;">
+                            <div>
+                                <div class="small text-muted">Pattern cache</div>
+                                <div class="fw-bold" id="coverage-stats" style="font-size: 0.9rem;">-- / --</div>
+                            </div>
+                            <span class="badge bg-secondary" id="coverage-age" style="font-size: 0.7rem;">--</span>
+                        </div>
+                        <div class="mt-1 d-flex gap-1">
+                            <button class="btn btn-sm btn-outline-secondary py-1" onclick="loadCoverage()" style="font-size: 0.75rem;"><i class="fas fa-sync"></i></button>
+                            <button class="btn btn-sm btn-outline-primary py-1" onclick="refreshBulkNow()" style="font-size: 0.75rem;"><i class="fas fa-rotate"></i></button>
+                        </div>
+                    </div>
+                    
+                    <h5><i class="fas fa-robot me-2 text-info"></i>AI Simulation</h5>
+                    <div class="small text-muted mb-2">Virtual trading - 606 hisse</div>
+                    
+                    <!-- Compact Duration & Status -->
+                    <div class="row g-1 mb-2">
+                        <div class="col-7">
+                            <select class="form-select form-select-sm" id="simulation-duration" style="font-size: 0.8rem;">
+                                <option value="12">12h</option>
+                                <option value="24">24h</option>
+                                <option value="48" selected>48h</option>
+                                <option value="72">72h</option>
+                                <option value="168">1w</option>
+                            </select>
+                        </div>
+                        <div class="col-5">
+                            <div class="p-1 rounded text-center" style="background: #f8f9fa; border: 1px solid #dee2e6;">
+                                <div class="small text-dark fw-bold" id="sim-balance" style="font-size: 0.75rem;">₺0.00</div>
+                                <small class="text-success" id="sim-profit" style="font-size: 0.7rem;">±0%</small>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Status -->
+                    <div id="simulation-status" class="mb-2">
+                        <div class="p-2 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
+                            <div class="small fw-bold text-dark" id="sim-status-text">No Active Test</div>
+                            <small class="text-muted" id="sim-details" style="font-size: 0.7rem;">Select duration & start</small>
+                        </div>
+                    </div>
+                    
+                    <!-- Compact Controls -->
+                    <div class="row g-1">
+                        <div class="col-6">
+                            <button class="btn btn-success w-100 py-1 mb-1" id="start-simulation-btn" onclick="startSimulation()" style="font-size: 0.8rem;">
+                                <i class="fas fa-play me-1"></i>Start
+                            </button>
+                        </div>
+                        <div class="col-6">
+                            <button class="btn btn-danger w-100 py-1 mb-1" id="stop-simulation-btn" onclick="stopSimulation()" disabled style="font-size: 0.8rem;">
+                                <i class="fas fa-stop me-1"></i>Stop
+                            </button>
+                        </div>
+                        <div class="col-12">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text" style="font-size: 0.75rem;">₺</span>
+                                <input type="number" class="form-control" id="trade-amount" value="10000" min="1000" max="50000" style="font-size: 0.75rem;">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Compact Stats -->
+                    <div class="row g-1 mt-2" id="simulation-stats" style="display: none;">
+                        <div class="col-4 text-center">
+                            <div class="p-1 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
+                                <div class="small text-muted" style="font-size: 0.7rem;">Trades</div>
+                                <div class="fw-bold text-dark" id="sim-trades" style="font-size: 0.8rem;">0</div>
+                            </div>
+                        </div>
+                        <div class="col-4 text-center">
+                            <div class="p-1 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
+                                <div class="small text-muted" style="font-size: 0.7rem;">Win%</div>
+                                <div class="fw-bold text-success" id="sim-winrate" style="font-size: 0.8rem;">0%</div>
+                            </div>
+                        </div>
+                        <div class="col-4 text-center">
+                            <div class="p-1 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
+                                <div class="small text-muted" style="font-size: 0.7rem;">Time</div>
+                                <div class="fw-bold text-dark" id="sim-runtime" style="font-size: 0.8rem;">0h</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Recent Tasks -->
-            <div class="col-lg-4 mb-4">
-                <div class="dashboard-card p-4">
+            <div class="col-lg-4 d-flex align-items-stretch">
+                <div class="dashboard-card mid-six p-4 w-100" style="background: white; border: 2px solid #e9ecef; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
                     <h4>
                         <i class="fas fa-tasks me-2"></i>Recent Tasks
                         <span id="current-phase-badge" class="badge bg-secondary ms-2" title="Current pipeline phase">IDLE</span>
                     </h4>
-                    <div class="d-flex justify-content-between align-items-center mt-2">
+                    <div class="d-flex justify-content-between align-items-center mt-2" style="flex:0 0 auto;">
                         <div class="small text-muted">
-                            <span class="badge" style="background:#0d6efd">INCREMENTAL</span>
-                            <span class="badge" style="background:#6f42c1">ANALYSIS</span>
-                            <span class="badge" style="background:#0dcaf0;color:#000">COLLECTION</span>
-                            <span class="badge" style="background:#20c997">ML</span>
+                            <span class="badge" style="background:#0d6efd; font-size: 0.6rem;">INC</span>
+                            <span class="badge" style="background:#6f42c1; font-size: 0.6rem;">ANA</span>
+                            <span class="badge" style="background:#0dcaf0;color:#000; font-size: 0.6rem;">COL</span>
+                            <span class="badge" style="background:#20c997; font-size: 0.6rem;">ML</span>
                         </div>
-                        <div class="input-group input-group-sm" style="width: 170px;">
-                            <label class="input-group-text" for="tasks-count-select">Show</label>
-                            <select id="tasks-count-select" class="form-select form-select-sm">
-                                <option value="5">Last 5</option>
-                                <option value="10">Last 10</option>
-                                <option value="20">Last 20</option>
+                        <div class="input-group input-group-sm" style="width: 120px;">
+                            <label class="input-group-text" for="tasks-count-select" style="font-size: 0.7rem;">Show</label>
+                            <select id="tasks-count-select" class="form-select form-select-sm" style="font-size: 0.75rem;">
+                                <option value="3">3</option>
+                                <option value="4" selected>4</option>
+                                <option value="5">5</option>
                             </select>
                         </div>
                     </div>
-                    <div id="recent-tasks" class="mt-3">
+                    <div id="recent-tasks" class="mt-2" style="flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden;">
                         <div class="text-center">
                             <div class="spinner-border spinner-border-sm" role="status"></div>
-                            <p class="mt-2">Loading tasks...</p>
+                            <p class="mt-2 small">Loading tasks...</p>
                         </div>
                     </div>
                 </div>
@@ -584,7 +774,7 @@
 
 <script>
         // Global variables
-        let performanceChart;
+        let gaugeCpu, gaugeRam, gaugeDisk, gaugeLoad;
         let logCounter = 0;
 
 // Initialize dashboard
@@ -593,46 +783,21 @@ document.addEventListener('DOMContentLoaded', function() {
             updateDashboard();
             // Load recent tasks immediately on page load
             updateRecentTasks();
+            loadCalibrationSummary();
             startLiveUpdates();
         });
 
-        // Initialize performance chart
+        // Initialize four semi-circle gauges
         function initializeChart() {
-            const ctx = document.getElementById('performanceChart').getContext('2d');
-            performanceChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [{
-                        label: 'System Health Score',
-                        data: [],
-                        borderColor: '#4facfe',
-                        backgroundColor: 'rgba(79, 172, 254, 0.1)',
-                        tension: 0.4
-                    }, {
-                        label: 'Active Jobs',
-                data: [],
-                        borderColor: '#f093fb',
-                        backgroundColor: 'rgba(240, 147, 251, 0.1)',
-                        tension: 0.4
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                y: {
-                            beginAtZero: true,
-                            max: 100
-                        }
-                    },
-                    plugins: {
-                        legend: {
-                            display: true
-                }
-            }
-        }
-    });
+            const makeGauge = (canvasId)=> new Chart(document.getElementById(canvasId).getContext('2d'), {
+                type: 'doughnut',
+                data: { labels: ['Low','Med','High'], datasets: [{ data: [40,35,25], backgroundColor: ['#2a9d8f','#ffd166','#ef476f'], borderWidth:0, circumference:180, rotation:-90, cutout:'70%' }] },
+                options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{display:false}, tooltip:{enabled:false} } }
+            });
+            gaugeCpu = makeGauge('gaugeCpu');
+            gaugeRam = makeGauge('gaugeRam');
+            gaugeDisk = makeGauge('gaugeDisk');
+            gaugeLoad = makeGauge('gaugeLoad');
         }
 
         // Update dashboard data
@@ -687,19 +852,38 @@ document.addEventListener('DOMContentLoaded', function() {
                         
                         // Only update if different to prevent flickering
                         const statusElement = document.getElementById('automation-status');
+                        const headerEl = document.getElementById('automation-status-header');
                         const jobsElement = null; // removed scheduled-jobs widget
                         
-                        if (statusElement.textContent !== currentStatus) {
+                        if (statusElement && statusElement.textContent !== currentStatus) {
                             statusElement.textContent = currentStatus;
                             console.log('🔄 Automation status updated to:', currentStatus);
+                        }
+                        if (headerEl && headerEl.textContent !== currentStatus) {
+                            headerEl.textContent = currentStatus;
                         }
                         // scheduled-jobs widget removed
                     }
                 } else {
-                    // Fallback when automation data is unavailable
-                    console.warn('⚠️ Automation data unavailable, using fallback');
-                    const _as = document.getElementById('automation-status'); if (_as) { _as.textContent = 'CHECKING...'; }
-                    const _sj = document.getElementById('scheduled-jobs'); if (_sj) { _sj.textContent = '?'; }
+                    // Fallback when automation data is unavailable: try admin/system_stats
+                    try {
+                        const sys = await fetch('/api/admin/system_stats?v=' + Date.now());
+                        if (sys.ok) {
+                            const sj = await sys.json();
+                            const aut = String(sj.automation || '').toUpperCase();
+                            const statusEl = document.getElementById('automation-status');
+                            const headerEl = document.getElementById('automation-status-header');
+                            const txt = (aut === 'RUNNING') ? 'RUNNING' : (aut === 'STOPPED' ? 'STOPPED' : 'CHECKING...');
+                            if (statusEl) statusEl.textContent = txt;
+                            if (headerEl) headerEl.textContent = txt;
+                        } else {
+                            const _as = document.getElementById('automation-status'); if (_as) { _as.textContent = 'CHECKING...'; }
+                            const _ah = document.getElementById('automation-status-header'); if (_ah) { _ah.textContent = 'CHECKING...'; }
+                        }
+                    } catch (_) {
+                        const _as = document.getElementById('automation-status'); if (_as) { _as.textContent = 'CHECKING...'; }
+                        const _ah = document.getElementById('automation-status-header'); if (_ah) { _ah.textContent = 'CHECKING...'; }
+                    }
                 }
 
                 // Get system info (safe parse)
@@ -775,6 +959,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Update Recent Tasks & dynamic pipeline info
             await updateRecentTasks();
             await updatePipelineInfo();
+            await loadCalibrationSummary();
                 
                 // Başarılı güncelleme log'unu 60 saniyede bir yaz (spam önleme)
                 if (!window.__lastOKLog || (Date.now() - window.__lastOKLog) > 60000) {
@@ -836,8 +1021,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Update performance chart
         function updatePerformanceChart(healthData) {
-            const now = new Date().toLocaleTimeString();
-            const healthScore = calculateHealthScore(healthData);
             // Extract CPU/RAM/Disk metrics if available
             let cpu = null, mem = null, disk = null, loadAvg = null;
             try {
@@ -849,48 +1032,30 @@ document.addEventListener('DOMContentLoaded', function() {
                     loadAvg = Array.isArray(res.load_avg) ? res.load_avg[0] : null;
                 }
             } catch (_) {}
-            
-            // Keep only last 20 data points
-            if (performanceChart.data.labels.length > 20) {
-                performanceChart.data.labels.shift();
-                performanceChart.data.datasets[0].data.shift();
-                performanceChart.data.datasets[1].data.shift();
-                if (performanceChart.data.datasets[2]) performanceChart.data.datasets[2].data.shift();
-                if (performanceChart.data.datasets[3]) performanceChart.data.datasets[3].data.shift();
-                if (performanceChart.data.datasets[4]) performanceChart.data.datasets[4].data.shift();
-            }
-            
-            performanceChart.data.labels.push(now);
-            performanceChart.data.datasets[0].data.push(healthScore);
-            performanceChart.data.datasets[1].data.push(0);
-            // Dynamically add datasets for CPU/RAM/Disk once
-            if (performanceChart.data.datasets.length < 5) {
-                performanceChart.data.datasets.push({
-                    label: 'CPU %',
-                    data: [],
-                    borderColor: '#dc3545',
-                    backgroundColor: 'rgba(220,53,69,0.1)',
-                    tension: 0.3
-                });
-                performanceChart.data.datasets.push({
-                    label: 'RAM %',
-                    data: [],
-                    borderColor: '#20c997',
-                    backgroundColor: 'rgba(32,201,151,0.1)',
-                    tension: 0.3
-                });
-                performanceChart.data.datasets.push({
-                    label: 'Disk %',
-                    data: [],
-                    borderColor: '#fd7e14',
-                    backgroundColor: 'rgba(253,126,20,0.1)',
-                    tension: 0.3
-                });
-            }
-            performanceChart.data.datasets[2].data.push(Number.isFinite(cpu) ? cpu : null);
-            performanceChart.data.datasets[3].data.push(Number.isFinite(mem) ? mem : null);
-            performanceChart.data.datasets[4].data.push(Number.isFinite(disk) ? disk : null);
-            performanceChart.update('none');
+            // Update gauge pointer text and labels
+            try {
+                document.getElementById('valCpu').textContent = Number.isFinite(cpu) ? cpu.toFixed(0) : '-';
+                document.getElementById('valRam').textContent = Number.isFinite(mem) ? mem.toFixed(0) : '-';
+                document.getElementById('valDisk').textContent = Number.isFinite(disk) ? disk.toFixed(0) : '-';
+                document.getElementById('valLoad').textContent = loadAvg !== null ? loadAvg.toFixed(2) : '-';
+                // Dynamic color band emphasis: adjust dataset data ratios based on value thresholds
+                const updateBands = (chart, valPct)=>{
+                    // valPct 0-100; we keep three segments Low/Med/High with same sizes, but tint by opacity
+                    const colors = ['#2a9d8f','#ffd166','#ef476f'];
+                    const idx = valPct >= 80 ? 2 : (valPct >= 50 ? 1 : 0);
+                    const bg = colors.map((c,i)=> i===idx ? c : `${c}66`); // active band solid, others translucent
+                    chart.data.datasets[0].backgroundColor = bg;
+                    chart.update('none');
+                };
+                if (gaugeCpu && Number.isFinite(cpu)) updateBands(gaugeCpu, cpu);
+                if (gaugeRam && Number.isFinite(mem)) updateBands(gaugeRam, mem);
+                if (gaugeDisk && Number.isFinite(disk)) updateBands(gaugeDisk, disk);
+                if (gaugeLoad && loadAvg !== null) {
+                    // Normalize loadAvg (rough heuristic: 0-2 -> 0-100)
+                    const pct = Math.max(0, Math.min(100, (loadAvg / 2) * 100));
+                    updateBands(gaugeLoad, pct);
+                }
+            } catch (_) {}
         }
 
         // Calculate health score
@@ -916,10 +1081,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 const tasksContainer = document.getElementById('recent-tasks');
                 
                 if (data.status === 'success' && data.tasks && data.tasks.length > 0) {
-                    const preferCount = parseInt(localStorage.getItem('tasksDisplayCount') || '5');
+                    const preferCount = parseInt(localStorage.getItem('tasksDisplayCount') || '4');
                     const MAX_TASKS_DISPLAY = Number.isFinite(preferCount) ? preferCount : 5;
-                    const tasksToRender = data.tasks.slice(0, MAX_TASKS_DISPLAY);
-                    let html = '';
+                const tasksToRender = data.tasks.slice(0, MAX_TASKS_DISPLAY);
+                let html = '';
                     
                     tasksToRender.forEach(task => {
                         const state = (task.status || '').toLowerCase();
@@ -978,6 +1143,24 @@ document.addEventListener('DOMContentLoaded', function() {
                         `;
                     }
                     
+                    // Ensure at least 4 rows visible to avoid big empty area
+                    const MIN_ROWS = 4;
+                    if (tasksToRender.length < MIN_ROWS) {
+                        for (let i = tasksToRender.length; i < MIN_ROWS; i++) {
+                            html += `
+                            <div class="d-flex align-items-start mb-3 p-2 border-bottom" style="border-left:4px solid transparent; opacity:0.6;">
+                                <span class="me-2 fs-5">&nbsp;</span>
+                                <div class="flex-grow-1">
+                                    <div class="d-flex justify-content-between">
+                                        <strong class="small text-muted">—</strong>
+                                        <small class="text-muted">—</small>
+                                    </div>
+                                    <div class="small text-muted">No more items</div>
+                                    <span class="badge bg-light text-muted">&nbsp;</span>
+                                </div>
+                            </div>`;
+                        }
+                    }
                     tasksContainer.innerHTML = html;
                     console.log('✅ Recent Tasks updated successfully');
                 } else {
@@ -1170,8 +1353,8 @@ document.addEventListener('DOMContentLoaded', function() {
             try {
                 addLog('INFO', 'Generating system report...');
                 const [repRes, histRes] = await Promise.all([
-                    fetch('/api/automation/report?v=' + Date.now()),
-                    fetch('/api/automation/pipeline-history?v=' + Date.now())
+                    fetch('/api/admin/automation/report?v=' + Date.now()),
+                    fetch('/api/internal/automation/pipeline-history?v=' + Date.now(), { headers: { 'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' } })
                 ]);
                 const rep = repRes.ok ? await repRes.json() : { status: 'error' };
                 const hist = histRes.ok ? await histRes.json() : { status: 'error' };
@@ -1808,6 +1991,121 @@ document.addEventListener('DOMContentLoaded', function() {
             }catch(e){} finally{
                 const btn = document.getElementById('btn-refresh-bulk');
                 if(btn){ btn.disabled=false; btn.innerHTML='<i class="fas fa-rotate"></i> Refresh'; }
+            }
+        }
+
+        async function loadCalibrationSummary(){
+            try{
+                const el = document.getElementById('calibration-summary');
+                if(!el) return;
+                // Prefer internal endpoint with token; fall back to admin if needed
+                let resp = await fetch('/api/internal/calibration/summary?v=' + Date.now(), { headers: { 'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' }});
+                if(!resp.ok){
+                    resp = await fetch('/api/admin/calibration/summary?v=' + Date.now());
+                }
+                if(!resp.ok){ el.textContent = 'Unavailable'; return; }
+                const j = await resp.json();
+                const ps = (j && j.param_store && j.param_store.horizons) ? j.param_store.horizons : {};
+                const m7 = j.metrics_7d || {};
+                const m30 = j.metrics_30d || {};
+                const ab7 = j.ab_7d || {};
+                const genAt = (j && j.param_store && j.param_store.generated_at) ? j.param_store.generated_at : '-';
+                // Header
+                let html = `<div class="mb-2"><small class="text-muted">Kalibrasyon tarihi:</small> <code>${genAt}</code>
+                <div class="small text-muted">Güven değeri isotonic kalibrasyon ile düzeltilir; eşikler sinyal kalitesi için optimize edilir.</div></div>`;
+                // Helper (hoisted) for badge colors
+                function pickColor(v){ if(v===null) return '#e9ecef'; if(v>=70) return '#2a9d8f'; if(v>=50) return '#ffd166'; return '#ef476f'; }
+                // Rows with mini gauge + mini reliability
+                ['1d','3d','7d','14d','30d'].forEach((h,i)=>{
+                    const th = (ps[h] && ps[h].thresholds) ? ps[h].thresholds : {};
+                    const iso = (ps[h] && ps[h].isotonic) ? ps[h].isotonic : [];
+                    const accPct = (m7[h] && typeof m7[h].acc==='number') ? (m7[h].acc*100) : null;
+                    const accStr = accPct!==null ? accPct.toFixed(1)+'%' : '-';
+                    const cnt = (m7[h] && m7[h].count) ? m7[h].count : 0;
+                    const accPct30 = (m30[h] && typeof m30[h].acc==='number') ? (m30[h].acc*100) : null;
+                    const accStr30 = accPct30!==null ? accPct30.toFixed(1)+'%' : '-';
+                    const cnt30 = (m30[h] && m30[h].count) ? m30[h].count : 0;
+                    const lowSample = ((cnt>0 && cnt<30) || (cnt30>0 && cnt30<30));
+                    const abb = (ab7 && ab7[h]) ? ab7[h] : {};
+                    const prodAcc = (abb && abb.prod && typeof abb.prod.acc==='number') ? (abb.prod.acc*100) : null;
+                    const prodN = (abb && abb.prod && typeof abb.prod.n==='number') ? abb.prod.n : 0;
+                    const challAcc = (abb && abb.chall && typeof abb.chall.acc==='number') ? (abb.chall.acc*100) : null;
+                    const challN = (abb && abb.chall && typeof abb.chall.n==='number') ? abb.chall.n : 0;
+                    const gaugeId = `calibGauge_${h}`;
+                    const gaugeId30 = `calibGauge30_${h}`;
+                    const relId = `relChart_${h}`;
+                    html += `
+                      <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
+                        <div class="flex-grow-1 pe-2">
+                          <div class="d-flex align-items-center">
+                            <span class="badge bg-light text-dark me-2">${h}</span>
+                            <small>Δ≥${((th.delta_thr??0.03)*100).toFixed(1)}% · conf≥${(th.conf_thr??0.65)}</small>
+                            ${lowSample ? '<span class="badge bg-warning text-dark ms-2">düşük örnek</span>':''}
+                          </div>
+                          <div class="small text-muted">Kapsama & doğruluk (7g): <strong>${accStr}</strong> <span class="text-muted">(n=${cnt})</span> · 30g: <strong>${accStr30}</strong> <span class="text-muted">(n=${cnt30})</span></div>
+                          <div class="small mt-1">
+                            <span class="badge me-1" style="background:${pickColor(prodAcc)};">Prod ${prodAcc!==null?prodAcc.toFixed(1)+'%':'-'}</span>
+                            <span class="text-muted">(n=${prodN||0})</span>
+                            <span class="badge ms-2 me-1" style="background:${pickColor(challAcc)};">Chall ${challAcc!==null?challAcc.toFixed(1)+'%':'-'}</span>
+                            <span class="text-muted">(n=${challN||0})</span>
+                            <small class="text-muted ms-2">A/B (7g)</small>
+                          </div>
+                        </div>
+                        <div class="d-flex align-items-center" style="gap:8px;">
+                          <canvas id="${gaugeId}" width="70" height="40"></canvas>
+                          <canvas id="${gaugeId30}" width="70" height="40"></canvas>
+                          <canvas id="${relId}" width="80" height="40"></canvas>
+                        </div>
+                      </div>`;
+                });
+                el.innerHTML = html;
+                // Render gauges and reliability charts
+                const makeGauge = (id, pct)=>{
+                    const ctx = document.getElementById(id);
+                    if(!ctx) return;
+                    const active = pct!==null ? pct : 0;
+                    new Chart(ctx, {
+                        type: 'doughnut',
+                        data: { datasets: [{
+                            data: [active, Math.max(0,100-active)],
+                            backgroundColor: [pickColor(pct), '#e9ecef'],
+                            borderWidth: 0,
+                            circumference: 180,
+                            rotation: -90,
+                            cutout: '70%'
+                        }]},
+                        options: {responsive:false, plugins:{legend:{display:false}, tooltip:{enabled:false}}}
+                    });
+                };
+                const makeReliability = (id, isoPairs)=>{
+                    const ctx = document.getElementById(id);
+                    if(!ctx) return;
+                    // X: tahmin güveni (%), Y: gerçek isabet (%)
+                    const xs = (isoPairs||[]).map(p=> (Array.isArray(p)? p[0]: (p.c_in||0))*100);
+                    const ys = (isoPairs||[]).map(p=> (Array.isArray(p)? p[1]: (p.c_out||0))*100);
+                    const diag = [0,25,50,75,100];
+                    new Chart(ctx, {
+                        type: 'line',
+                        data: { labels: xs.length? xs : [0,100],
+                            datasets: [
+                              {label:'İdeal', data: diag, borderColor:'#ced4da', borderWidth:1, pointRadius:0, fill:false, tension:0.2},
+                              {label:'Kalibre', data: ys, borderColor:'#6c757d', borderWidth:2, pointRadius:0, fill:false, tension:0.2}
+                            ]
+                        },
+                        options: {responsive:false, plugins:{legend:{display:false}, tooltip:{enabled:false}}, scales:{x:{display:false}, y:{display:false, min:0, max:100}}}
+                    });
+                };
+                ['1d','3d','7d','14d','30d'].forEach(h=>{
+                    const accPct7 = (m7[h] && typeof m7[h].acc==='number') ? (m7[h].acc*100) : null;
+                    const accPct30 = (m30[h] && typeof m30[h].acc==='number') ? (m30[h].acc*100) : null;
+                    makeGauge(`calibGauge_${h}`, accPct7);
+                    makeGauge(`calibGauge30_${h}`, accPct30);
+                    const iso = (ps[h] && ps[h].isotonic) ? ps[h].isotonic : [];
+                    makeReliability(`relChart_${h}`, iso);
+                });
+            }catch(e){
+                const el = document.getElementById('calibration-summary');
+                if(el) el.textContent = 'Error loading';
             }
         }
 </script>

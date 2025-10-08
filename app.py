@@ -157,6 +157,52 @@ def create_app(config_name='default'):
 
     # SocketIO was already initialized above with async_mode and CORS; avoid duplicate initialization
     
+    # Auto-start automation pipeline on application startup
+    def _auto_start_automation():
+        """Automatically start automation pipeline when service starts"""
+        try:
+            if not AUTOMATED_PIPELINE_AVAILABLE:
+                logger.info("⚠️ Automation pipeline not available - skipping auto-start")
+                return
+            
+            # Check if auto-start is enabled (default: True)
+            auto_start = str(os.getenv('AUTO_START_CYCLE', 'True')).lower() in ('true', '1', 'yes', 'on')
+            if not auto_start:
+                logger.info("⚠️ AUTO_START_CYCLE disabled - pipeline will not auto-start")
+                return
+            
+            # Delay startup to allow app to fully initialize
+            import threading
+
+            def _delayed_start():
+                try:
+                    import time
+                    time.sleep(3)  # Wait 3 seconds for app to be ready
+                    
+                    with app.app_context():
+                        from working_automation import get_working_automation_pipeline
+                        pipeline = get_working_automation_pipeline()
+                        
+                        if pipeline and not getattr(pipeline, 'is_running', False):
+                            success = pipeline.start_scheduler()
+                            if success:
+                                logger.info("✅ Automation pipeline auto-started on service startup")
+                            else:
+                                logger.warning("⚠️ Automation pipeline auto-start failed")
+                        else:
+                            logger.info("ℹ️ Automation pipeline already running")
+                except Exception as e:
+                    logger.error(f"❌ Automation pipeline auto-start error: {e}")
+            
+            thread = threading.Thread(target=_delayed_start, daemon=True, name='AutoStartCycle')
+            thread.start()
+            logger.info("🔄 Automation pipeline auto-start scheduled (3s delay)")
+            
+        except Exception as e:
+            logger.warning(f"Auto-start automation setup failed: {e}")
+    
+    _auto_start_automation()
+    
     # Login Manager (use the globally initialized instance)
     login_manager.init_app(app)
     login_manager.login_view = 'auth.login'  # Updated for blueprint routing

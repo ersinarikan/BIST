@@ -38,7 +38,7 @@ class User(UserMixin, db.Model):
     email_verification_sent_at = db.Column(db.DateTime, nullable=True)
     
     # Account Status
-    is_active = db.Column(db.Boolean, default=True)
+    active = db.Column('is_active', db.Boolean, default=True)
     is_premium = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_login = db.Column(db.DateTime, nullable=True)
@@ -361,3 +361,101 @@ class PortfolioSnapshot(db.Model):
     
     def __repr__(self):
         return f'<PortfolioSnapshot {self.session_id}: {self.total_portfolio_value} TL>'
+
+
+# ==========================================
+# PREDICTION/OUTCOME LOGGING (Feedback Loop)
+# ==========================================
+
+class PredictionsLog(db.Model):
+    """Real-time prediction log for feedback and calibration.
+
+    Stores one row per symbol×horizon at prediction time with confidence/evidence.
+    """
+    __tablename__ = 'predictions_log'
+
+    id = db.Column(db.Integer, primary_key=True)
+    stock_id = db.Column(db.Integer, db.ForeignKey('stocks.id'), nullable=True)
+    symbol = db.Column(db.String(20), nullable=False, index=True)
+    horizon = db.Column(db.String(10), nullable=False, index=True)  # e.g., '1d','3d'
+    ts_pred = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    # Prices and deltas
+    price_now = db.Column(db.Numeric(14, 4), nullable=True)
+    pred_price = db.Column(db.Numeric(14, 4), nullable=True)
+    delta_pred = db.Column(db.Numeric(8, 4), nullable=True)  # (pred-now)/now
+
+    # Model info
+    model = db.Column(db.String(12), nullable=True)  # basic|enhanced
+    unified_best = db.Column(db.String(12), nullable=True)  # selected best source
+    confidence = db.Column(db.Numeric(4, 2), nullable=True)
+    param_version = db.Column(db.String(64), nullable=True)
+
+    # Evidence snapshot (compact)
+    pat_score = db.Column(db.Numeric(6, 3), nullable=True)
+    sent_score = db.Column(db.Numeric(6, 3), nullable=True)
+    visual_bullish = db.Column(db.Boolean, nullable=True)
+    visual_bearish = db.Column(db.Boolean, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.Index('idx_pred_symbol_time', 'symbol', 'ts_pred'),
+        db.Index('idx_pred_stock_time', 'stock_id', 'ts_pred'),
+        db.Index('idx_pred_horizon_time', 'horizon', 'ts_pred'),
+    )
+
+
+class OutcomesLog(db.Model):
+    """Evaluation log that links back to predictions and records realized outcomes."""
+    __tablename__ = 'outcomes_log'
+
+    id = db.Column(db.Integer, primary_key=True)
+    prediction_id = db.Column(db.Integer, db.ForeignKey('predictions_log.id'), nullable=False, index=True)
+
+    ts_eval = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    price_eval = db.Column(db.Numeric(14, 4), nullable=True)
+    delta_real = db.Column(db.Numeric(8, 4), nullable=True)
+    dir_hit = db.Column(db.Boolean, nullable=True)  # direction correctness
+    abs_err = db.Column(db.Numeric(8, 4), nullable=True)
+    mape = db.Column(db.Numeric(8, 4), nullable=True)
+    pnl = db.Column(db.Numeric(12, 2), nullable=True)
+
+    # Regime descriptors
+    regime_vol20 = db.Column(db.Numeric(8, 4), nullable=True)
+    regime_vol60 = db.Column(db.Numeric(8, 4), nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.Index('idx_outcome_eval_time', 'ts_eval'),
+    )
+
+
+class MetricsDaily(db.Model):
+    """Daily aggregated metrics per symbol×horizon (and optional regime bins)."""
+    __tablename__ = 'metrics_daily'
+
+    id = db.Column(db.Integer, primary_key=True)
+    date = db.Column(db.Date, nullable=False, index=True)
+    symbol = db.Column(db.String(20), nullable=False, index=True)
+    horizon = db.Column(db.String(10), nullable=False, index=True)
+
+    # Classification/forecast metrics
+    acc = db.Column(db.Numeric(6, 4), nullable=True)
+    precision = db.Column(db.Numeric(6, 4), nullable=True)
+    recall = db.Column(db.Numeric(6, 4), nullable=True)
+    mae = db.Column(db.Numeric(8, 4), nullable=True)
+    mape = db.Column(db.Numeric(8, 4), nullable=True)
+    brier = db.Column(db.Numeric(8, 4), nullable=True)
+
+    # PnL-style metrics (if used)
+    pnl = db.Column(db.Numeric(14, 2), nullable=True)
+    sharpe = db.Column(db.Numeric(6, 3), nullable=True)
+    max_dd = db.Column(db.Numeric(6, 3), nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('date', 'symbol', 'horizon', name='unique_metrics_day_sym_hor'),
+    )

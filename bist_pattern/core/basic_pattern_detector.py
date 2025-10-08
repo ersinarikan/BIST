@@ -12,9 +12,10 @@ logger = logging.getLogger(__name__)
 
 # Try to import TA-Lib
 try:
-    import talib
+    import talib  # type: ignore
     TALIB_AVAILABLE = True
 except ImportError:
+    talib = None  # type: ignore[assignment]
     TALIB_AVAILABLE = False
     logger.warning("⚠️ TA-Lib not available, using simple alternatives")
 
@@ -106,9 +107,9 @@ class BasicPatternDetector:
         patterns = []
         
         try:
-            close = df['close'].values
+            close: np.ndarray = df['close'].to_numpy(dtype=float)
             
-            if TALIB_AVAILABLE:
+            if TALIB_AVAILABLE and talib is not None:
                 ma_fast = talib.SMA(close, timeperiod=10)
                 ma_slow = talib.SMA(close, timeperiod=20)
             else:
@@ -160,9 +161,9 @@ class BasicPatternDetector:
         patterns = []
         
         try:
-            close = df['close'].values
+            close: np.ndarray = df['close'].to_numpy(dtype=float)
             
-            if TALIB_AVAILABLE:
+            if TALIB_AVAILABLE and talib is not None:
                 rsi = talib.RSI(close, timeperiod=14)
             else:
                 rsi = self._calculate_rsi_simple(close, 14)
@@ -226,9 +227,9 @@ class BasicPatternDetector:
         patterns = []
         
         try:
-            close = df['close'].values
+            close: np.ndarray = df['close'].to_numpy(dtype=float)
             
-            if TALIB_AVAILABLE:
+            if TALIB_AVAILABLE and talib is not None:
                 macd, signal, histogram = talib.MACD(close)
             else:
                 macd, signal, histogram = self._calculate_macd_simple(close)
@@ -293,9 +294,9 @@ class BasicPatternDetector:
         patterns = []
         
         try:
-            close = df['close'].values
-            high = df['high'].values
-            low = df['low'].values
+            close: np.ndarray = df['close'].to_numpy(dtype=float)
+            high: np.ndarray = df['high'].to_numpy(dtype=float)
+            low: np.ndarray = df['low'].to_numpy(dtype=float)
             
             if len(close) < 20:
                 return patterns
@@ -344,8 +345,8 @@ class BasicPatternDetector:
             if 'volume' not in df.columns:
                 return patterns
             
-            volume = df['volume'].values
-            close = df['close'].values
+            volume: np.ndarray = df['volume'].to_numpy(dtype=float)
+            close: np.ndarray = df['close'].to_numpy(dtype=float)
             
             if len(volume) < 10:
                 return patterns

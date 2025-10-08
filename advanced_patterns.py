@@ -14,6 +14,8 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 # TA-Lib for professional pattern recognition
+talib = None
+TALIB_AVAILABLE = False
 try:
     import talib
     TALIB_AVAILABLE = True
@@ -240,25 +242,25 @@ class AdvancedPatternDetector:
             
             # Key reversal patterns (high confidence)
             talib_patterns_high_priority = {
-                'HAMMER': (talib.CDLHAMMER, 'BULLISH', 0.75),
-                'SHOOTING_STAR': (talib.CDLSHOOTINGSTAR, 'BEARISH', 0.75),
-                'DOJI': (talib.CDLDOJI, 'NEUTRAL', 0.60),
-                'ENGULFING_BULLISH': (talib.CDLENGULFING, 'BULLISH', 0.80),  # Positive values
-                'MORNING_STAR': (talib.CDLMORNINGSTAR, 'BULLISH', 0.85),
-                'EVENING_STAR': (talib.CDLEVENINGSTAR, 'BEARISH', 0.85),
-                'PIERCING_LINE': (talib.CDLPIERCING, 'BULLISH', 0.70),
-                'DARK_CLOUD_COVER': (talib.CDLDARKCLOUDCOVER, 'BEARISH', 0.70),
-                'THREE_WHITE_SOLDIERS': (talib.CDL3WHITESOLDIERS, 'BULLISH', 0.85),
-                'THREE_BLACK_CROWS': (talib.CDL3BLACKCROWS, 'BEARISH', 0.85),
+                'HAMMER': (talib.CDLHAMMER, 'BULLISH', 0.75),  # type: ignore
+                'SHOOTING_STAR': (talib.CDLSHOOTINGSTAR, 'BEARISH', 0.75),  # type: ignore
+                'DOJI': (talib.CDLDOJI, 'NEUTRAL', 0.60),  # type: ignore
+                'ENGULFING_BULLISH': (talib.CDLENGULFING, 'BULLISH', 0.80),  # type: ignore
+                'MORNING_STAR': (talib.CDLMORNINGSTAR, 'BULLISH', 0.85),  # type: ignore
+                'EVENING_STAR': (talib.CDLEVENINGSTAR, 'BEARISH', 0.85),  # type: ignore
+                'PIERCING_LINE': (talib.CDLPIERCING, 'BULLISH', 0.70),  # type: ignore
+                'DARK_CLOUD_COVER': (talib.CDLDARKCLOUDCOVER, 'BEARISH', 0.70),  # type: ignore
+                'THREE_WHITE_SOLDIERS': (talib.CDL3WHITESOLDIERS, 'BULLISH', 0.85),  # type: ignore
+                'THREE_BLACK_CROWS': (talib.CDL3BLACKCROWS, 'BEARISH', 0.85),  # type: ignore
             }
             
             # Medium priority patterns
             talib_patterns_medium = {
-                'HANGING_MAN': (talib.CDLHANGINGMAN, 'BEARISH', 0.65),
-                'INVERTED_HAMMER': (talib.CDLINVERTEDHAMMER, 'BULLISH', 0.65),
-                'HARAMI': (talib.CDLHARAMI, 'NEUTRAL', 0.60),
-                'HARAMI_CROSS': (talib.CDLHARAMICROSS, 'NEUTRAL', 0.65),
-                'MARUBOZU': (talib.CDLMARUBOZU, 'NEUTRAL', 0.60),
+                'HANGING_MAN': (talib.CDLHANGINGMAN, 'BEARISH', 0.65),  # type: ignore
+                'INVERTED_HAMMER': (talib.CDLINVERTEDHAMMER, 'BULLISH', 0.65),  # type: ignore
+                'HARAMI': (talib.CDLHARAMI, 'NEUTRAL', 0.60),  # type: ignore
+                'HARAMI_CROSS': (talib.CDLHARAMICROSS, 'NEUTRAL', 0.65),  # type: ignore
+                'MARUBOZU': (talib.CDLMARUBOZU, 'NEUTRAL', 0.60),  # type: ignore
             }
             
             # Combine all patterns

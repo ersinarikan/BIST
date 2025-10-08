@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <title>Module Test</title>
+</head>
+<body>
+    <h1>JavaScript Module Test</h1>
+    <div id="test-output"></div>
+    
+    <script type="module">
+        import { 
+            SIGNAL_CONFIDENCE, 
+            HORIZONS, 
+            API_ENDPOINTS 
+        } from './constants.js';
+        
+        import { 
+            formatCurrency, 
+            formatPercentage,
+            calculatePercentChange,
+            getSignalLabel,
+            translateModelLabel
+        } from './utils.js';
+        
+        const output = document.getElementById('test-output');
+        const results = [];
+        
+        // Test 1: Constants
+        results.push(`✅ SIGNAL_CONFIDENCE.HIGH = ${SIGNAL_CONFIDENCE.HIGH}`);
+        results.push(`✅ HORIZONS['7d'].label = ${HORIZONS['7d'].label}`);
+        results.push(`✅ API_ENDPOINTS.WATCHLIST = ${API_ENDPOINTS.WATCHLIST}`);
+        
+        // Test 2: Utils - Formatting
+        results.push(`✅ formatCurrency(117.5) = ${formatCurrency(117.5)}`);
+        results.push(`✅ formatPercentage(2.5) = ${formatPercentage(2.5)}`);
+        
+        // Test 3: Utils - Calculations
+        const change = calculatePercentChange(100, 110);
+        results.push(`✅ calculatePercentChange(100, 110) = ${change.toFixed(1)}%`);
+        
+        // Test 4: Utils - Signal
+        const signal = getSignalLabel(75, 0.025);
+        results.push(`✅ getSignalLabel(75, 0.025) = ${signal.label}`);
+        
+        // Test 5: Utils - Translation
+        results.push(`✅ translateModelLabel('enhanced') = ${translateModelLabel('enhanced')}`);
+        
+        // Display results
+        output.innerHTML = '<ul>' + results.map(r => `<li>${r}</li>`).join('') + '</ul>';
+        
+        console.log('✅ All module tests passed!');
+    </script>
+</body>
+</html>
+

@@ -57,7 +57,7 @@ class EnhancedYahooFinanceWrapper:
             
             for i in range(self.session_pool_size):
                 browser = random.choice(self.browsers)
-                session = requests.Session(impersonate=browser)
+                session = requests.Session(impersonate=browser)  # type: ignore
                 
                 # Randomize headers slightly
                 headers = self._get_random_headers()

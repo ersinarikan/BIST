@@ -234,7 +234,9 @@ def register(app):
                         overall = 'warning'
             except Exception:
                 overall = 'unknown'
-            health_data['overall_status'] = overall
+            # overall_status is a primitive string value; set directly
+            # Assign directly
+            health_data['overall_status'] = overall  # type: ignore[index]
 
             return jsonify({'status': 'success', 'health_check': health_data})
         except Exception as e:
@@ -575,6 +577,7 @@ def register(app):
             expected = app.config.get('INTERNAL_API_TOKEN')
             if expected and token != expected:
                 # Allow localhost without token
+                import os
                 remote_ip = (request.headers.get('X-Forwarded-For') or request.remote_addr or '').split(',')[0].strip()
                 is_local = remote_ip in ('127.0.0.1', '::1', 'localhost')
                 allow_localhost = str(os.getenv('INTERNAL_ALLOW_LOCALHOST', str(app.config.get('INTERNAL_ALLOW_LOCALHOST', 'True')))).lower() == 'true'
@@ -932,6 +935,95 @@ def register(app):
             return jsonify(payload)
         except Exception as e:
             app.logger.error(f"Internal single collector error: {e}")
+            return jsonify({'status': 'error', 'error': str(e)}), 500
+
+    # Calibration summary (internal, token or localhost)
+    @bp.route('/calibration/summary')
+    @_allow_or_token(app)
+    def calibration_summary_internal():
+        try:
+            from datetime import date, timedelta
+            import os as _os
+            import json as _json
+            from models import db, MetricsDaily
+            # Load param_store.json
+            base = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+            ppath = _os.path.join(base, 'param_store.json')
+            pstore = {}
+            if _os.path.exists(ppath):
+                try:
+                    with open(ppath, 'r') as rf:
+                        pstore = _json.load(rf) or {}
+                except Exception:
+                    pstore = {}
+
+            # Helper to aggregate metrics for the last N days
+            def _aggregate_last_ndays(n_days: int):
+                _today = date.today()
+                _start = _today - timedelta(days=n_days - 1)
+                _rows = (
+                    db.session.query(MetricsDaily)
+                    .filter(MetricsDaily.date >= _start)
+                    .filter(MetricsDaily.date <= _today)
+                    .all()
+                )
+                _by_h = {}
+                for _r in _rows:
+                    _h = (_r.horizon or '').strip()
+                    if not _h:
+                        continue
+                    _by_h.setdefault(_h, []).append(_r)
+                _metrics = {}
+                _acc_vals = []
+                for _h, _items in _by_h.items():
+                    _acc_list = [float(getattr(_it, 'acc')) for _it in _items if getattr(_it, 'acc') is not None]
+                    _acc = (sum(_acc_list) / len(_acc_list)) if _acc_list else None
+                    _metrics[_h] = {'acc': _acc, 'count': len(_items)}
+                    if _acc is not None:
+                        _acc_vals.append(_acc)
+                _overall = (sum(_acc_vals) / len(_acc_vals)) if _acc_vals else None
+                return _metrics, _overall
+
+            metrics_7d, overall_acc_7d = _aggregate_last_ndays(7)
+            metrics_30d, overall_acc_30d = _aggregate_last_ndays(30)
+
+            # A/B summary 7d
+            try:
+                from models import PredictionsLog, OutcomesLog  # type: ignore
+                hkeys = ['1d', '3d', '7d', '14d', '30d']
+                ab_7d = {h: {'prod': {'acc': None, 'n': 0}, 'chall': {'acc': None, 'n': 0}} for h in hkeys}
+                from datetime import date as _date, timedelta as _timedelta
+                dt_today = _date.today()
+                dt_start = dt_today - _timedelta(days=6)
+                rows = (
+                    db.session.query(PredictionsLog, OutcomesLog)
+                    .join(OutcomesLog, OutcomesLog.prediction_id == PredictionsLog.id)
+                    .filter(OutcomesLog.ts_eval >= dt_start)
+                    .all()
+                )
+                tmp = {h: {'prod': [], 'chall': []} for h in hkeys}
+                for p, o in rows:
+                    try:
+                        h = (p.horizon or '').strip()
+                        if h not in tmp:
+                            continue
+                        pv = str(getattr(p, 'param_version', '') or '')
+                        grp = 'chall' if 'ab:chall' in pv else 'prod'
+                        tmp[h][grp].append(1.0 if bool(getattr(o, 'dir_hit')) else 0.0)
+                    except Exception:
+                        continue
+                for h in hkeys:
+                    for grp in ('prod', 'chall'):
+                        vals = tmp[h][grp]
+                        n = len(vals)
+                        ab_7d[h][grp]['n'] = n
+                        ab_7d[h][grp]['acc'] = (sum(vals) / n) if n else None
+            except Exception:
+                ab_7d = {}
+
+            return jsonify({'param_store': pstore, 'metrics_7d': metrics_7d, 'overall_acc_7d': overall_acc_7d, 'metrics_30d': metrics_30d, 'overall_acc_30d': overall_acc_30d, 'ab_7d': ab_7d})
+        except Exception as e:
+            app.logger.error(f"Internal calibration summary error: {e}")
             return jsonify({'status': 'error', 'error': str(e)}), 500
 
     app.register_blueprint(bp)

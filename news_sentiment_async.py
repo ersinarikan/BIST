@@ -9,17 +9,16 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from functools import lru_cache
 from typing import Dict, List, Optional, Any
 import uuid
 import queue
-import os
 
 # Suppress warnings during model loading
 import warnings
 warnings.filterwarnings('ignore')
 
 logger = logging.getLogger(__name__)
+
 
 class AsyncFinBERTSentimentSystem:
     """Async FinBERT sentiment analysis system for non-blocking operation"""
@@ -49,7 +48,6 @@ class AsyncFinBERTSentimentSystem:
             
             # Import heavy libraries only when needed
             from transformers import AutoTokenizer, AutoModelForSequenceClassification
-            import torch
             
             model_name = "ProsusAI/finbert"
             
@@ -132,6 +130,14 @@ class AsyncFinBERTSentimentSystem:
             
             for text in texts:
                 try:
+                    if not self.tokenizer or not self.model:
+                        sentiments.append({
+                            'text': text[:100] + "..." if len(text) > 100 else text,
+                            'sentiment': 'neutral',
+                            'confidence': 0.33
+                        })
+                        continue
+                    
                     # Tokenize
                     inputs = self.tokenizer(
                         text, 
@@ -147,7 +153,7 @@ class AsyncFinBERTSentimentSystem:
                         predictions = softmax(outputs.logits, dim=-1)
                     
                     # Get sentiment
-                    predicted_class = torch.argmax(predictions, dim=-1).item()
+                    predicted_class = int(torch.argmax(predictions, dim=-1).item())
                     confidence = torch.max(predictions).item()
                     
                     # Map to sentiment labels
@@ -209,9 +215,11 @@ class AsyncFinBERTSentimentSystem:
         if to_remove:
             logger.debug(f"🧹 Cleaned up {len(to_remove)} old sentiment results")
 
+
 # Global singleton instance
 _async_finbert_system = None
 _async_finbert_lock = threading.Lock()
+
 
 def get_async_finbert_sentiment_system():
     """Get async FinBERT sentiment system singleton"""
@@ -220,6 +228,7 @@ def get_async_finbert_sentiment_system():
         if _async_finbert_system is None:
             _async_finbert_system = AsyncFinBERTSentimentSystem()
     return _async_finbert_system
+
 
 # Cleanup function for old results
 def cleanup_sentiment_results():

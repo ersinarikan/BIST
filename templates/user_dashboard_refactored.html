@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BIST AI - Hisse Takip Sistemi</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <!-- Socket.IO -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <!-- Chart.js (grafik için) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        body { 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            min-height: 100vh;
+        }
+        
+        .user-card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            transition: transform 0.3s ease;
+        }
+        
+        .user-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .signal-buy { color: #28a745; font-weight: bold; }
+        .signal-sell { color: #dc3545; font-weight: bold; }
+        .signal-hold { color: #6c757d; font-weight: bold; }
+        
+        .stock-item {
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 10px;
+            border-left: 5px solid #007bff;
+            transition: all 0.3s ease;
+        }
+        
+        .stock-item:hover {
+            background: rgba(0, 123, 255, 0.1);
+        }
+        
+        .price-change-positive { color: #28a745; }
+        .price-change-negative { color: #dc3545; }
+        
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            min-width: 300px;
+        }
+        
+        .connection-status {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 10px 15px;
+            border-radius: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+        }
+        
+        .stock-search-item {
+            transition: background-color 0.2s ease;
+        }
+        
+        .stock-search-item:hover {
+            background-color: rgba(0, 123, 255, 0.1);
+        }
+        
+        .stock-search-item:last-child {
+            border-bottom: none !important;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+    {% if user_id %}
+    <script id="app-user" type="application/json">{{ user_id|tojson }}</script>
+    <script>
+        try{
+            const el = document.getElementById('app-user');
+            if(el){ window.APP_USER_ID = JSON.parse(el.textContent || 'null'); }
+        }catch(e){}
+    </script>
+    {% endif %}
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-chart-line me-2"></i>BIST AI Hisse Takip
+            </a>
+            <div class="navbar-nav ms-auto">
+                <span class="navbar-text me-3" id="user-info">
+                    <i class="fas fa-user me-2"></i>{{ user_name if user_name else 'Kullanıcı' }}
+                </span>
+                <a class="nav-link" href="/logout"><i class="fas fa-right-from-bracket me-1"></i>Çıkış</a>
+                <span class="navbar-text" id="connection-status">
+                    <i class="fas fa-wifi text-warning"></i> Bağlanıyor...
+                </span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container mt-4">
+        <div class="row">
+            <!-- Stock Watchlist -->
+            <div class="col-lg-8">
+                <div class="user-card p-4 mb-4">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h4><i class="fas fa-star text-warning me-2"></i>Takip Edilen Hisseler</h4>
+                        <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addStockModal">
+                            <i class="fas fa-plus me-2"></i>Hisse Ekle
+                        </button>
+                    </div>
+                    <div id="watchlist">
+                        <!-- Takip edilen hisseler burada listelenecek -->
+                        <div class="text-center text-muted py-4">
+                            <i class="fas fa-chart-bar fa-3x mb-3"></i>
+                            <p>Henüz takip edilen hisse bulunmuyor.<br>Hisse eklemek için yukarıdaki butonu kullanın.</p>
+                        </div>
+                    </div>
+                    <div class="mt-3">
+                        <div class="row g-2 align-items-center">
+                            <div class="col-6 col-md-3">
+                                <label class="form-label small mb-0">Sırala (Tahmin Ufku)</label>
+                                <select id="pred-sort-horizon" class="form-select form-select-sm">
+                                    <option value="1d">1 Gün</option>
+                                    <option value="3d">3 Gün</option>
+                                    <option value="7d" selected>7 Gün</option>
+                                    <option value="14d">14 Gün</option>
+                                    <option value="30d">30 Gün</option>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-2">
+                                <label class="form-label small mb-0">Sıra</label>
+                                <select id="pred-sort-order" class="form-select form-select-sm">
+                                    <option value="desc" selected>Azalan</option>
+                                    <option value="asc">Artan</option>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label small mb-0">Yön Filtresi</label>
+                                <select id="pred-dir" class="form-select form-select-sm">
+                                    <option value="all" selected>Hepsi</option>
+                                    <option value="bullish">Yükseliş</option>
+                                    <option value="bearish">Düşüş</option>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <label class="form-label small mb-0">Min değişim % (mutlak): <span id="pred-min-abs-val">0</span></label>
+                                <input type="range" min="0" max="50" step="1" value="0" id="pred-min-abs" class="form-range">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Signals & Notifications -->
+            <div class="col-lg-4">
+                <!-- Live Signals -->
+                <div class="user-card p-4 mb-4">
+                    <h5><i class="fas fa-bell text-primary me-2"></i>Canlı Sinyaller</h5>
+                    <div id="live-signals" class="mt-3">
+                        <div class="text-center text-muted py-3">
+                            <i class="fas fa-signal fa-2x mb-2"></i>
+                            <p>Sinyal bekleniyor...</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- System Status -->
+                <div class="user-card p-4">
+                    <h6><i class="fas fa-heartbeat text-success me-2"></i>Sistem Durumu</h6>
+                    <div class="mt-3">
+                        <div class="d-flex justify-content-between">
+                            <span>Bağlantı:</span>
+                            <span id="system-connection" class="text-warning">Kontrol ediliyor...</span>
+                        </div>
+                        <div class="d-flex justify-content-between mt-2">
+                            <span>Veri Akışı:</span>
+                            <span id="data-stream" class="text-warning">Kontrol ediliyor...</span>
+                        </div>
+                        <div class="d-flex justify-content-between mt-2">
+                            <span>Son Güncelleme:</span>
+                            <span id="last-update" class="text-muted">--:--:--</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Stock Modal -->
+    <div class="modal fade" id="addStockModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Hisse Ekle</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="stockSearch" class="form-label">Hisse Ara</label>
+                        <input type="text" class="form-control" id="stockSearch" 
+                               placeholder="Hisse kodu veya şirket adı girin..." 
+                               oninput="searchStocks(this.value)">
+                        <div class="form-text">Örn: THYAO, Türk Hava, bankacılık</div>
+                    </div>
+                    
+                    <!-- Search Results -->
+                    <div id="stockSearchResults" class="mb-3" style="display: none;">
+                        <label class="form-label">Arama Sonuçları:</label>
+                        <div class="border rounded p-2" style="max-height: 200px; overflow-y: auto;">
+                            <div id="searchResultsList">
+                                <!-- Arama sonuçları burada gösterilecek -->
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Selected Stock -->
+                    <div class="mb-3">
+                        <label for="selectedStock" class="form-label">Seçilen Hisse</label>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="selectedStock" 
+                                   placeholder="Yukarıdan hisse seçin veya kod girin" readonly>
+                            <button class="btn btn-outline-secondary" type="button" 
+                                    onclick="clearSelectedStock()">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="alertType" class="form-label">Sinyal Türü</label>
+                        <select class="form-select" id="alertType">
+                            <option value="all">Tüm Sinyaller</option>
+                            <option value="buy">Sadece Alım Sinyalleri</option>
+                            <option value="sell">Sadece Satım Sinyalleri</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">İptal</button>
+                    <button type="button" class="btn btn-primary" onclick="addStock()">Ekle</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detail Modal -->
+    <div class="modal fade" id="detailModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><span id="detailTitle">Detay</span></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row">
+                        <div class="col-12 col-md-6 mb-3">
+                            <div class="border rounded p-2">
+                                <canvas id="detailSpark" height="120"></canvas>
+                                <div id="detailSparkStats" class="small text-muted mt-1"></div>
+                                <div id="detailPatternStats" class="small text-danger mt-1"></div>
+                            </div>
+                            <div class="border rounded p-2 mt-2">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <div class="small text-muted">Hacim Segmenti</div>
+                                    <span class="badge bg-light text-dark" id="detailVolumeTier">-</span>
+                                </div>
+                                <div class="small text-muted" id="detailAvgVolume">-</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6 mb-3">
+                            <div class="border rounded p-2" style="max-height:180px;overflow:auto;">
+                                <div class="small text-muted mb-1">Formasyonlar</div>
+                                <div id="detailPatterns">Yükleniyor...</div>
+                            </div>
+                            <div class="border rounded p-2 mt-2" style="max-height:180px;overflow:auto;">
+                                <div class="small text-muted mb-1">ML Özet (Birleşik)</div>
+                                <div id="detailMlUnified" class="small text-muted">-</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Kapat</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Container -->
+    <div id="notification-container" class="notification"></div>
+    
+    <!-- Connection Status -->
+    <div class="connection-status" id="bottom-connection-status">
+        <i class="fas fa-wifi me-2"></i>Bağlantı durumu...
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/pattern_translations.js"></script>
+    
+    <!-- ===== REFACTORED: Modular JavaScript ===== -->
+    <script type="module" src="/static/js/user-dashboard.js"></script>
+    
+    <!-- Legacy inline functions for onclick compatibility -->
+    <script>
+        // Compatibility shims for inline onclick handlers
+        // These delegate to the modular dashboard instance
+        
+        function searchStocks(query) {
+            if (window.dashboard) {
+                window.dashboard.searchStocks(query);
+            }
+        }
+        
+        function selectStock(symbol, name, sector) {
+            if (window.dashboard) {
+                window.dashboard.selectStock(symbol, name, sector);
+            }
+        }
+        
+        function clearSelectedStock() {
+            if (window.dashboard) {
+                window.dashboard.clearSelectedStock();
+            }
+        }
+        
+        function addStock() {
+            if (window.dashboard) {
+                window.dashboard.addStock();
+            }
+        }
+        
+        function removeStock(symbol) {
+            if (window.dashboard) {
+                window.dashboard.removeStock(symbol);
+            }
+        }
+        
+        function openDetailModal(symbol) {
+            if (window.dashboard) {
+                window.dashboard.openDetailModal(symbol);
+            }
+        }
+    </script>
+</body>
+</html>
+

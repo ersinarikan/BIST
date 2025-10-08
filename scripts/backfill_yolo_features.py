@@ -36,6 +36,8 @@ try:
     from PIL import Image
 except Exception:  # pragma: no cover
     Image = None  # type: ignore
+YOLO = None  # type: ignore
+YOLO_AVAILABLE = False
 try:
     from ultralytics import YOLO  # type: ignore
     YOLO_AVAILABLE = True
@@ -212,11 +214,11 @@ def main(argv: List[str]) -> int:
     # Load YOLO model if available
     model = None
     yolo_ready = False
-    if YOLO_AVAILABLE:
+    if YOLO_AVAILABLE and YOLO is not None:
         model_path = os.getenv('YOLO_MODEL_PATH', '/opt/bist-pattern/yolo/patterns_all_v7_rectblend.pt')
         if os.path.exists(model_path):
             try:
-                model = YOLO(model_path)
+                model = YOLO(model_path)  # type: ignore
                 yolo_ready = True
             except Exception:
                 yolo_ready = False
@@ -257,7 +259,9 @@ def main(argv: List[str]) -> int:
                 except Exception:
                     min_conf = 0.12
                 try:
-                    results = model(img, conf=min_conf, verbose=False)
+                    if model is None:
+                        continue
+                    results = model(img, conf=min_conf, verbose=False)  # type: ignore
                     if results and len(results) > 0:
                         result = results[0]
                         try:

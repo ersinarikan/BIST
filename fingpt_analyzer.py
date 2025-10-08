@@ -11,6 +11,10 @@ warnings.filterwarnings('ignore')
 logger = logging.getLogger(__name__)
 
 # FinBERT için gerekli kütüphaneler
+AutoTokenizer = None
+AutoModelForSequenceClassification = None
+torch = None
+FINBERT_AVAILABLE = False
 try:
     from transformers import AutoTokenizer, AutoModelForSequenceClassification
     import torch
@@ -42,22 +46,22 @@ class FinGPTAnalyzer:
                         model_name = local_path
                         logger.info("🇹🇷 Türkçe sentiment modeli yükleniyor (local)...")
                         self.model_name = "savasy/bert-base-turkish-sentiment-cased"
-                        self.tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
-                        self.model = AutoModelForSequenceClassification.from_pretrained(model_name, local_files_only=True)
+                        self.tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)  # type: ignore
+                        self.model = AutoModelForSequenceClassification.from_pretrained(model_name, local_files_only=True)  # type: ignore
                     else:
                         # Fallback to network
                         model_name = "savasy/bert-base-turkish-sentiment-cased"
                         logger.info("🇹🇷 Türkçe sentiment modeli yükleniyor (network)...")
                         self.model_name = model_name
-                        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-                        self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
+                        self.tokenizer = AutoTokenizer.from_pretrained(model_name)  # type: ignore
+                        self.model = AutoModelForSequenceClassification.from_pretrained(model_name)  # type: ignore
                 else:
                     # İngilizce FinBERT (fallback)
                     model_name = "ProsusAI/finbert"
                     logger.info("🇺🇸 FinBERT modeli yükleniyor...")
                     self.model_name = model_name
-                    self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-                    self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
+                    self.tokenizer = AutoTokenizer.from_pretrained(model_name)  # type: ignore
+                    self.model = AutoModelForSequenceClassification.from_pretrained(model_name)  # type: ignore
                 
                 # Evaluation mode
                 self.model.eval()
@@ -70,8 +74,8 @@ class FinGPTAnalyzer:
                 try:
                     model_name = "ProsusAI/finbert"
                     self.model_name = model_name
-                    self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-                    self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
+                    self.tokenizer = AutoTokenizer.from_pretrained(model_name)  # type: ignore
+                    self.model = AutoModelForSequenceClassification.from_pretrained(model_name)  # type: ignore
                     self.model.eval()
                     self.model_loaded = True
                     logger.info("✅ FinBERT fallback modeli yüklendi")
@@ -114,9 +118,9 @@ class FinGPTAnalyzer:
                     'scores': {'positive': 0.33, 'negative': 0.33, 'neutral': 0.34},
                     'status': 'model_unavailable'
                 }
-            with torch.no_grad():
+            with torch.no_grad():  # type: ignore
                 outputs = self.model(**inputs)
-                predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
+                predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)  # type: ignore
             
             # Sonuçları parse et
             scores = predictions[0].tolist()

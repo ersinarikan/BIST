@@ -95,6 +95,7 @@ def start_automation():
             }), 503
 
         # Check current status first
+        current_status = {}
         try:
             current_status = pipeline.get_scheduler_status() or {}
             is_currently_running = bool(current_status.get('is_running', False))
@@ -212,6 +213,7 @@ def stop_automation():
             }), 503
 
         # Check current status first
+        current_status = {}
         try:
             current_status = pipeline.get_scheduler_status() or {}
             is_currently_running = bool(current_status.get('is_running', False))

@@ -20,6 +20,7 @@ import math
 from typing import List, Dict, Any
 
 import pandas as pd
+import numpy as np
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if PROJECT_ROOT not in sys.path:
@@ -62,7 +63,8 @@ def _load_df_yf(symbol: str, until: datetime, lookback_days: int) -> pd.DataFram
         except Exception:
             pass
         cols = [c for c in ['open', 'high', 'low', 'close', 'volume'] if c in df.columns]
-        return df[cols].copy() if cols else pd.DataFrame()
+        result = df[cols].copy() if cols else pd.DataFrame()
+        return result  # type: ignore
     except Exception:
         return pd.DataFrame()
 
@@ -120,13 +122,14 @@ def realized_return(df_all: pd.DataFrame, at: datetime, horizon: int) -> float |
         anchor_ts = pd.Timestamp(at).normalize()
         if anchor_ts not in df_all.index:
             # pick last trading day <= anchor (pad)
-            idx = df_all.index.get_loc(anchor_ts, method='pad')
+            idx = df_all.index.get_indexer([anchor_ts], method='pad')[0]  # type: ignore
             base = df_all.index[idx]
         else:
             base = anchor_ts
         base_px = float(df_all.loc[base, 'close'])
         # forward day index
-        idx0 = df_all.index.get_loc(base)
+        idx0_val = df_all.index.get_loc(base)
+        idx0 = int(idx0_val) if isinstance(idx0_val, (int, np.integer)) else 0  # type: ignore
         idx1 = idx0 + horizon
         if idx1 >= len(df_all.index):
             return None
@@ -207,7 +210,8 @@ def main():
             if not isinstance(pred_px, (int, float)) or base_px <= 0:
                 continue
             pred_ret = (pred_px - base_px) / base_px
-            real_ret = realized_return(df_full, base_date, h)
+            base_dt = base_date.to_pydatetime() if hasattr(base_date, 'to_pydatetime') else base_date  # type: ignore
+            real_ret = realized_return(df_full, base_dt, h)  # type: ignore
             if real_ret is None:
                 continue
             s = stats[str(h)]

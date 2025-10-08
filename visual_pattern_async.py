@@ -113,6 +113,12 @@ class AsyncVisualPatternSystem:
                     return
                 
                 # Load YOLO model (blocking)
+                if not self._YOLO:
+                    logger.warning("YOLO not available")
+                    with self._model_load_lock:
+                        self._model_loading = False
+                    return
+                
                 model = self._YOLO(self._model_path)
                 
                 with self._model_load_lock:

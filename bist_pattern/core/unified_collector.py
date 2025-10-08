@@ -387,7 +387,7 @@ class UnifiedDataCollector:
             key = (symbol, target_period)
             with _cache_lock:
                 entry = _fetch_cache.get(key)
-                if entry and (now_ts - float(entry.get('ts', 0))) < FETCH_CACHE_TTL:
+                if entry and ((time.time()) - float(entry.get('ts', 0))) < FETCH_CACHE_TTL:
                     df_cached = entry.get('df')
                     if df_cached is None or getattr(df_cached, 'empty', True):
                         return {'symbol': symbol, 'success': False, 'records': 0, 'error': 'no_data_cached', 'period': target_period}

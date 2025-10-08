@@ -12,6 +12,7 @@ import os
 import math
 import time
 import json
+from typing import Any, Callable
 try:
     import fcntl  # Posix lock
 except Exception:  # pragma: no cover
@@ -31,6 +32,7 @@ try:
     ADVANCED_PATTERNS_AVAILABLE = True
 except ImportError:
     ADVANCED_PATTERNS_AVAILABLE = False
+    AdvancedPatternDetector = None  # type: ignore[assignment]
     logger.warning("⚠️ Advanced patterns modülü yüklenemedi")
 
 # Visual pattern detection sistemi (now using async version)
@@ -38,18 +40,29 @@ VISUAL_PATTERNS_AVAILABLE = True  # Always available with async implementation
 
 # ML Prediction sistemi
 try:
-    from ml_prediction_system import get_ml_prediction_system
+    from ml_prediction_system import get_ml_prediction_system as _real_get_ml_prediction_system
+    get_ml_prediction_system: Callable[[], Any] = _real_get_ml_prediction_system  # type: ignore[assignment]
     ML_PREDICTION_AVAILABLE = True
 except ImportError:
     ML_PREDICTION_AVAILABLE = False
+
+    def _fallback_get_ml_prediction_system() -> Any:
+        return None
+    get_ml_prediction_system = _fallback_get_ml_prediction_system
+
     logger.warning("⚠️ ML Prediction modülü yüklenemedi")
 
 # Enhanced ML Prediction sistemi (opsiyonel)
 try:
-    from enhanced_ml_system import get_enhanced_ml_system
+    from enhanced_ml_system import get_enhanced_ml_system as _real_get_enhanced_ml_system
+    get_enhanced_ml_system: Callable[[], Any] = _real_get_enhanced_ml_system  # type: ignore[assignment]
     ENHANCED_ML_AVAILABLE = True
 except ImportError:
     ENHANCED_ML_AVAILABLE = False  # Import failed
+
+    def _fallback_get_enhanced_ml_system() -> Any:
+        return None
+    get_enhanced_ml_system = _fallback_get_enhanced_ml_system
     logger.warning("⚠️ Enhanced ML Prediction modülü yüklenemedi")
 
 
@@ -79,7 +92,7 @@ class HybridPatternDetector:
         self._bulk_write_ts: dict[str, float] = {}
         
         # Gelişmiş pattern detector
-        if ADVANCED_PATTERNS_AVAILABLE:
+        if ADVANCED_PATTERNS_AVAILABLE and AdvancedPatternDetector is not None:
             self.advanced_detector = AdvancedPatternDetector()
         else:
             self.advanced_detector = None
@@ -764,6 +777,10 @@ class HybridPatternDetector:
                 logger.debug(f"Pattern validation disabled for {symbol}")
             
             # ML predictions: coordinated (Basic + Enhanced) in one place
+            # Initialize variables first to avoid UnboundLocalError
+            ml_predictions = {}
+            enhanced_predictions = {}
+            
             try:
                 from bist_pattern.core.ml_coordinator import get_ml_coordinator
                 mlc = get_ml_coordinator()
@@ -1221,16 +1238,27 @@ class HybridPatternDetector:
                                 except Exception:
                                     enable_meta = True
                                 pat_s, sent_s = _agg_evidence(h_days)
-                                if h_days <= 1:
-                                    w_pat, w_sent = 0.12, 0.10
-                                elif h_days <= 3:
-                                    w_pat, w_sent = 0.10, 0.08
-                                elif h_days <= 7:
-                                    w_pat, w_sent = 0.06, 0.05
-                                elif h_days <= 14:
-                                    w_pat, w_sent = 0.04, 0.03
-                                else:
-                                    w_pat, w_sent = 0.03, 0.02
+                                # Read per-horizon weights from param_store if present
+                                try:
+                                    _ps = self._load_param_store() or {}
+                                    _hkey = str(h)
+                                    _wmap = (_ps.get('weights') or {}).get(_hkey) if isinstance(_ps, dict) else None
+                                    if isinstance(_wmap, dict):
+                                        w_pat = float(_wmap.get('w_pat', 0.0)) or 0.0
+                                        w_sent = float(_wmap.get('w_sent', 0.0)) or 0.0
+                                    else:
+                                        raise KeyError('no weights')
+                                except Exception:
+                                    if h_days <= 1:
+                                        w_pat, w_sent = 0.12, 0.10
+                                    elif h_days <= 3:
+                                        w_pat, w_sent = 0.10, 0.08
+                                    elif h_days <= 7:
+                                        w_pat, w_sent = 0.06, 0.05
+                                    elif h_days <= 14:
+                                        w_pat, w_sent = 0.04, 0.03
+                                    else:
+                                        w_pat, w_sent = 0.03, 0.02
                                 signed_adj = (w_pat * pat_s + w_sent * sent_s) if enable_meta else 0.0
                                 conf_after_meta = max(0.25, min(0.95, conf + max(-0.15, min(0.15, signed_adj))))
 
@@ -1292,6 +1320,8 @@ class HybridPatternDetector:
                                     'pattern_score': float(pat_s),
                                     'sentiment_score': float(sent_s),
                                     'contrib_conf': float(conf_final - conf),
+                                    'w_pat': float(w_pat),
+                                    'w_sent': float(w_sent),
                                 }
                                 if booster_p is not None:
                                     cur[src]['evidence']['booster_prob'] = float(booster_p)
@@ -1310,6 +1340,60 @@ class HybridPatternDetector:
                     elif entries:
                         best_src = sorted(entries, key=lambda x: x[0], reverse=True)[0][1]
                         cur['best'] = best_src
+                # Apply param_store thresholds + isotonic mapping (calibrated confidence)
+                try:
+                    store = self._load_param_store() or {}
+                    ps_h = (store.get('horizons') or {}).get(str(h), {})
+                    th = ps_h.get('thresholds') or {}
+                    # --- Bandit A/B: optionally use challenger thresholds for a stable subset of symbols ---
+                    ab_label = 'ab:prod'
+                    try:
+                        import hashlib
+                        bcfg = ((store.get('bandit') or {}).get('horizons') or {}).get(str(h), {})
+                        traffic = float(bcfg.get('traffic', 0.10))
+                        chall = bcfg.get('challenger') or None
+                        # Stable assignment by symbol×horizon hash
+                        hv = f"{symbol.upper()}|{str(h)}".encode()
+                        hv_int = int(hashlib.sha1(hv).hexdigest()[:8], 16)
+                        frac = (hv_int % 1000) / 1000.0
+                        if chall and frac < max(0.0, min(1.0, traffic)):
+                            th = chall
+                            ab_label = 'ab:chall'
+                    except Exception:
+                        ab_label = 'ab:prod'
+                    delta_thr = float(th.get('delta_thr', 0.0))
+                    conf_thr = float(th.get('conf_thr', 0.0))
+                    # If best exists, gate tiny signals by thresholds
+                    if 'best' in cur and isinstance(cur.get(cur['best']), dict):
+                        be = cur[cur['best']]
+                        try:
+                            if abs(float(be.get('delta_pct', 0.0))) < delta_thr or float(be.get('confidence', 0.0)) < conf_thr:
+                                # Demote confidence smoothly
+                                be['confidence'] = max(0.25, float(be.get('confidence', 0.0)) * 0.85)
+                        except Exception:
+                            pass
+                        # Tag param version used for A/B attribution
+                        try:
+                            pv = str((store or {}).get('generated_at') or '')
+                            be['param_version'] = (pv + '|' + ab_label) if pv else ab_label
+                        except Exception:
+                            pass
+                    # Isotonic reliability table
+                    bins = ps_h.get('isotonic') or []
+                    if bins and 'best' in cur and isinstance(cur.get(cur['best']), dict):
+                        be = cur[cur['best']]
+                        cin = float(be.get('confidence', 0.0))
+                        # Find nearest bin by input conf
+                        try:
+                            best_idx = min(range(len(bins)), key=lambda i: abs(cin - float(bins[i][0])))
+                            cout = float(bins[best_idx][1])
+                            be['confidence'] = max(0.25, min(0.95, cout))
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                # Add current horizon to ml_unified dictionary
+                if cur:  # Only add if there's actual data
                     ml_unified[h] = cur
             except Exception:
                 ml_unified = {}
@@ -1327,6 +1411,200 @@ class HybridPatternDetector:
                 'enhanced_predictions': enhanced_predictions or {},
                 'ml_unified': ml_unified
             }
+            # --- Feedback logging: write one row per horizon into predictions_log (best-effort)
+            try:
+                from models import db, PredictionsLog, Stock  # type: ignore
+                
+                # Debug logging for prediction tracking
+                logger.debug(f"🔍 Prediction logging for {symbol}:")
+                logger.debug(f"  ml_predictions: {len(ml_predictions) if ml_predictions else 0} horizons")
+                logger.debug(f"  enhanced_predictions: {len(enhanced_predictions) if enhanced_predictions else 0} horizons")
+                logger.debug(f"  ml_unified: {len(ml_unified) if ml_unified else 0} horizons")
+                
+                # Resolve stock_id quickly (optional)
+                # Note: We're already inside app.app_context() from analyze_stock()
+                stock_id = None
+                try:
+                    st = Stock.query.filter_by(symbol=symbol.upper()).first()
+                    stock_id = getattr(st, 'id', None)
+                except Exception:
+                    stock_id = None
+                # Fill missing horizons from enhanced/basic predictions (even if ml_unified partially filled)
+                try:
+                    expected_horizons = ['1d', '3d', '7d', '14d', '30d']
+                    missing_horizons = [h for h in expected_horizons if h not in ml_unified]
+                    
+                    if missing_horizons and (isinstance(enhanced_predictions, dict) or isinstance(ml_predictions, dict)):
+                        cur_price = float(data['close'].iloc[-1])
+                        
+                        for hk in missing_horizons:
+                            enh_obj = enhanced_predictions.get(hk) if isinstance(enhanced_predictions, dict) else None
+                            bas_obj = ml_predictions.get(hk) if isinstance(ml_predictions, dict) else None
+                            
+                            enh_price = None
+                            enh_conf = None
+                            if isinstance(enh_obj, dict):
+                                # accept ensemble_prediction or price
+                                v = enh_obj.get('ensemble_prediction') if 'ensemble_prediction' in enh_obj else enh_obj.get('price')
+                                if isinstance(v, (int, float)):
+                                    enh_price = float(v)
+                                if isinstance(enh_obj.get('confidence'), (int, float)):
+                                    enh_conf = float(enh_obj['confidence'])
+                            
+                            bas_price = None
+                            if isinstance(bas_obj, dict):
+                                v = bas_obj.get('price')
+                                if isinstance(v, (int, float)):
+                                    bas_price = float(v)
+                            
+                            # Add minimal evidence for fallback horizons
+                            h_days = int(str(hk).replace('d', '') or 7)
+                            if h_days <= 1:
+                                w_pat, w_sent = 0.12, 0.10
+                            elif h_days <= 3:
+                                w_pat, w_sent = 0.10, 0.08
+                            elif h_days <= 7:
+                                w_pat, w_sent = 0.06, 0.05
+                            elif h_days <= 14:
+                                w_pat, w_sent = 0.04, 0.03
+                            else:
+                                w_pat, w_sent = 0.03, 0.02
+                            
+                            entry: dict[str, dict | str] = {}
+                            if enh_price is not None:
+                                entry['enhanced'] = {
+                                    'price': enh_price,
+                                    'confidence': enh_conf,
+                                    'delta_pct': (enh_price - cur_price) / cur_price if cur_price else None,
+                                    'evidence': {
+                                        'pattern_score': 0.0,  # Fallback: neutral
+                                        'sentiment_score': 0.0,  # Fallback: neutral
+                                        'w_pat': float(w_pat),
+                                        'w_sent': float(w_sent),
+                                        'contrib_conf': 0.0,  # No adjustment in fallback
+                                        'source': 'fallback'  # Tag to identify fallback entries
+                                    }
+                                }
+                            if bas_price is not None:
+                                entry['basic'] = {
+                                    'price': bas_price,
+                                    'confidence': None,
+                                    'delta_pct': (bas_price - cur_price) / cur_price if cur_price else None,
+                                    'evidence': {
+                                        'pattern_score': 0.0,
+                                        'sentiment_score': 0.0,
+                                        'w_pat': float(w_pat),
+                                        'w_sent': float(w_sent),
+                                        'contrib_conf': 0.0,
+                                        'source': 'fallback'
+                                    }
+                                }
+                            
+                            if entry:
+                                entry['best'] = 'enhanced' if 'enhanced' in entry else 'basic'
+                                ml_unified[str(hk)] = entry
+                        
+                        if len(ml_unified) > 0:
+                            logger.debug(f"✅ Filled {len(missing_horizons)} missing horizons for {symbol}, total now: {len(ml_unified)}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to fill missing horizons for {symbol}: {e}")
+                    ml_unified = ml_unified or {}
+                
+                # Check if we have anything to log
+                if not ml_unified or len(ml_unified) == 0:
+                    logger.warning(f"⚠️ {symbol}: ml_unified is EMPTY - no predictions will be logged!")
+                    logger.debug("  This means no ML models produced predictions for this symbol")
+                    raise ValueError("ml_unified empty - skipping prediction logging")
+
+                # Iterate horizons present in ml_unified
+                for hkey, entry in (ml_unified or {}).items():
+                    try:
+                        if not isinstance(entry, dict):
+                            continue
+                        best = entry.get('best')
+                        src_entry = entry.get(best) if best in ('basic', 'enhanced') else None
+                        pred_px = None
+                        conf = None
+                        delta = None
+                        pscore = None
+                        sscore = None
+                        if isinstance(src_entry, dict):
+                            pred_px = src_entry.get('price')
+                            conf = src_entry.get('confidence')
+                            delta = src_entry.get('delta_pct')
+                            try:
+                                ev = src_entry.get('evidence') or {}
+                                pscore = float(ev.get('pattern_score')) if isinstance(ev.get('pattern_score'), (int, float)) else None
+                                sscore = float(ev.get('sentiment_score')) if isinstance(ev.get('sentiment_score'), (int, float)) else None
+                            except Exception:
+                                pscore = sscore = None
+                        # param version from store; safe defaults for thresholds
+                        try:
+                            _ps = self._load_param_store() or {}
+                            param_version = str(_ps.get('generated_at') or '') or None
+                        except Exception:
+                            param_version = None
+                        log = PredictionsLog(
+                            stock_id=stock_id,
+                            symbol=symbol.upper(),
+                            horizon=str(hkey),
+                            ts_pred=datetime.utcnow(),
+                            price_now=float(data['close'].iloc[-1]),
+                            pred_price=float(pred_px) if isinstance(pred_px, (int, float)) else None,
+                            delta_pred=float(delta) if isinstance(delta, (int, float)) else None,
+                            model=(best or None),
+                            unified_best=(best or None),
+                            confidence=float(conf) if isinstance(conf, (int, float)) else None,
+                            pat_score=pscore,
+                            sent_score=sscore,
+                            visual_bullish=any(
+                                (
+                                    p.get('source') == 'VISUAL_YOLO'
+                                    and str(p.get('signal', '')).upper() == 'BULLISH'
+                                )
+                                for p in (patterns or [])
+                            ),
+                            visual_bearish=any(
+                                (
+                                    p.get('source') == 'VISUAL_YOLO'
+                                    and str(p.get('signal', '')).upper() == 'BEARISH'
+                                )
+                                for p in (patterns or [])
+                            ),
+                            param_version=param_version,
+                        )
+                        # Note: Already in app.app_context(), no need for nested context
+                        try:
+                            db.session.add(log)
+                        except Exception as e:
+                            try:
+                                logger.error(f"❌ PredictionsLog add failed for {symbol} {hkey}: {e}")
+                            except Exception:
+                                pass
+                        # Commit outside the loop to batch multiple inserts
+                    except Exception as e:
+                        logger.debug(f"⚠️ Skipped {symbol} {hkey}: {e}")
+                        continue
+                
+                # Commit all predictions for this symbol (already in app.app_context())
+                try:
+                    db.session.commit()
+                    logger.info(f"✅ {symbol}: Wrote {len(ml_unified)} predictions to PredictionsLog")
+                except Exception as e:
+                    try:
+                        logger.error(f"❌ PredictionsLog commit failed for {symbol}: {e}")
+                    except Exception:
+                        pass
+                    db.session.rollback()
+            except Exception as e:
+                # Log the failure but don't break analysis
+                logger.warning(f"⚠️ Prediction logging failed for {symbol}: {e}")
+                if "ml_unified empty" in str(e):
+                    logger.debug("  → This is expected if no ML models are available")
+                else:
+                    logger.error(f"  → Unexpected error: {e}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
             # Optional: persist enhanced predictions into ml_bulk_predictions.json per symbol (during cycle)
             try:
                 truthy = ('1', 'true', 'yes', 'on')
@@ -1809,6 +2087,24 @@ class HybridPatternDetector:
                 'strength': 50,
                 'reasoning': 'Signal hesaplama hatası'
             }
+
+    def _load_param_store(self):
+        """Load param_store.json once (best-effort)."""
+        try:
+            if hasattr(self, '_param_store') and isinstance(self._param_store, dict):
+                return self._param_store
+            import json as _json
+            import os as _os
+            path = _os.path.join(_os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs'), 'param_store.json')
+            if not _os.path.exists(path):
+                self._param_store = {}
+                return self._param_store
+            with open(path, 'r') as rf:
+                self._param_store = _json.load(rf) or {}
+            return self._param_store
+        except Exception:
+            self._param_store = {}
+            return self._param_store
     
     def analyze_multiple_stocks(self, symbols):
         """Birden fazla hisse analiz et"""

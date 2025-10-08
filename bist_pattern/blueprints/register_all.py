@@ -15,9 +15,14 @@ def register_all_blueprints(app: Any, csrf: Any) -> None:
             from importlib import import_module
             mod = import_module(module_path)
             getattr(mod, attr)(app)
-        except Exception:  # pragma: no cover
+        except Exception as e:  # pragma: no cover
             try:
-                app.logger.warning(f"{module_path} blueprint register failed")
+                import traceback
+                app.logger.warning(f"{module_path} blueprint register failed: {e}")
+                try:
+                    app.logger.debug(traceback.format_exc())
+                except Exception:
+                    pass
             except Exception:
                 pass
 

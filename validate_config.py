@@ -6,10 +6,11 @@ Validates all environment variables and configuration consistency
 
 import os
 import sys
-import json
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 
 # Color codes for output
+
+
 class Colors:
     RED = '\033[91m'
     GREEN = '\033[92m'
@@ -21,22 +22,28 @@ class Colors:
     BOLD = '\033[1m'
     END = '\033[0m'
 
+
 def print_header(title: str):
     print(f"\n{Colors.BOLD}{Colors.CYAN}{'='*60}{Colors.END}")
     print(f"{Colors.BOLD}{Colors.CYAN}{title:^60}{Colors.END}")
     print(f"{Colors.BOLD}{Colors.CYAN}{'='*60}{Colors.END}")
 
+
 def print_success(msg: str):
     print(f"{Colors.GREEN}✅ {msg}{Colors.END}")
+
 
 def print_warning(msg: str):
     print(f"{Colors.YELLOW}⚠️  {msg}{Colors.END}")
 
+
 def print_error(msg: str):
     print(f"{Colors.RED}❌ {msg}{Colors.END}")
 
+
 def print_info(msg: str):
     print(f"{Colors.BLUE}ℹ️  {msg}{Colors.END}")
+
 
 def validate_required_vars() -> Tuple[List[str], List[str]]:
     """Validate required environment variables"""
@@ -68,6 +75,7 @@ def validate_required_vars() -> Tuple[List[str], List[str]]:
             missing.append(var)
     
     return missing, present
+
 
 def validate_numeric_vars() -> List[str]:
     """Validate numeric environment variables"""
@@ -106,6 +114,7 @@ def validate_numeric_vars() -> List[str]:
     
     return issues
 
+
 def validate_paths() -> List[str]:
     """Validate file and directory paths"""
     print_header("PATH VALIDATION")
@@ -140,6 +149,7 @@ def validate_paths() -> List[str]:
             print_info(f"{var}: Not set")
     
     return issues
+
 
 def validate_security() -> List[str]:
     """Validate security configuration"""
@@ -187,6 +197,7 @@ def validate_security() -> List[str]:
     
     return issues
 
+
 def validate_threading() -> List[str]:
     """Validate threading configuration"""
     print_header("THREADING CONFIGURATION VALIDATION")
@@ -222,6 +233,7 @@ def validate_threading() -> List[str]:
     
     return issues
 
+
 def generate_secure_tokens():
     """Generate secure tokens for configuration"""
     print_header("SECURE TOKEN GENERATION")
@@ -239,6 +251,7 @@ def generate_secure_tokens():
         print(f'{Colors.BOLD}Environment="{var}={token}"{Colors.END}')
     
     return tokens
+
 
 def main():
     """Main validation function"""
@@ -287,6 +300,7 @@ def main():
             generate_secure_tokens()
         
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

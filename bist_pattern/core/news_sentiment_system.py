@@ -186,6 +186,9 @@ class SentimentAnalyzer:
     def _analyze_with_finbert(self, text: str) -> Dict[str, Any]:
         """Analyze using FinBERT model"""
         try:
+            if not self.tokenizer or not self.model:
+                return self._analyze_with_keywords(text)
+            
             inputs = self.tokenizer(
                 text,
                 return_tensors="pt",

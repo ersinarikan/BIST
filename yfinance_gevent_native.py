@@ -52,7 +52,7 @@ class GeventNativeYFinanceWrapper:
                 browsers = ['chrome110', 'chrome99', 'edge99', 'safari15_5']
                 selected_browser = random.choice(browsers)
                 
-                session = requests.Session(impersonate=selected_browser)
+                session = requests.Session(impersonate=selected_browser)  # type: ignore
                 
                 # Enhanced headers for better stealth
                 enhanced_headers = {

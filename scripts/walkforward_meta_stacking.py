@@ -56,8 +56,8 @@ def micro_features(df: pd.DataFrame) -> Dict[str, float]:
         low = df['low']
         # RSI(3)
         delta = close.diff()
-        up = delta.clip(lower=0).rolling(3).mean()
-        down = (-delta.clip(upper=0)).rolling(3).mean()
+        up = delta.clip(lower=0).rolling(3).mean()  # type: ignore
+        down = (-delta.clip(upper=0)).rolling(3).mean()  # type: ignore
         rs = up / (down + 1e-9)
         rsi3 = 100.0 - (100.0 / (1.0 + rs))
         out['rsi3'] = float(rsi3.iloc[-1]) if not np.isnan(rsi3.iloc[-1]) else 50.0
@@ -82,11 +82,11 @@ def micro_features(df: pd.DataFrame) -> Dict[str, float]:
             cl = close
             # Use a small subset for speed/robustness
             pat_series = []
-            pat_series.append(talib.CDLENGULFING(op, hi, lo, cl))
-            pat_series.append(talib.CDLHAMMER(op, hi, lo, cl))
-            pat_series.append(talib.CDLSHOOTINGSTAR(op, hi, lo, cl))
-            pat_series.append(talib.CDLHARAMI(op, hi, lo, cl))
-            pat_series.append(talib.CDLDOJI(op, hi, lo, cl))
+            pat_series.append(talib.CDLENGULFING(op.values.astype(float), hi.values.astype(float), lo.values.astype(float), cl.values.astype(float)))  # type: ignore
+            pat_series.append(talib.CDLHAMMER(op.values.astype(float), hi.values.astype(float), lo.values.astype(float), cl.values.astype(float)))  # type: ignore
+            pat_series.append(talib.CDLSHOOTINGSTAR(op.values.astype(float), hi.values.astype(float), lo.values.astype(float), cl.values.astype(float)))  # type: ignore
+            pat_series.append(talib.CDLHARAMI(op.values.astype(float), hi.values.astype(float), lo.values.astype(float), cl.values.astype(float)))  # type: ignore
+            pat_series.append(talib.CDLDOJI(op.values.astype(float), hi.values.astype(float), lo.values.astype(float), cl.values.astype(float)))  # type: ignore
             pats = sum(pat_series)
             last3 = pats.tail(3)
             bull3 = int((last3 > 0).sum())
@@ -95,7 +95,7 @@ def micro_features(df: pd.DataFrame) -> Dict[str, float]:
             out['pat_bear3'] = float(bear3)
             out['pat_net3'] = float(bull3 - bear3)
             # Strength today (normalized)
-            today_raw = float(pats.iloc[-1]) if len(pats) else 0.0
+            today_raw = float(pats[-1]) if hasattr(pats, '__len__') and len(pats) > 0 else 0.0  # type: ignore
             out['pat_today'] = max(-1.0, min(1.0, today_raw / 100.0))
         except Exception:
             out.setdefault('pat_bull3', 0.0)
@@ -328,5 +328,3 @@ def main():
 
 if __name__ == '__main__':
     raise SystemExit(main())
-
-

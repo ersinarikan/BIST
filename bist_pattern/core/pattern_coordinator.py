@@ -9,10 +9,12 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 from enum import Enum
 import threading
+import os
 try:
-    import gevent.lock
+    import gevent.lock as _gevent_lock  # type: ignore
     GEVENT_AVAILABLE = True
 except ImportError:
+    _gevent_lock = None  # type: ignore[assignment]
     GEVENT_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
@@ -55,7 +57,10 @@ class PatternDetectionCoordinator:
         self.performance_stats = {}
         # Use Gevent-compatible lock if available, fallback to threading
         if GEVENT_AVAILABLE:
-            self.lock = gevent.lock.RLock()
+            try:
+                self.lock = _gevent_lock.RLock() if _gevent_lock is not None else threading.RLock()
+            except Exception:
+                self.lock = threading.RLock()
         else:
             self.lock = threading.RLock()
         # Note: Keep lock operations minimal to avoid blocking
@@ -157,8 +162,8 @@ class PatternDetectionCoordinator:
         else:
             return PatternDetectionMode.FAST
     
-    def _update_stock_importance(self, symbol: str, volume: float = None, 
-                                price_change: float = None, recent_patterns: int = None):
+    def _update_stock_importance(self, symbol: str, volume: Optional[float] = None, 
+                                price_change: Optional[float] = None, recent_patterns: Optional[int] = None):
         """Update stock importance score for smarter detection"""
         base_score = 0.5
         

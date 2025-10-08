@@ -12,7 +12,8 @@ from typing import Dict, Optional, List, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Global training lock to prevent conflicts between automation and crontab
+# NOTE: Global training lock replaced with file-based lock for cross-process coordination
+# Legacy threading lock kept for backward compatibility within single process
 _global_training_lock = threading.RLock()
 _global_training_status = {'active': False, 'started_by': None, 'started_at': None}
 
@@ -32,6 +33,8 @@ class MLCoordinator:
         # All configuration from environment variables
         log_path = os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
         self.model_status_file = os.path.join(log_path, 'ml_model_status.json')
+        self.global_lock_file = os.path.join(log_path, 'global_ml_training.lock')
+        self._lock_context = None  # For file-based lock context manager
         
         try:
             self.max_model_age_days = int(os.getenv('ML_MAX_MODEL_AGE_DAYS', '10'))
@@ -72,6 +75,8 @@ class MLCoordinator:
         """
         Global eğitim kilidi al - automation vs crontab çakışmasını önler
         
+        CROSS-PROCESS FILE-BASED LOCK for true multi-process coordination
+        
         Args:
             requester: Kilit isteyen sistem adı (automation, crontab, manual)
             timeout: Maksimum bekleme süresi (saniye)
@@ -79,43 +84,90 @@ class MLCoordinator:
         Returns:
             bool: Kilit başarıyla alındı mı
         """
-        global _global_training_lock, _global_training_status
+        # Declare globals at the very beginning
+        global _global_training_lock
+        global _global_training_status
         
         try:
-            acquired = _global_training_lock.acquire(timeout=timeout)
-            if acquired:
-                _global_training_status.update({
-                    'active': True,
-                    'started_by': requester,
-                    'started_at': time.time()
-                })
-                logger.info(f"🔒 Global ML training lock acquired by {requester}")
-                return True
-            else:
-                current_owner = _global_training_status.get('started_by', 'unknown')
-                logger.warning(f"⏰ Global ML training lock timeout - currently held by {current_owner}")
-                return False
-        except Exception as e:
-            logger.error(f"❌ Global ML training lock error: {e}")
+            from bist_pattern.utils.param_store_lock import file_lock
+            
+            # Acquire file-based lock
+            self._lock_context = file_lock(self.global_lock_file, timeout_seconds=timeout)
+            self._lock_context.__enter__()
+            
+            # Write lock metadata for debugging
+            try:
+                with open(self.global_lock_file, 'a') as f:
+                    f.write(f"\n{requester}|{os.getpid()}|{time.time()}\n")
+            except Exception:
+                pass
+            
+            # Also update in-memory status for single-process queries
+            _global_training_status.update({
+                'active': True,
+                'started_by': requester,
+                'started_at': time.time()
+            })
+            
+            logger.info(f"🔒 Global ML training lock acquired by {requester} (pid={os.getpid()})")
+            return True
+            
+        except TimeoutError:
+            logger.warning(f"⏰ Global ML training lock timeout after {timeout}s")
             return False
+        except Exception as e:
+            # Fallback to threading lock if file_lock unavailable
+            logger.warning(f"⚠️ File-based lock failed, using threading lock: {e}")
+            try:
+                acquired = _global_training_lock.acquire(timeout=timeout)
+                if acquired:
+                    _global_training_status.update({
+                        'active': True,
+                        'started_by': requester,
+                        'started_at': time.time()
+                    })
+                    logger.info(f"🔒 Global ML training lock acquired by {requester} (fallback)")
+                    return True
+                return False
+            except Exception as e2:
+                logger.error(f"❌ Global ML training lock error: {e2}")
+                return False
     
     def release_global_training_lock(self):
         """Global eğitim kilidini serbest bırak"""
-        global _global_training_lock, _global_training_status
+        # Declare globals at the very beginning
+        global _global_training_lock
+        global _global_training_status
         
         try:
+            # Release file-based lock if active
+            if self._lock_context is not None:
+                try:
+                    self._lock_context.__exit__(None, None, None)
+                    self._lock_context = None
+                    logger.info("🔓 Global ML training lock released (file-based)")
+                except Exception as e:
+                    logger.warning(f"⚠️ File-based lock release error: {e}")
+            
+            # Also update in-memory status
             _global_training_status.update({
                 'active': False,
                 'started_by': None,
                 'started_at': None
             })
-            _global_training_lock.release()
-            logger.info("🔓 Global ML training lock released")
+            
+            # Release threading lock if it was acquired
+            try:
+                _global_training_lock.release()
+            except Exception:
+                pass  # May not have been acquired
+                
         except Exception as e:
             logger.warning(f"⚠️ Global ML training lock release error: {e}")
     
     def is_global_training_active(self) -> Dict[str, Any]:
         """Global eğitim durumunu kontrol et"""
+        # Declare global at the very beginning
         global _global_training_status
         
         status = dict(_global_training_status)
@@ -353,27 +405,43 @@ class MLCoordinator:
         
         try:
             logger.info(f"🧠 Enhanced ML eğitimi başlatılıyor: {symbol}")
-            
             # Eğitim denemesi kaydı
             self._update_model_status(symbol, 'last_training_attempt', datetime.now().isoformat())
-            
-            # Eğitim yap
-            training_result = enhanced_ml.train_enhanced_models(symbol, data)
-            
-            if training_result:
-                # Modelleri kaydet
-                enhanced_ml.save_enhanced_models(symbol)
-                
-                # Başarılı eğitim kaydı
-                self._update_model_status(symbol, 'enhanced_trained_at', datetime.now().isoformat())
-                self._update_model_status(symbol, 'data_length_at_training', data_length)
-                
-                logger.info(f"✅ Enhanced ML eğitimi tamamlandı: {symbol}")
-                return True
-            else:
+
+            # File-based lock to avoid cross-process conflicts
+            try:
+                from bist_pattern.utils.param_store_lock import file_lock  # reuse helper
+            except Exception:
+                file_lock = None  # type: ignore
+
+            models_root = getattr(enhanced_ml, 'model_directory', '/opt/bist-pattern/.cache/enhanced_ml_models')
+            lock_target = os.path.join(str(models_root), f"{symbol}_train.locktarget")
+
+            def _do_train() -> bool:
+                # Eğitim yap
+                training_result = enhanced_ml.train_enhanced_models(symbol, data)
+                if training_result:
+                    try:
+                        enhanced_ml.save_enhanced_models(symbol)
+                    except Exception:
+                        pass
+                    # Başarılı eğitim kaydı
+                    self._update_model_status(symbol, 'enhanced_trained_at', datetime.now().isoformat())
+                    self._update_model_status(symbol, 'data_length_at_training', data_length)
+                    logger.info(f"✅ Enhanced ML eğitimi tamamlandı: {symbol}")
+                    return True
                 logger.warning(f"⚠️ Enhanced ML eğitimi başarısız: {symbol}")
                 return False
-                
+
+            if file_lock is not None:
+                try:
+                    with file_lock(lock_target, timeout_seconds=300):
+                        return _do_train()
+                except TimeoutError:
+                    logger.warning(f"⏰ File lock timeout for training: {symbol}")
+                    return False
+            # Fallback without lock
+            return _do_train()
         except Exception as e:
             logger.error(f"Enhanced ML eğitimi hatası {symbol}: {e}")
             return False

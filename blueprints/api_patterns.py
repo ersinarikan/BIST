@@ -4,6 +4,7 @@ Pattern detection, analysis, and summary endpoints
 """
 
 from flask import Blueprint, jsonify
+import os
 import logging
 from datetime import datetime
 
@@ -50,12 +51,84 @@ def pattern_analysis(symbol):
                             'session_id': session.id,
                             'trade': trade.to_dict(),
                             'timestamp': datetime.now().isoformat()
-                        }, room='admin')
+                        }, to='admin')
                     
         except Exception as sim_error:
             logger.warning(f"Simulation processing failed: {sim_error}")
             # Simulation hatası ana analizi etkilemesin
         
+        # Optional: persist predictions via API when enabled
+        try:
+            truthy = ('1', 'true', 'yes', 'on')
+            if str(os.getenv('API_WRITE_PREDICTIONS', '0')).lower() in truthy and isinstance(result, dict):
+                from datetime import datetime as _dt
+                from models import db, PredictionsLog, Stock  # type: ignore
+                sym_up = symbol.upper()
+                stock_id = None
+                try:
+                    st = Stock.query.filter_by(symbol=sym_up).first()
+                    stock_id = getattr(st, 'id', None)
+                except Exception:
+                    stock_id = None
+                enh_obj_any = result.get('enhanced_predictions')
+                basic_obj_any = result.get('ml_predictions')
+                enh = enh_obj_any if isinstance(enh_obj_any, dict) else {}
+                basic = basic_obj_any if isinstance(basic_obj_any, dict) else {}
+                try:
+                    cp_any = result.get('current_price')
+                    cur_price = float(cp_any) if isinstance(cp_any, (int, float)) else None
+                except Exception:
+                    cur_price = None
+                keys = set()
+                keys.update([k for k in list(enh.keys()) if isinstance(k, str)])
+                keys.update([k for k in list(basic.keys()) if isinstance(k, str)])
+                to_add = []
+                for hk in keys:
+                    try:
+                        enh_obj = enh.get(hk) if isinstance(enh, dict) else None
+                        bas_obj = basic.get(hk) if isinstance(basic, dict) else None
+                        pred_px = None
+                        conf = None
+                        if isinstance(enh_obj, dict):
+                            v = enh_obj.get('ensemble_prediction') if 'ensemble_prediction' in enh_obj else enh_obj.get('price')
+                            if isinstance(v, (int, float)):
+                                pred_px = float(v)
+                            if isinstance(enh_obj.get('confidence'), (int, float)):
+                                conf = float(enh_obj['confidence'])
+                        if pred_px is None and isinstance(bas_obj, dict):
+                            v = bas_obj.get('price')
+                            if isinstance(v, (int, float)):
+                                pred_px = float(v)
+                        if cur_price is None:
+                            continue
+                        delta = (pred_px - cur_price) / cur_price if (pred_px is not None and cur_price) else None
+                        if pred_px is None and delta is None:
+                            continue
+                        log = PredictionsLog(
+                            stock_id=stock_id,
+                            symbol=sym_up,
+                            horizon=str(hk),
+                            ts_pred=_dt.utcnow(),
+                            price_now=cur_price,
+                            pred_price=pred_px,
+                            delta_pred=delta,
+                            model='enhanced' if (isinstance(enh_obj, dict) and pred_px is not None) else 'basic',
+                            unified_best='enhanced' if (isinstance(enh_obj, dict) and pred_px is not None) else 'basic',
+                            confidence=conf,
+                        )
+                        to_add.append(log)
+                    except Exception:
+                        continue
+                if to_add:
+                    try:
+                        for it in to_add:
+                            db.session.add(it)
+                        db.session.commit()
+                    except Exception:
+                        db.session.rollback()
+        except Exception as _persist_err:
+            logger.warning(f"API prediction persist skipped: {_persist_err}")
+
         return jsonify(result)
         
     except Exception as e:
