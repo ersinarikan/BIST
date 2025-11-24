@@ -264,5 +264,132 @@
     "ENABLE_XGBOOST": "0",
     "ENABLE_LIGHTGBM": "0",
     "ENABLE_CATBOOST": "1"
+  },
+  "best_trial_metrics": {
+    "ATSYH_1d": {
+      "split_metrics": [
+        {
+          "split_index": 1,
+          "train_days": 448,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": 0.019092698369577537,
+              "rmse": 0.04409033857687186,
+              "mape": 1.6183158932726482,
+              "confidence": 0.6405010470999539
+            },
+            "catboost": {
+              "raw_r2": 0.0384370731798892,
+              "rmse": 0.04372514474474884,
+              "mape": 1.6486865074961279,
+              "confidence": 0.6561343514016534
+            }
+          },
+          "dirhit": 50.0,
+          "rmse": 0.04143301910446258,
+          "mape": 2090834.1290362657,
+          "nrmse": 1.0033419317787793,
+          "mask_count": 2,
+          "mask_pct": 6.896551724137931
+        },
+        {
+          "split_index": 2,
+          "train_days": 478,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": 0.025806653735864698,
+              "rmse": 0.04409750278348007,
+              "mape": 1.6072180595373977,
+              "confidence": 0.6459388622726433
+            },
+            "catboost": {
+              "raw_r2": 0.051774487330739194,
+              "rmse": 0.043469023966810266,
+              "mape": 1.676179759824657,
+              "confidence": 0.6668334095294851
+            }
+          },
+          "dirhit": 100.0,
+          "rmse": 0.03228504127845194,
+          "mape": 2101232.805169927,
+          "nrmse": 0.9732746216031414,
+          "mask_count": 3,
+          "mask_pct": 10.344827586206897
+        },
+        {
+          "split_index": 3,
+          "train_days": 508,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": -0.014534274004917655,
+              "rmse": 0.044038674786001965,
+              "mape": 1.541762059211242,
+              "confidence": 0.6131960967408414
+            },
+            "catboost": {
+              "raw_r2": 0.03035003119209534,
+              "rmse": 0.04295313050111713,
+              "mape": 1.6334686162745966,
+              "confidence": 0.6496121874480094
+            }
+          },
+          "dirhit": 71.42857142857143,
+          "rmse": 0.05632321569205243,
+          "mape": 1633028.0821280475,
+          "nrmse": 0.9819470516703945,
+          "mask_count": 7,
+          "mask_pct": 24.137931034482758
+        },
+        {
+          "split_index": 4,
+          "train_days": 538,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": -0.008999868219858173,
+              "rmse": 0.04476438565969217,
+              "mape": 1.5738620577386946,
+              "confidence": 0.6176888407517238
+            },
+            "catboost": {
+              "raw_r2": 0.024690317210665984,
+              "rmse": 0.044040500103852194,
+              "mape": 1.6454837414195314,
+              "confidence": 0.6450354436900844
+            }
+          },
+          "dirhit": 100.0,
+          "rmse": 0.0493353764172123,
+          "mape": 4764914.768237067,
+          "nrmse": 1.0016995994872,
+          "mask_count": 6,
+          "mask_pct": 20.689655172413794
+        }
+      ],
+      "avg_dirhit": 80.35714285714286,
+      "avg_nrmse": 0.9900658011348789,
+      "split_count": 4,
+      "avg_model_metrics": {
+        "xgboost": {
+          "raw_r2": 0.005341302470166601,
+          "rmse": 0.04424772545151152,
+          "mape": 1.5852895174399957,
+          "confidence": 0.6293312117162906
+        },
+        "catboost": {
+          "raw_r2": 0.03631297722834743,
+          "rmse": 0.043546949829132105,
+          "mape": 1.6509546562537283,
+          "confidence": 0.6544038480173081
+        }
+      }
+    }
   }
 }

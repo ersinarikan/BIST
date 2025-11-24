@@ -237,5 +237,80 @@
     "ENABLE_XGBOOST": "0",
     "ENABLE_LIGHTGBM": "0",
     "ENABLE_CATBOOST": "1"
+  },
+  "best_trial_metrics": {
+    "A1YEN_1d": {
+      "split_metrics": [
+        {
+          "split_index": 1,
+          "train_days": 98,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": -0.7181490431787866,
+              "rmse": 0.03413791935090623,
+              "mape": 1.3721208161760166,
+              "confidence": 0.3174444717373763
+            },
+            "catboost": {
+              "raw_r2": -0.0486192920207964,
+              "rmse": 0.026928507228641232,
+              "mape": 1.7535671480672752,
+              "confidence": 0.5856902220202684
+            }
+          },
+          "dirhit": 0.0,
+          "rmse": 0.02237365996850852,
+          "mape": 112.68524820497392,
+          "nrmse": 1.0364006159386943,
+          "mask_count": 2,
+          "mask_pct": 6.896551724137931
+        },
+        {
+          "split_index": 2,
+          "train_days": 128,
+          "test_days": 19,
+          "valid_predictions": 18,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": -1.5166844068452725,
+              "rmse": 0.03901642495465313,
+              "mape": 1.3818667859274447,
+              "confidence": 0.30033056288714566
+            },
+            "catboost": {
+              "raw_r2": -0.01092402284471409,
+              "rmse": 0.02526634855649858,
+              "mape": 1.6847823532462747,
+              "confidence": 0.61612643741265
+            }
+          },
+          "dirhit": 100.0,
+          "rmse": 0.02772274783936117,
+          "mape": 1805071.841180787,
+          "nrmse": 0.9733567871123822,
+          "mask_count": 2,
+          "mask_pct": 11.11111111111111
+        }
+      ],
+      "avg_dirhit": 50.0,
+      "avg_nrmse": 1.0048787015255383,
+      "split_count": 2,
+      "avg_model_metrics": {
+        "xgboost": {
+          "raw_r2": -1.1174167250120295,
+          "rmse": 0.03657717215277968,
+          "mape": 1.3769938010517306,
+          "confidence": 0.30888751731226094
+        },
+        "catboost": {
+          "raw_r2": -0.029771657432755245,
+          "rmse": 0.026097427892569906,
+          "mape": 1.719174750656775,
+          "confidence": 0.6009083297164592
+        }
+      }
+    }
   }
 }

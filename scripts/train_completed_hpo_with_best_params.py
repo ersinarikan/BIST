@@ -130,8 +130,8 @@ def set_hpo_params_as_env(params: dict, horizon: int):
                     # Skip setting invalid enum; let model defaults apply
                     continue
             else:
-                os.environ[env_key] = str(val)
-                cat_params.append(f"{key}={val:.4f}" if isinstance(val, float) else f"{key}={val}")
+            os.environ[env_key] = str(val)
+            cat_params.append(f"{key}={val:.4f}" if isinstance(val, float) else f"{key}={val}")
         elif key == 'adaptive_k':
             os.environ[f'ML_ADAPTIVE_K_{horizon}D'] = str(val)
         elif key == 'pattern_weight':

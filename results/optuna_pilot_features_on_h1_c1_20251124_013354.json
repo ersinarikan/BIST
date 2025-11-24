@@ -261,5 +261,132 @@
     "ENABLE_XGBOOST": "0",
     "ENABLE_LIGHTGBM": "1",
     "ENABLE_CATBOOST": "0"
+  },
+  "best_trial_metrics": {
+    "AGROT_1d": {
+      "split_metrics": [
+        {
+          "split_index": 1,
+          "train_days": 377,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": -0.1409274366586688,
+              "rmse": 0.038946827080339995,
+              "mape": 1.6727400136495072,
+              "confidence": 0.5150101899827667
+            },
+            "lightgbm": {
+              "raw_r2": -0.21441801909261607,
+              "rmse": 0.04078885212478496,
+              "mape": 1.6038020275663118,
+              "confidence": 0.46575377588451794
+            }
+          },
+          "dirhit": 100.0,
+          "rmse": 0.02063410161008156,
+          "mape": 3556464.0286501977,
+          "nrmse": 1.0127637822277133,
+          "mask_count": 1,
+          "mask_pct": 3.4482758620689653
+        },
+        {
+          "split_index": 2,
+          "train_days": 407,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": -0.14391243457534061,
+              "rmse": 0.038790783330151506,
+              "mape": 1.5058660673606792,
+              "confidence": 0.5128681117776498
+            },
+            "lightgbm": {
+              "raw_r2": -0.18249746191744687,
+              "rmse": 0.03931229796883946,
+              "mape": 1.6026253292984964,
+              "confidence": 0.486219232256118
+            }
+          },
+          "dirhit": 0.0,
+          "rmse": 0.02214628952509013,
+          "mape": 399717.9317755823,
+          "nrmse": 1.0005258385322617,
+          "mask_count": 0,
+          "mask_pct": 0.0
+        },
+        {
+          "split_index": 3,
+          "train_days": 437,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": -0.05728749780987149,
+              "rmse": 0.03595919803131085,
+              "mape": 1.602319141346215,
+              "confidence": 0.5787695635177514
+            },
+            "lightgbm": {
+              "raw_r2": -0.14823014759981504,
+              "rmse": 0.03796407686693689,
+              "mape": 1.6065872779945456,
+              "confidence": 0.5097891642039243
+            }
+          },
+          "dirhit": 40.0,
+          "rmse": 0.025420051350531332,
+          "mape": 98.4343294621704,
+          "nrmse": 1.0230581759930044,
+          "mask_count": 5,
+          "mask_pct": 17.24137931034483
+        },
+        {
+          "split_index": 4,
+          "train_days": 467,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": -0.04379382601199411,
+              "rmse": 0.034696903929069725,
+              "mape": 1.6058895502174961,
+              "confidence": 0.5895590121688687
+            },
+            "lightgbm": {
+              "raw_r2": -0.12784043226472894,
+              "rmse": 0.03671650515971808,
+              "mape": 1.6060753336363176,
+              "confidence": 0.5245274942154796
+            }
+          },
+          "dirhit": 100.0,
+          "rmse": 0.0301392449134555,
+          "mape": 603038.1579588586,
+          "nrmse": 0.9794912431222795,
+          "mask_count": 1,
+          "mask_pct": 3.4482758620689653
+        }
+      ],
+      "avg_dirhit": 60.0,
+      "avg_nrmse": 1.0039597599688148,
+      "split_count": 4,
+      "avg_model_metrics": {
+        "xgboost": {
+          "raw_r2": -0.09648029876396876,
+          "rmse": 0.03709842809271802,
+          "mape": 1.5967036931434744,
+          "confidence": 0.5490517193617592
+        },
+        "lightgbm": {
+          "raw_r2": -0.16824651521865172,
+          "rmse": 0.03869543303006985,
+          "mape": 1.604772492123918,
+          "confidence": 0.49657241664000995
+        }
+      }
+    }
   }
 }

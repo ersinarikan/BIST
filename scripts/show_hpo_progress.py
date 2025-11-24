@@ -609,10 +609,10 @@ def main():
                                     print(f"      📍 Güncel Trial #{current_trial} (Running - hesaplanıyor...)")
                         else:
                             # COMPLETE trial - show value
-                            if current_dirhit is not None:
-                                print(f"      📍 Güncel Trial #{current_trial}: DirHit = {current_dirhit:.2f}%")
-                            elif trial_info.get('current_trial_value') is not None:
-                                print(f"      📍 Güncel Trial #{current_trial}: Score = {trial_info['current_trial_value']:.2f}")
+                        if current_dirhit is not None:
+                            print(f"      📍 Güncel Trial #{current_trial}: DirHit = {current_dirhit:.2f}%")
+                        elif trial_info.get('current_trial_value') is not None:
+                            print(f"      📍 Güncel Trial #{current_trial}: Score = {trial_info['current_trial_value']:.2f}")
                     
                     # Show best DirHit
                     if best_trial is not None:

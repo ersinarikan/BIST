@@ -38,7 +38,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import NullPool
 from bist_pattern.core.config_manager import ConfigManager
 from enhanced_ml_system import EnhancedMLSystem
-from scripts.optuna_hpo_with_feature_flags import fetch_prices, generate_walkforward_splits
+from scripts.optuna_hpo_with_feature_flags import fetch_prices, generate_walkforward_splits, dirhit, compute_returns
 
 
 def calculate_best_trial_metrics(
@@ -173,8 +173,10 @@ def calculate_best_trial_metrics(
                 print(f"      ⚠️  No valid splits for {symbol}, skipping")
                 continue
             
-            # Collect metrics from all splits
+            # Collect metrics from all splits (same structure as HPO objective)
             split_metrics_list = []
+            split_dirhits = []
+            split_nrmses = []
             
             for split_idx, (train_end_idx, test_end_idx) in enumerate(wfv_splits, 1):
                 train_df = df.iloc[:train_end_idx].copy()
@@ -222,27 +224,98 @@ def calculate_best_trial_metrics(
                         'confidence': float(model_info.get('score', 0.5)),
                     }
                 
-                if split_model_metrics:
-                    split_metrics_list.append(split_model_metrics)
+                # Make predictions on test_df and calculate DirHit/nRMSE (same as HPO)
+                dirhit_val = None
+                rmse_val = None
+                mape_val = None
+                nrmse_val = None
+                mask_count = 0
+                mask_pct = 0.0
+                valid_count = 0
                 
-                # Calculate ensemble weights from first prediction (same as HPO)
-                # We need to do one prediction to get ensemble weights
-                if split_idx == 1 and len(test_df) > horizon:
+                if len(test_df) > horizon:
                     try:
-                        cur = pd.concat([train_df, test_df.iloc[:1]], axis=0).copy()
-                        pred = ml.predict_enhanced(symbol, cur)
-                        if isinstance(pred, dict):
-                            key = f"{horizon}d"
-                            obj = pred.get(key)
-                            if isinstance(obj, dict):
-                                # Extract ensemble weights if available
-                                models_info = obj.get('models', {})
-                                if models_info:
-                                    # Note: ensemble_weights might be in the prediction result
-                                    # We'll calculate average from split metrics instead
-                                    pass
+                        # Calculate true returns
+                        y_true = compute_returns(test_df, horizon)
+                        
+                        # Make predictions for each time step in test_df
+                        # ✅ FIX: Initialize preds with same length as test_df (like HPO objective)
+                        preds = np.full(len(test_df), np.nan, dtype=float)
+                        
+                        for t in range(len(test_df) - horizon):
+                            try:
+                                # Use data up to current time point
+                                cur = pd.concat([train_df, test_df.iloc[:t+1]], axis=0).copy()
+                                pred = ml.predict_enhanced(symbol, cur)
+                                
+                                if isinstance(pred, dict):
+                                    key = f"{horizon}d"
+                                    obj = pred.get(key)
+                                    if isinstance(obj, dict):
+                                        pred_price = obj.get('ensemble_prediction')
+                                        if isinstance(pred_price, (int, float)) and not np.isnan(pred_price):
+                                            # Convert price prediction to return (same as HPO)
+                                            last_close = float(cur['close'].iloc[-1])
+                                            if last_close > 0:
+                                                pred_return = float(pred_price) / last_close - 1.0
+                                                preds[t] = pred_return
+                                    else:
+                                        preds[t] = float('nan')
+                                else:
+                                    preds[t] = float('nan')
+                            except Exception:
+                                preds[t] = float('nan')
+                        
+                        # Calculate DirHit, RMSE, MAPE, nRMSE (same as HPO)
+                        valid_mask = ~np.isnan(preds) & ~np.isnan(y_true.values)
+                        valid_count = int(valid_mask.sum())
+                        
+                        if valid_count > 0:
+                            y_true_valid = y_true.values[valid_mask]
+                            preds_valid = preds[valid_mask]
+                            
+                            # DirHit
+                            dirhit_val = dirhit(y_true_valid, preds_valid)
+                            
+                            # RMSE and MAPE
+                            rmse_val = float(np.sqrt(np.mean((y_true_valid - preds_valid) ** 2)))
+                            mape_val = float(np.mean(np.abs((y_true_valid - preds_valid) / (y_true_valid + 1e-8))) * 100)
+                            
+                            # Threshold mask statistics
+                            thr = 0.005
+                            mask_count = int(((np.abs(y_true_valid) > thr) & (np.abs(preds_valid) > thr)).sum())
+                            mask_pct = float((mask_count / valid_count) * 100) if valid_count > 0 else 0.0
+                            
+                            # nRMSE (normalized by std of y_true_valid)
+                            try:
+                                std_y = float(np.std(y_true_valid)) if y_true_valid.size > 1 else 0.0
+                                if std_y > 0:
+                                    nrmse_val = float(rmse_val / std_y)
+                                    split_nrmses.append(nrmse_val)
+                            except Exception:
+                                pass
+                            
+                            split_dirhits.append(dirhit_val)
+                            nrmse_str = f"{nrmse_val:.4f}" if nrmse_val is not None else "N/A"
+                            print(f"      Split {split_idx}: DirHit={dirhit_val:.2f}%, RMSE={rmse_val:.6f}, MAPE={mape_val:.2f}%, nRMSE={nrmse_str}")
                     except Exception as e:
-                        print(f"      ⚠️  Prediction error for ensemble weights: {e}")
+                        print(f"      ⚠️  Prediction/evaluation error for {symbol} split {split_idx}: {e}")
+                
+                # Create split entry (same structure as HPO)
+                split_entry = {
+                    'split_index': int(split_idx),
+                    'train_days': int(len(train_df)),
+                    'test_days': int(len(test_df)),
+                    'valid_predictions': int(valid_count),
+                    'model_metrics': split_model_metrics,
+                    'dirhit': float(dirhit_val) if dirhit_val is not None else None,
+                    'rmse': float(rmse_val) if rmse_val is not None and not np.isnan(rmse_val) else None,
+                    'mape': float(mape_val) if mape_val is not None and not np.isnan(mape_val) else None,
+                    'nrmse': float(nrmse_val) if nrmse_val is not None and not np.isnan(nrmse_val) else None,
+                    'mask_count': int(mask_count),
+                    'mask_pct': float(mask_pct),
+                }
+                split_metrics_list.append(split_entry)
             
             if not split_metrics_list:
                 print(f"      ⚠️  No metrics collected for {symbol}")
@@ -252,9 +325,9 @@ def calculate_best_trial_metrics(
             avg_model_metrics = {}
             for model_name in ['xgboost', 'lightgbm', 'catboost']:
                 model_metrics_list = [
-                    split_metrics.get(model_name)
-                    for split_metrics in split_metrics_list
-                    if model_name in split_metrics
+                    split_entry.get('model_metrics', {}).get(model_name)
+                    for split_entry in split_metrics_list
+                    if model_name in split_entry.get('model_metrics', {})
                 ]
                 if not model_metrics_list:
                     continue
@@ -268,12 +341,20 @@ def calculate_best_trial_metrics(
                 }
                 avg_model_metrics[model_name] = avg_metrics
             
+            # Calculate average DirHit and nRMSE
+            avg_dirhit_value = float(np.mean(split_dirhits)) if split_dirhits else None
+            avg_nrmse_value = float(np.mean(split_nrmses)) if split_nrmses else None
+            
             if avg_model_metrics:
                 all_symbol_metrics[f"{symbol}_{horizon}d"] = {
+                    'split_metrics': split_metrics_list,
+                    'avg_dirhit': avg_dirhit_value,
+                    'avg_nrmse': avg_nrmse_value,
+                    'split_count': len(split_metrics_list),
                     'avg_model_metrics': avg_model_metrics,
-                    'n_splits': len(split_metrics_list),
                 }
-                print(f"      ✅ Collected metrics for {symbol} ({len(split_metrics_list)} splits)")
+                dirhit_str = f"{avg_dirhit_value:.2f}%" if avg_dirhit_value is not None else "N/A"
+                print(f"      ✅ Collected metrics for {symbol} ({len(split_metrics_list)} splits, avg DirHit={dirhit_str})")
         
         if not all_symbol_metrics:
             print(f"  ⚠️  No metrics collected for any symbol")
@@ -293,7 +374,7 @@ def calculate_best_trial_metrics(
         return None
 
 
-def migrate_json_file(json_path: Path, engine, dry_run: bool = False) -> bool:
+def migrate_json_file(json_path: Path, engine, dry_run: bool = False, force: bool = False) -> bool:
     """Migrate a single HPO JSON file.
     
     Returns:
@@ -307,7 +388,7 @@ def migrate_json_file(json_path: Path, engine, dry_run: bool = False) -> bool:
             data = json.load(f)
         
         # Check if already migrated
-        if 'best_trial_metrics' in data and data['best_trial_metrics']:
+        if (not force) and 'best_trial_metrics' in data and data['best_trial_metrics']:
             print(f"  ✅ Already migrated (best_trial_metrics exists)")
             return True
         
@@ -322,7 +403,9 @@ def migrate_json_file(json_path: Path, engine, dry_run: bool = False) -> bool:
             print(f"  [DRY-RUN] Would add best_trial_metrics to JSON")
             return True
         
-        # Merge metrics into JSON data
+        # Merge metrics into JSON data (overwrite if force)
+        if force:
+            data['best_trial_metrics'] = {}  # clear before overwrite
         data.update(metrics_data)
         
         # Atomic write (same as HPO script)
@@ -360,6 +443,8 @@ def main():
     parser = argparse.ArgumentParser(description='Migrate HPO JSON files to add best_trial_metrics')
     parser.add_argument('--dry-run', action='store_true', help='Dry run mode (don\'t modify files)')
     parser.add_argument('--json-file', type=str, help='Migrate specific JSON file (instead of all)')
+    parser.add_argument('--symbols-only', action='store_true', help='Only migrate symbols with DirHit mismatches')
+    parser.add_argument('--force', action='store_true', help='Recompute and overwrite existing best_trial_metrics')
     args = parser.parse_args()
     
     print("=" * 80)
@@ -368,6 +453,23 @@ def main():
     if args.dry_run:
         print("⚠️  DRY-RUN MODE: No files will be modified")
     print()
+    
+    # Define symbols with DirHit mismatches (from user's list)
+    # Format: SYMBOL_HORIZONd -> (symbol, horizon)
+    mismatch_symbols = {
+        'A1CAP': 1, 'A1YEN': 1, 'ACSEL': 1, 'ADEL': 1, 'ADGYO': 1, 'AEFES': 1,
+        'AGESA': 1, 'AGHOL': 1, 'AGROT': 1, 'AGYO': 1, 'AHGAZ': 1, 'AHSGY': 1,
+        'AKBNK': 1, 'AKCNS': 1, 'AKENR': 1, 'AKFGY': 1, 'AKFIS': 1, 'AKFYE': 1,
+        'AKGRT': 1, 'AKMGY': 1, 'AKSA': 1, 'AKSUE': 1, 'AKYHO': 1, 'ALARK': 1,
+        'ALBRK': 1, 'ALCAR': 1, 'ALFAS': 1, 'ALGYO': 1, 'ALKLC': 1, 'ALTNY': 1,
+        'ALVES': 1, 'ANELE': 1, 'ANGEN': 1, 'ANHYT': 1, 'ANSGR': 1, 'ARASE': 1,
+        'ARCLK': 1, 'ARDYZ': 1, 'ARENA': 1, 'ARMGD': 1, 'ARSAN': 1, 'ARTMS': 1,
+        'ARZUM': 1, 'ASELS': 1, 'ASGYO': 1, 'ASTOR': 1, 'ASUZU': 1, 'ATAGY': 1,
+        'ATAKP': 1, 'ATATP': 1, 'ATEKS': 1, 'ATLAS': 1, 'ATSYH': 1, 'AVGYO': 1,
+        'AVHOL': 1, 'AVOD': 1, 'AVPGY': 1, 'AYCES': 1, 'AYDEM': 1, 'AYEN': 1,
+        'AYES': 1, 'AZTEK': 1, 'BAGFS': 1, 'BAHKM': 1, 'BAKAB': 1, 'BALAT': 1,
+        'BALSU': 1, 'BANVT': 1,
+    }
     
     # Find JSON files
     results_dir = Path('/opt/bist-pattern/results')
@@ -380,7 +482,46 @@ def main():
         print("⚠️  No HPO JSON files found!")
         return 1
     
-    print(f"📋 Found {len(json_files)} JSON file(s)")
+    # Filter by symbols if --symbols-only is specified
+    # Otherwise, process ALL JSON files that need migration (best_trial_metrics missing)
+    if args.symbols_only:
+        filtered_files = []
+        for json_file in json_files:
+            try:
+                with open(json_file, 'r') as f:
+                    data = json.load(f)
+                symbols = data.get('symbols', [])
+                horizon = data.get('horizon')
+                if symbols and horizon:
+                    symbol = symbols[0]  # Each JSON contains one symbol
+                    if symbol in mismatch_symbols and mismatch_symbols[symbol] == horizon:
+                        filtered_files.append(json_file)
+            except Exception:
+                pass
+        json_files = filtered_files
+        print(f"🔍 Filtered to {len(json_files)} JSON file(s) with DirHit mismatches")
+    elif not args.force:
+        # Filter out already migrated files (best_trial_metrics exists)
+        # This ensures we process ALL old JSONs that need migration
+        unmigrated_files = []
+        for json_file in json_files:
+            try:
+                with open(json_file, 'r') as f:
+                    data = json.load(f)
+                # Skip if already migrated (best_trial_metrics exists and is not empty)
+                if 'best_trial_metrics' in data and data.get('best_trial_metrics'):
+                    continue
+                unmigrated_files.append(json_file)
+            except Exception:
+                # If we can't read it, include it (will be handled later)
+                unmigrated_files.append(json_file)
+        json_files = unmigrated_files
+        print(f"📋 Found {len(json_files)} unmigrated JSON file(s) (will process all)")
+    
+    if not json_files:
+        print("⚠️  No matching JSON files found!")
+        return 1
+    
     print()
     
     # Create database engine (use PgBouncer port 6432)
@@ -400,17 +541,17 @@ def main():
             continue
         
         try:
-            # Check if already migrated
+            # Check if already migrated (skip unless forcing)
             with open(json_file, 'r') as f:
                 data = json.load(f)
-            if 'best_trial_metrics' in data and data['best_trial_metrics']:
+            if (not args.force) and 'best_trial_metrics' in data and data['best_trial_metrics']:
                 print(f"\n⏭️  Skipping {json_file.name} (already migrated)")
                 skip_count += 1
                 continue
         except Exception:
             pass
         
-        success = migrate_json_file(json_file, engine, dry_run=args.dry_run)
+        success = migrate_json_file(json_file, engine, dry_run=args.dry_run, force=args.force)
         if success:
             success_count += 1
         else:

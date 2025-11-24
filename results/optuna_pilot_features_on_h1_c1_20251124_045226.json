@@ -232,5 +232,102 @@
     "ENABLE_XGBOOST": "1",
     "ENABLE_LIGHTGBM": "0",
     "ENABLE_CATBOOST": "0"
+  },
+  "best_trial_metrics": {
+    "ASUZU_1d": {
+      "split_metrics": [
+        {
+          "split_index": 1,
+          "train_days": 448,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": 0.03242900308897945,
+              "rmse": 0.026150731136353255,
+              "mape": 1.479793335446512,
+              "confidence": 0.6512909888550916
+            }
+          },
+          "dirhit": 90.9090909090909,
+          "rmse": 0.02539627326676798,
+          "mape": 1855739.9564494125,
+          "nrmse": 0.9947797759093311,
+          "mask_count": 11,
+          "mask_pct": 37.93103448275862
+        },
+        {
+          "split_index": 2,
+          "train_days": 478,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": -0.003792152001957113,
+              "rmse": 0.02621943637307396,
+              "mape": 1.6895434004896877,
+              "confidence": 0.6219189688030917
+            }
+          },
+          "dirhit": 45.45454545454545,
+          "rmse": 0.016737599008195603,
+          "mape": 4807421.475662885,
+          "nrmse": 1.2118189515142068,
+          "mask_count": 11,
+          "mask_pct": 37.93103448275862
+        },
+        {
+          "split_index": 3,
+          "train_days": 508,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": -0.005740862875309912,
+              "rmse": 0.02621209555883627,
+              "mape": 1.6478829184407338,
+              "confidence": 0.6203358691555023
+            }
+          },
+          "dirhit": 66.66666666666666,
+          "rmse": 0.020766430638784073,
+          "mape": 125.10114648087371,
+          "nrmse": 0.998411094456176,
+          "mask_count": 3,
+          "mask_pct": 10.344827586206897
+        },
+        {
+          "split_index": 4,
+          "train_days": 538,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": 0.024492470260468968,
+              "rmse": 0.02552932528288027,
+              "mape": 1.6826731740823873,
+              "confidence": 0.6448752990924186
+            }
+          },
+          "dirhit": 0.0,
+          "rmse": 0.02929730658486106,
+          "mape": 2280178.7194889598,
+          "nrmse": 1.0096049851385624,
+          "mask_count": 2,
+          "mask_pct": 6.896551724137931
+        }
+      ],
+      "avg_dirhit": 50.75757575757576,
+      "avg_nrmse": 1.053653701754569,
+      "split_count": 4,
+      "avg_model_metrics": {
+        "xgboost": {
+          "raw_r2": 0.011847114618045348,
+          "rmse": 0.02602789708778594,
+          "mape": 1.62497320711483,
+          "confidence": 0.6346052814765261
+        }
+      }
+    }
   }
 }

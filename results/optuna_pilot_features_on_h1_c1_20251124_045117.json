@@ -310,5 +310,132 @@
     "ENABLE_XGBOOST": "0",
     "ENABLE_LIGHTGBM": "0",
     "ENABLE_CATBOOST": "1"
+  },
+  "best_trial_metrics": {
+    "ACSEL_1d": {
+      "split_metrics": [
+        {
+          "split_index": 1,
+          "train_days": 448,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": -0.0007363415534907825,
+              "rmse": 0.031121674540953315,
+              "mape": 1.6951600199779562,
+              "confidence": 0.6244017231635908
+            },
+            "catboost": {
+              "raw_r2": -0.002622215378803583,
+              "rmse": 0.031186489087767433,
+              "mape": 1.7207758365809647,
+              "confidence": 0.622869480524386
+            }
+          },
+          "dirhit": 60.0,
+          "rmse": 0.025261671826863858,
+          "mape": 2701971.6216029096,
+          "nrmse": 1.021823863761436,
+          "mask_count": 5,
+          "mask_pct": 17.24137931034483
+        },
+        {
+          "split_index": 2,
+          "train_days": 478,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": 0.024472595287063432,
+              "rmse": 0.03038106056049146,
+              "mape": 1.7033613464024022,
+              "confidence": 0.644859211021203
+            },
+            "catboost": {
+              "raw_r2": -0.0015632068189623445,
+              "rmse": 0.030773278009237615,
+              "mape": 1.7344786513525787,
+              "confidence": 0.6237299009254904
+            }
+          },
+          "dirhit": 42.857142857142854,
+          "rmse": 0.023099187961111028,
+          "mape": 98.5587021231612,
+          "nrmse": 1.0140602397587206,
+          "mask_count": 7,
+          "mask_pct": 24.137931034482758
+        },
+        {
+          "split_index": 3,
+          "train_days": 508,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": 0.016124958010021933,
+              "rmse": 0.029522777182325786,
+              "mape": 1.6871781750013508,
+              "confidence": 0.6380944359427189
+            },
+            "catboost": {
+              "raw_r2": -0.012547024289948064,
+              "rmse": 0.02992953879500887,
+              "mape": 1.6852434890986967,
+              "confidence": 0.6148088849722899
+            }
+          },
+          "dirhit": 37.5,
+          "rmse": 0.02687780733285707,
+          "mape": 107.92445818216314,
+          "nrmse": 1.0989510508572735,
+          "mask_count": 8,
+          "mask_pct": 27.586206896551722
+        },
+        {
+          "split_index": 4,
+          "train_days": 538,
+          "test_days": 30,
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": 0.0005743074978928527,
+              "rmse": 0.02864361976498915,
+              "mape": 1.7334917843812965,
+              "confidence": 0.6254666245213998
+            },
+            "catboost": {
+              "raw_r2": -0.01017242284461591,
+              "rmse": 0.02884438240693624,
+              "mape": 1.6821305831703592,
+              "confidence": 0.6167366877631246
+            }
+          },
+          "dirhit": 0.0,
+          "rmse": 0.01974404598488883,
+          "mape": 229415.93348736563,
+          "nrmse": 0.9821639781243499,
+          "mask_count": 0,
+          "mask_pct": 0.0
+        }
+      ],
+      "avg_dirhit": 35.089285714285715,
+      "avg_nrmse": 1.029249783125445,
+      "split_count": 4,
+      "avg_model_metrics": {
+        "xgboost": {
+          "raw_r2": 0.01010887981037186,
+          "rmse": 0.02991728301218993,
+          "mape": 1.7047978314407515,
+          "confidence": 0.6332054986622281
+        },
+        "catboost": {
+          "raw_r2": -0.006726217333082476,
+          "rmse": 0.030183422074737537,
+          "mape": 1.7056571400506497,
+          "confidence": 0.6195362385463228
+        }
+      }
+    }
   }
 }

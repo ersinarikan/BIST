@@ -1023,16 +1023,16 @@ def main():
         if os.getenv('FORCE_MODEL_CHOICE'):
             print("⏭️ Skipping warm-start enqueue (FORCE_MODEL_CHOICE is set)", flush=True)
         else:
-            import glob
-            prev_jsons = sorted(
-                glob.glob(f"/opt/bist-pattern/results/optuna_pilot_features_on_h{horizon}_*.json"),
-                key=lambda p: os.path.getmtime(p),
-                reverse=True
-            )
-            enqueued = 0
-            for jf in prev_jsons:
-                if enqueued >= 3:
-                    break
+        import glob
+        prev_jsons = sorted(
+            glob.glob(f"/opt/bist-pattern/results/optuna_pilot_features_on_h{horizon}_*.json"),
+            key=lambda p: os.path.getmtime(p),
+            reverse=True
+        )
+        enqueued = 0
+        for jf in prev_jsons:
+            if enqueued >= 3:
+                break
                 with open(jf, 'r') as rf:
                     data_prev = json.load(rf)
                 prev_syms = data_prev.get('symbols', [])
@@ -1197,7 +1197,7 @@ def main():
         try:
             # Write to temp file
             with open(tmp_file, 'w') as f:
-                json.dump(result, f, indent=2)
+        json.dump(result, f, indent=2)
                 f.flush()
                 try:
                     os.fsync(f.fileno())  # Force write to disk
@@ -1206,8 +1206,8 @@ def main():
             
             # Atomic rename (this is atomic on POSIX systems)
             os.replace(tmp_file, output_file)
-            print(f"✅ Results saved to: {output_file}", flush=True)
-            json_saved = True
+        print(f"✅ Results saved to: {output_file}", flush=True)
+        json_saved = True
         except Exception as tmp_err:
             # Clean up temp file if it exists
             try:
@@ -1234,16 +1234,16 @@ def main():
             try:
                 # Atomic write for recovered file too
                 with open(tmp_file_recovered, 'w') as f:
-                    json.dump(result_recovered, f, indent=2)
+                json.dump(result_recovered, f, indent=2)
                     f.flush()
                     try:
                         os.fsync(f.fileno())
                     except Exception:
                         pass
                 os.replace(tmp_file_recovered, output_file_recovered)
-                print(f"✅ Recovered JSON file saved to: {output_file_recovered}", flush=True)
-                output_file = output_file_recovered
-                json_saved = True
+            print(f"✅ Recovered JSON file saved to: {output_file_recovered}", flush=True)
+            output_file = output_file_recovered
+            json_saved = True
             except Exception as recover_write_err:
                 # Clean up temp file
                 try:
@@ -1261,11 +1261,11 @@ def main():
     
     # Ensure file permissions (only if file was created successfully)
     if output_file and json_saved:
-        try:
-            from bist_pattern.utils.file_utils import ensure_file_permissions
-            ensure_file_permissions(Path(output_file))
-        except ImportError:
-            pass
+    try:
+        from bist_pattern.utils.file_utils import ensure_file_permissions
+        ensure_file_permissions(Path(output_file))
+    except ImportError:
+        pass
         except Exception as perm_err:
             print(f"⚠️ WARNING: Failed to set file permissions for {output_file}: {perm_err}", file=sys.stderr, flush=True)
     
@@ -1291,7 +1291,7 @@ def main():
         print(f"  {key}: {value}")
     print()
     if output_file and json_saved:
-        print(f"✅ Results saved to: {output_file}")
+    print(f"✅ Results saved to: {output_file}")
     else:
         print(f"⚠️ WARNING: Results NOT saved to JSON file (study file exists at {study_path})")
         print("⚠️ WARNING: Best params can be recovered from study file later")
