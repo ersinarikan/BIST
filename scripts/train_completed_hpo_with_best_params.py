@@ -84,6 +84,7 @@ def set_hpo_params_as_env(params: dict, horizon: int):
     lgb_params = []
     cat_params = []
     # Helper: normalize CatBoost bootstrap_type to valid enum
+    
     def _normalize_cat_bootstrap_type(v):
         if v is None:
             return None
@@ -129,8 +130,8 @@ def set_hpo_params_as_env(params: dict, horizon: int):
                     # Skip setting invalid enum; let model defaults apply
                     continue
             else:
-            os.environ[env_key] = str(val)
-            cat_params.append(f"{key}={val:.4f}" if isinstance(val, float) else f"{key}={val}")
+                os.environ[env_key] = str(val)
+                cat_params.append(f"{key}={val:.4f}" if isinstance(val, float) else f"{key}={val}")
         elif key == 'adaptive_k':
             os.environ[f'ML_ADAPTIVE_K_{horizon}D'] = str(val)
         elif key == 'pattern_weight':
@@ -145,6 +146,7 @@ def set_hpo_params_as_env(params: dict, horizon: int):
         feature_params = {}
     # Support flat params as fallback (older JSONs)
     flat = params
+    
     def _get_fp(name: str, default=None):
         if name in feature_params:
             return feature_params.get(name, default)
