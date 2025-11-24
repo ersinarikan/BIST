@@ -839,22 +839,22 @@ class ContinuousHPOPipeline:
             except TimeoutError as te:
                 logger.error(f"⏱️ Failed to acquire HPO slot for {symbol} {horizon}d: {te}")
                 return None
-                
-                # ✅ CPU affinity optimization: bind to specific CPU range (round-robin)
-                # Simplified: Only CPU affinity, no NUMA binding (Python/ML not NUMA-aware)
-                numa_node, cpu_list = _get_numa_node_and_cpus()
-                numa_cmd, _, _ = _build_numa_cmd(cmd, numa_node, cpu_list)
-                # Log CPU affinity if applied
-                if numa_cmd != cmd:
-                    logger.info(f"🔗 CPU affinity: {cpu_list} (node {numa_node})")
-                
-                # Set process priority (higher priority for HPO)
-                try:
-                    # Set nice value to -5 (higher priority)
-                    os.nice(-5)
-                except (OSError, PermissionError):
-                    # May require root, ignore if fails
-                    pass
+            
+            # ✅ CPU affinity optimization: bind to specific CPU range (round-robin)
+            # Simplified: Only CPU affinity, no NUMA binding (Python/ML not NUMA-aware)
+            numa_node, cpu_list = _get_numa_node_and_cpus()
+            numa_cmd, _, _ = _build_numa_cmd(cmd, numa_node, cpu_list)
+            # Log CPU affinity if applied
+            if numa_cmd != cmd:
+                logger.info(f"🔗 CPU affinity: {cpu_list} (node {numa_node})")
+            
+            # Set process priority (higher priority for HPO)
+            try:
+                # Set nice value to -5 (higher priority)
+                os.nice(-5)
+            except (OSError, PermissionError):
+                # May require root, ignore if fails
+                pass
                 
                 result = subprocess.run(
                     numa_cmd,
@@ -2416,7 +2416,11 @@ class ContinuousHPOPipeline:
                 
                 db_url = os.getenv('DATABASE_URL', 'postgresql://bist_user:5ex5chan5GE5*@127.0.0.1:6432/bist_pattern_db').strip()
                 engine = create_engine(db_url, pool_pre_ping=True, pool_recycle=3600)
-                df = fetch_prices(engine, symbol, limit=1200)
+                try:
+                    df = fetch_prices(engine, symbol, limit=1200)
+                finally:
+                    # ✅ FIX: Dispose engine to release database connections back to pool
+                    engine.dispose()
                 
                 if df is None or len(df) < 50:
                     logger.warning(f"❌ {symbol}: Insufficient data ({len(df) if df is not None else 0} days)")
