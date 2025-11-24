@@ -237,6 +237,43 @@ def _get_hpo_max_slots() -> int:
         return 3
 
 
+def _normalize_feature_flag_key(key: str) -> str:
+    """
+    Normalize feature flag key to uppercase environment variable name.
+    Handles both lowercase (enable_*) and uppercase (ENABLE_*) keys.
+    
+    Args:
+        key: Feature flag key (e.g., 'enable_seed_bagging' or 'ENABLE_SEED_BAGGING')
+    
+    Returns:
+        Uppercase environment variable name (e.g., 'ENABLE_SEED_BAGGING')
+    """
+    # If already uppercase, return as-is
+    if key.isupper():
+        return key
+    
+    # Map lowercase enable_* keys to uppercase environment variables
+    mapping = {
+        'enable_external_features': 'ENABLE_EXTERNAL_FEATURES',
+        'enable_fingpt_features': 'ENABLE_FINGPT_FEATURES',
+        'enable_yolo_features': 'ENABLE_YOLO_FEATURES',
+        'enable_directional_loss': 'ML_USE_DIRECTIONAL_LOSS',
+        'enable_seed_bagging': 'ENABLE_SEED_BAGGING',
+        'enable_talib_patterns': 'ENABLE_TALIB_PATTERNS',
+        'enable_smart_ensemble': 'ML_USE_SMART_ENSEMBLE',
+        'enable_stacked_short': 'ML_USE_STACKED_SHORT',
+        'enable_meta_stacking': 'ENABLE_META_STACKING',
+        'enable_regime_detection': 'ML_USE_REGIME_DETECTION',
+        'enable_fingpt': 'ENABLE_FINGPT',
+        'enable_xgboost': 'ENABLE_XGBOOST',
+        'enable_lightgbm': 'ENABLE_LIGHTGBM',
+        'enable_catboost': 'ENABLE_CATBOOST',
+    }
+    
+    # Return mapped value if exists, otherwise uppercase the key
+    return mapping.get(key.lower(), key.upper())
+
+
 def acquire_hpo_slot(timeout_seconds: float = 300.0):
     """
     Acquire one of N slot locks (blocks until a slot becomes available).
@@ -1280,10 +1317,12 @@ class ContinuousHPOPipeline:
                 features_enabled = best_params.get('features_enabled', {})
                 if features_enabled:
                     # ✅ CRITICAL FIX: Save original values before setting new ones (same as online evaluation)
+                    # ✅ CRITICAL FIX: Normalize feature flag keys to uppercase environment variable names
                     for key, value in features_enabled.items():
-                        if key not in original_env_vars:
-                            original_env_vars[key] = os.environ.get(key)  # Save original value (None if not set)
-                        os.environ[key] = str(value)
+                        env_key = _normalize_feature_flag_key(key)  # Map lowercase to uppercase if needed
+                        if env_key not in original_env_vars:
+                            original_env_vars[env_key] = os.environ.get(env_key)  # Save original value (None if not set)
+                        os.environ[env_key] = str(value)
                     logger.info(f"🔧 {symbol} {horizon}d WFV: Feature flags set from best_params: {len(features_enabled)} flags")
                 # Also set smart-ensemble params from feature_params if available (parity with HPO)
                 # ✅ CRITICAL FIX: Save original values before setting new ones (same as online evaluation)
@@ -1639,10 +1678,12 @@ class ContinuousHPOPipeline:
                 features_enabled = best_params.get('features_enabled', {})
                 if features_enabled:
                     # ✅ CRITICAL FIX: Save original values before setting new ones
+                    # ✅ CRITICAL FIX: Normalize feature flag keys to uppercase environment variable names
                     for key, value in features_enabled.items():
-                        if key not in original_env_vars:
-                            original_env_vars[key] = os.environ.get(key)  # Save original value (None if not set)
-                        os.environ[key] = str(value)
+                        env_key = _normalize_feature_flag_key(key)  # Map lowercase to uppercase if needed
+                        if env_key not in original_env_vars:
+                            original_env_vars[env_key] = os.environ.get(env_key)  # Save original value (None if not set)
+                        os.environ[env_key] = str(value)
                     logger.info(f"🔧 {symbol} {horizon}d Online: Feature flags set from best_params: {len(features_enabled)} flags")
                     seed_bag_val = os.environ.get('ENABLE_SEED_BAGGING', 'NOT_SET')
                     dir_loss_val = os.environ.get('ML_USE_DIRECTIONAL_LOSS', 'NOT_SET')
