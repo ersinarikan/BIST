@@ -1345,7 +1345,10 @@ class ContinuousHPOPipeline:
             # HPO uses: ml.base_seeds = [42 + trial.number]
             # Evaluation should use: ml_eval.base_seeds = [42 + best_trial_number]
             ml_eval.base_seeds = [42 + eval_seed]  # eval_seed = best_trial_number
-            logger.info(f"🔧 {symbol} {horizon}d WFV: Set base_seeds={ml_eval.base_seeds} (matching HPO trial {best_trial_number})")
+            # ✅ FIX: Ensure enable_seed_bagging matches HPO best trial (from environment variable)
+            # Note: base_seeds is already set to single seed, so seed bagging will effectively be disabled
+            # But we ensure the flag matches HPO for consistency
+            logger.info(f"🔧 {symbol} {horizon}d WFV: Set base_seeds={ml_eval.base_seeds}, enable_seed_bagging={ml_eval.enable_seed_bagging} (matching HPO trial {best_trial_number})")
             
             # ⚡ NEW: Evaluate on all splits and average DirHit, nRMSE, and Score (same as HPO)
             split_dirhits = []
@@ -1504,12 +1507,74 @@ class ContinuousHPOPipeline:
         try:
             original_adaptive2 = os.environ.get('ML_USE_ADAPTIVE_LEARNING', '0')
             os.environ['ML_USE_ADAPTIVE_LEARNING'] = '0'  # ✅ HİBRİT YAKLAŞIM: Adaptive OFF (HPO ile tutarlılık)
-            # ✅ Align with HPO for comparability: disable seed bagging during evaluation
+            
+            # ✅ CRITICAL FIX: Set feature flags from best_params to match HPO best trial exactly
+            # This ensures evaluation uses the same feature flags as HPO (including seed bagging and directional loss)
             original_seed_bag2 = os.environ.get('ENABLE_SEED_BAGGING', '0')
-            os.environ['ENABLE_SEED_BAGGING'] = '0'
-            # ✅ CRITICAL FIX: Align with HPO - disable directional loss (use MSE loss)
             original_directional2 = os.environ.get('ML_USE_DIRECTIONAL_LOSS', '1')
-            os.environ['ML_USE_DIRECTIONAL_LOSS'] = '0'  # MSE loss (same as HPO)
+            
+            if best_params and isinstance(best_params, dict):
+                # Set feature flags from features_enabled dict (HPO best trial)
+                features_enabled = best_params.get('features_enabled', {})
+                if features_enabled:
+                    # Set all feature flags from best_params (including ENABLE_SEED_BAGGING and ML_USE_DIRECTIONAL_LOSS)
+                    for key, value in features_enabled.items():
+                        os.environ[key] = str(value)
+                    logger.info(f"🔧 {symbol} {horizon}d Online: Feature flags set from best_params: {len(features_enabled)} flags")
+                    seed_bag_val = os.environ.get('ENABLE_SEED_BAGGING', 'NOT_SET')
+                    dir_loss_val = os.environ.get('ML_USE_DIRECTIONAL_LOSS', 'NOT_SET')
+                    logger.info(f"🔧 {symbol} {horizon}d Online: ENABLE_SEED_BAGGING={seed_bag_val}, ML_USE_DIRECTIONAL_LOSS={dir_loss_val}")
+                else:
+                    # Fallback: Also check enable_* keys in best_params
+                    feature_flag_keys = [k for k in best_params.keys() if k.startswith('enable_')]
+                    for key in feature_flag_keys:
+                        value = best_params[key]
+                        if key == 'enable_external_features':
+                            os.environ['ENABLE_EXTERNAL_FEATURES'] = '1' if value else '0'
+                        elif key == 'enable_fingpt_features':
+                            os.environ['ENABLE_FINGPT_FEATURES'] = '1' if value else '0'
+                        elif key == 'enable_yolo_features':
+                            os.environ['ENABLE_YOLO_FEATURES'] = '1' if value else '0'
+                        elif key == 'enable_directional_loss':
+                            os.environ['ML_USE_DIRECTIONAL_LOSS'] = '1' if value else '0'
+                        elif key == 'enable_seed_bagging':
+                            os.environ['ENABLE_SEED_BAGGING'] = '1' if value else '0'
+                        elif key == 'enable_talib_patterns':
+                            os.environ['ENABLE_TALIB_PATTERNS'] = '1' if value else '0'
+                        elif key == 'enable_smart_ensemble':
+                            os.environ['ML_USE_SMART_ENSEMBLE'] = '1' if value else '0'
+                        elif key == 'enable_stacked_short':
+                            os.environ['ML_USE_STACKED_SHORT'] = '1' if value else '0'
+                        elif key == 'enable_meta_stacking':
+                            os.environ['ENABLE_META_STACKING'] = '1' if value else '0'
+                        elif key == 'enable_regime_detection':
+                            os.environ['ML_USE_REGIME_DETECTION'] = '1' if value else '0'
+                        elif key == 'enable_fingpt':
+                            os.environ['ENABLE_FINGPT'] = '1' if value else '0'
+                    logger.info(f"🔧 {symbol} {horizon}d Online: Feature flags set from enable_* keys: {len(feature_flag_keys)} flags")
+                # Also set smart-ensemble params from feature_params if available (parity with HPO)
+                try:
+                    fp = best_params.get('feature_params', {}) if isinstance(best_params, dict) else {}
+                    if isinstance(fp, dict) and fp:
+                        if 'smart_consensus_weight' in fp:
+                            os.environ['ML_SMART_CONSENSUS_WEIGHT'] = str(fp['smart_consensus_weight'])
+                        if 'smart_performance_weight' in fp:
+                            os.environ['ML_SMART_PERFORMANCE_WEIGHT'] = str(fp['smart_performance_weight'])
+                        if 'smart_sigma' in fp:
+                            os.environ['ML_SMART_SIGMA'] = str(fp['smart_sigma'])
+                        if 'smart_weight_xgb' in fp:
+                            os.environ['ML_SMART_WEIGHT_XGB'] = str(fp['smart_weight_xgb'])
+                        if 'smart_weight_lgbm' in fp or 'smart_weight_lgb' in fp:
+                            os.environ['ML_SMART_WEIGHT_LGB'] = str(fp.get('smart_weight_lgbm', fp.get('smart_weight_lgb')))
+                        if 'smart_weight_cat' in fp:
+                            os.environ['ML_SMART_WEIGHT_CAT'] = str(fp['smart_weight_cat'])
+                except Exception:
+                    pass
+            else:
+                # Fallback: Only disable if best_params not available (should not happen in normal flow)
+                logger.warning(f"⚠️ {symbol} {horizon}d Online: best_params not available, using fallback (disabling seed bagging and directional loss)")
+                os.environ['ENABLE_SEED_BAGGING'] = '0'
+                os.environ['ML_USE_DIRECTIONAL_LOSS'] = '0'  # MSE loss (fallback)
             # ✅ CRITICAL FIX: Don't use singleton, create new instance (same as HPO)
             # import enhanced_ml_system
             # enhanced_ml_system._enhanced_ml_system = None  # Not needed, we create new instance
@@ -1549,7 +1614,10 @@ class ContinuousHPOPipeline:
             # HPO uses: ml.base_seeds = [42 + trial.number]
             # Evaluation should use: ml_online.base_seeds = [42 + best_trial_number]
             ml_online.base_seeds = [42 + eval_seed]  # eval_seed = best_trial_number
-            logger.info(f"🔧 {symbol} {horizon}d Online: Set base_seeds={ml_online.base_seeds} (matching HPO trial {best_trial_number})")
+            # ✅ FIX: Ensure enable_seed_bagging matches HPO best trial (from environment variable)
+            # Note: base_seeds is already set to single seed, so seed bagging will effectively be disabled
+            # But we ensure the flag matches HPO for consistency
+            logger.info(f"🔧 {symbol} {horizon}d Online: Set base_seeds={ml_online.base_seeds}, enable_seed_bagging={ml_online.enable_seed_bagging} (matching HPO trial {best_trial_number})")
             
             # ✅ CRITICAL FIX: Evaluation mode - skip Phase 2 to match HPO data usage
             # HPO'da tüm train_df kullanılıyor (adaptive OFF)
