@@ -276,8 +276,9 @@ def create_app(config_name='default'):
     
     _auto_start_automation()
     
-    # Login Manager (use the globally initialized instance)
-    login_manager.init_app(app)
+    # Login Manager already initialized on line 96 - no need to re-initialize
+    # ✅ FIX: Removed duplicate login_manager.init_app(app) call
+    # login_view can be set after initialization without re-initializing
     login_manager.login_view = 'auth.login'  # Updated for blueprint routing
 
     # RBAC helpers
