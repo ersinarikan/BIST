@@ -97,6 +97,132 @@ def optimize_thresholds(pairs: List[Tuple[float, float]], deltas: List[float]) -
     return best
 
 
+def optimize_thresholds_challenger(pairs: List[Tuple[float, float]], deltas: List[float], prod_th: Dict[str, float]) -> Dict[str, float]:
+    """Optimize challenger thresholds using different ranges than production.
+    
+    Challenger uses more aggressive ranges (slightly lower thresholds) to test
+    if more signals can be generated with acceptable precision.
+    """
+    if not pairs or not deltas:
+        # Default challenger values (slightly more aggressive than production default)
+        return {'delta_thr': 0.02, 'conf_thr': 0.6}
+    
+    prod_delta = prod_th.get('delta_thr', 0.03)
+    prod_conf = prod_th.get('conf_thr', 0.65)
+    
+    best = {'delta_thr': max(0.01, prod_delta * 0.75), 'conf_thr': max(0.50, prod_conf * 0.92)}
+    best_f1 = -1.0
+    
+    # Challenger grid: More aggressive (lower thresholds) than production
+    # Delta range: slightly lower than production (0.75x to 1.0x)
+    delta_min = max(0.01, prod_delta * 0.7)
+    delta_max = min(0.05, prod_delta * 1.1)
+    delta_candidates = [
+        delta_min,
+        prod_delta * 0.8,
+        prod_delta * 0.9,
+        prod_delta,
+        min(delta_max, prod_delta * 1.05),
+        delta_max
+    ]
+    # Remove duplicates and sort
+    delta_candidates = sorted(set([round(d, 4) for d in delta_candidates if 0.01 <= d <= 0.05]))
+    
+    # Conf range: slightly lower than production (0.85x to 1.0x)
+    conf_min = max(0.50, prod_conf * 0.85)
+    conf_max = min(0.80, prod_conf * 1.05)
+    conf_candidates = [
+        conf_min,
+        prod_conf * 0.90,
+        prod_conf * 0.95,
+        prod_conf,
+        min(conf_max, prod_conf * 1.02),
+        conf_max
+    ]
+    # Remove duplicates and sort
+    conf_candidates = sorted(set([round(c, 3) for c in conf_candidates if 0.50 <= c <= 0.80]))
+    
+    for conf_thr in conf_candidates:
+        for delta_thr in delta_candidates:
+            tp = fp = fn = 0
+            for (c, hit), d in zip(pairs, deltas):
+                pred = (c >= conf_thr) and (abs(d) >= delta_thr)
+                if pred and hit >= 0.5:
+                    tp += 1
+                elif pred and hit < 0.5:
+                    fp += 1
+                elif (not pred) and hit >= 0.5:
+                    fn += 1
+            prec = tp / (tp + fp) if (tp + fp) else 0.0
+            rec = tp / (tp + fn) if (tp + fn) else 0.0
+            f1 = (2 * prec * rec / (prec + rec)) if (prec + rec) else 0.0
+            if f1 > best_f1:
+                best_f1 = f1
+                best = {'delta_thr': round(delta_thr, 4), 'conf_thr': round(conf_thr, 3)}
+    
+    return best
+
+
+def analyze_ab_test_results(cutoff: datetime, horizon: str, min_samples_chall: int = 50) -> Dict[str, any]:
+    """Analyze A/B test results for a specific horizon.
+    
+    Note: This function must be called within app.app_context().
+    
+    Returns:
+        {
+            'prod': {'acc': float, 'n': int},
+            'chall': {'acc': float, 'n': int},
+            'chall_better': bool,
+            'significant': bool
+        }
+    """
+    rows = (
+        db.session.query(PredictionsLog, OutcomesLog)
+        .join(OutcomesLog, OutcomesLog.prediction_id == PredictionsLog.id)
+        .filter(PredictionsLog.horizon == horizon)
+        .filter(PredictionsLog.ts_pred >= cutoff)
+        .all()
+    )
+    
+    prod_hits = []
+    chall_hits = []
+    
+    for p, o in rows:
+        try:
+            pv = str(getattr(p, 'param_version', '') or '')
+            grp = 'chall' if 'ab:chall' in pv else 'prod'
+            hit = 1.0 if bool(getattr(o, 'dir_hit')) else 0.0
+            
+            if grp == 'prod':
+                prod_hits.append(hit)
+            else:
+                chall_hits.append(hit)
+        except Exception:
+            continue
+    
+    prod_n = len(prod_hits)
+    chall_n = len(chall_hits)
+    prod_acc = (sum(prod_hits) / prod_n) if prod_n > 0 else None
+    chall_acc = (sum(chall_hits) / chall_n) if chall_n > 0 else None
+    
+    # Check if challenger is significantly better (at least 2% improvement with enough samples)
+    chall_better = False
+    significant = False
+    if prod_acc is not None and chall_acc is not None and chall_n >= min_samples_chall:
+        chall_better = chall_acc > prod_acc
+        # Simple significance: challenger must be at least 2% better
+        improvement = chall_acc - prod_acc
+        significant = improvement >= 0.02 and chall_n >= min_samples_chall
+    
+    return {
+        'prod': {'acc': prod_acc, 'n': prod_n},
+        'chall': {'acc': chall_acc, 'n': chall_n},
+        'chall_better': chall_better,
+        'significant': significant,
+        'improvement': (chall_acc - prod_acc) if (prod_acc is not None and chall_acc is not None) else None
+    }
+
+
 def _load_existing_store(out_dir: str) -> Dict:
     try:
         path = os.path.join(out_dir, 'param_store.json')
@@ -108,7 +234,9 @@ def _load_existing_store(out_dir: str) -> Dict:
     return {}
 
 
-def run(window_days: int = 30, go_live: str | None = None, min_samples: int = 150) -> int:
+def run(window_days: int = 30, go_live: str | None = None, min_samples: int = 150,
+        enable_challenger_opt: bool = False, enable_production_promote: bool = False,
+        min_samples_chall: int = 50, improvement_threshold: float = 0.02) -> int:
     cutoff = datetime.utcnow() - timedelta(days=window_days)
     # Optional hard cutoff to exclude pre-live/backfilled data
     if go_live:
@@ -176,7 +304,102 @@ def run(window_days: int = 30, go_live: str | None = None, min_samples: int = 15
             th = optimize_thresholds(pairs, deltas)
             store['horizons'][h] = {'isotonic': bins, 'thresholds': th}
             state[h] = {'n_pairs': len(pairs), 'used_prev': False, 'used_default': False}  # type: ignore[typeddict-item]
+            
+            # ⚡ NEW: Challenger optimization (optional)
+            # Note: We optimize challenger FIRST, then promote if better
+            # This ensures we promote the newly optimized challenger, not old values
+            optimized_chall_th = None  # Will hold newly optimized challenger thresholds
+            
+            if enable_challenger_opt:
+                # Analyze A/B test results for this horizon
+                ab_results = analyze_ab_test_results(cutoff, h, min_samples_chall=min_samples_chall)
+                
+                # Option 2: Optimize challenger thresholds using A/B test data (DO THIS FIRST)
+                # Collect only challenger predictions for optimization
+                chall_pairs = []
+                chall_deltas = []
+                
+                chall_rows = (
+                    db.session.query(PredictionsLog, OutcomesLog)
+                    .join(OutcomesLog, OutcomesLog.prediction_id == PredictionsLog.id)
+                    .filter(PredictionsLog.horizon == h)
+                    .filter(PredictionsLog.ts_pred >= cutoff)
+                    .all()
+                )
+                
+                for p, o in chall_rows:
+                    try:
+                        pv = str(getattr(p, 'param_version', '') or '')
+                        if 'ab:chall' not in pv:
+                            continue  # Skip non-challenger predictions
+                        c = float(p.confidence) if p.confidence is not None else None
+                        if c is None:
+                            continue
+                        hit = 1.0 if bool(o.dir_hit) else 0.0
+                        chall_pairs.append((c, hit))
+                        d = float(p.delta_pred) if p.delta_pred is not None else 0.0
+                        chall_deltas.append(abs(d))
+                    except Exception:
+                        continue
+                
+                # Optimize challenger thresholds if enough samples
+                if len(chall_pairs) >= min_samples_chall:
+                    chall_th = optimize_thresholds_challenger(chall_pairs, chall_deltas, th)
+                    
+                    # Initialize bandit structure if not exists
+                    if 'bandit' not in store:
+                        store['bandit'] = {'horizons': {}}
+                    if 'horizons' not in store['bandit']:
+                        store['bandit']['horizons'] = {}
+                    if h not in store['bandit']['horizons']:
+                        # Preserve existing traffic setting
+                        prev_bandit = prev_store.get('bandit', {})
+                        prev_bandit_h = (prev_bandit.get('horizons', {}) or {}).get(h, {})
+                        store['bandit']['horizons'][h] = {
+                            'traffic': prev_bandit_h.get('traffic', 0.1),
+                            'challenger': {}
+                        }
+                    
+                    store['bandit']['horizons'][h]['challenger'] = chall_th
+                    optimized_chall_th = chall_th  # Save optimized challenger thresholds
+                    print(f"[challenger-opt] {h}: Optimized challenger thresholds "
+                          f"(delta_thr: {chall_th['delta_thr']}, conf_thr: {chall_th['conf_thr']}, "
+                          f"samples: {len(chall_pairs)})", flush=True)
+                else:
+                    # Not enough challenger samples, preserve existing challenger config
+                    prev_bandit = prev_store.get('bandit', {})
+                    prev_bandit_h = (prev_bandit.get('horizons', {}) or {}).get(h, {})
+                    if prev_bandit_h and prev_bandit_h.get('challenger'):
+                        if 'bandit' not in store:
+                            store['bandit'] = {'horizons': {}}
+                        if 'horizons' not in store['bandit']:
+                            store['bandit']['horizons'] = {}
+                        store['bandit']['horizons'][h] = prev_bandit_h.copy()
+                        optimized_chall_th = prev_bandit_h.get('challenger')  # Use existing if not optimized
+                        print(f"[challenger-opt] {h}: Not enough samples ({len(chall_pairs)} < {min_samples_chall}), "
+                              f"preserving existing challenger config", flush=True)
+                
+                # Option 1: Promote challenger to production if significantly better (DO THIS AFTER OPTIMIZATION)
+                # ✅ FIX: Use newly optimized challenger thresholds, not old ones from prev_store
+                if enable_production_promote and ab_results['significant'] and ab_results['chall_better']:
+                    # Use optimized challenger thresholds (if available) or existing ones
+                    chall_to_promote = optimized_chall_th or prev_store.get('bandit', {}).get('horizons', {}).get(h, {}).get('challenger', {})
+                    
+                    if chall_to_promote:
+                        # Promote challenger to production
+                        print(f"[challenger-promote] {h}: Promoting challenger to production "
+                              f"(improvement: {ab_results['improvement']*100:.2f}%, "
+                              f"prod_acc: {ab_results['prod']['acc']*100:.1f}%, "
+                              f"chall_acc: {ab_results['chall']['acc']*100:.1f}%)", flush=True)
+                        th = chall_to_promote.copy()  # Use optimized challenger thresholds as production
+                        store['horizons'][h]['thresholds'] = th
 
+    # Preserve existing bandit config if not optimizing challenger
+    if not enable_challenger_opt:
+        prev_bandit = prev_store.get('bandit', {})
+        if prev_bandit:
+            store['bandit'] = prev_bandit.copy()
+    
     # Add checksum of horizons
     try:
         import hashlib  # lazy import
@@ -255,11 +478,21 @@ if __name__ == '__main__':
     parser.add_argument('--window-days', type=int, default=30)
     parser.add_argument('--go-live', type=str, default=os.getenv('CALIB_GO_LIVE', ''))
     parser.add_argument('--min-samples', type=int, default=int(os.getenv('CALIB_MIN_SAMPLES', '150')))
+    parser.add_argument('--enable-challenger-opt', action='store_true',
+                        default=os.getenv('ENABLE_CHALLENGER_OPTIMIZATION', '0').lower() in ('1', 'true', 'yes', 'on'))
+    parser.add_argument('--enable-production-promote', action='store_true',
+                        default=os.getenv('ENABLE_PRODUCTION_PROMOTE', '0').lower() in ('1', 'true', 'yes', 'on'))
+    parser.add_argument('--min-samples-chall', type=int, default=int(os.getenv('CHALL_MIN_SAMPLES', '50')))
+    parser.add_argument('--improvement-threshold', type=float, default=float(os.getenv('CHALL_IMPROVEMENT_THRESHOLD', '0.02')))
     args = parser.parse_args()
     raise SystemExit(
         run(
             window_days=args.window_days,
             go_live=(args.go_live or None),
             min_samples=args.min_samples,
+            enable_challenger_opt=args.enable_challenger_opt,
+            enable_production_promote=args.enable_production_promote,
+            min_samples_chall=args.min_samples_chall,
+            improvement_threshold=args.improvement_threshold,
         )
     )

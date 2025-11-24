@@ -16,8 +16,8 @@
     
     <script>
         // 🚀 CACHE BUSTER & VERSION CONTROL
-        const DASHBOARD_VERSION = '2025.08.08.WebSocket.1.1';
-        const CACHE_BUSTER = 1758220727;
+        const DASHBOARD_VERSION = '2025.10.17.SimulationDetailsEnhanced.1.0';
+        const CACHE_BUSTER = 1760351102;
         console.log('🎯 BIST Dashboard - Version:', DASHBOARD_VERSION, 'Cache:', CACHE_BUSTER);
         
         // Force refresh indicator
@@ -259,6 +259,10 @@
         }
         
         .status-healthy { color: #28a745; }
+
+        /* Automation status styles */
+        #automation-status { text-transform: lowercase; }
+        #automation-status-header { text-transform: uppercase; color: #000; }
         .status-warning { color: #ffc107; }
         .status-error { color: #dc3545; }
         .status-unknown { color: #6c757d; }
@@ -488,7 +492,7 @@
             <div class="col-lg-4 d-flex align-items-stretch">
                 <div class="dashboard-card mid-six p-4 w-100 recent-card" style="background: white; border: 2px solid #e9ecef; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
                     <h4><i class="fas fa-heartbeat me-2 text-success"></i>System Health</h4>
-                    <div id="health-status" class="mt-3">
+                    <div id="health-status" class="mt-3" style="max-height: 430px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable both-edges;">
                         <!-- Compact card layout (Overall, Automation, Flask, DB, WebSocket) -->
                         <div class="row g-2">
                             <div class="col-12">
@@ -583,7 +587,10 @@
             <!-- Calibration Summary Panel -->
             <div class="col-lg-4 d-flex align-items-stretch">
                 <div id="recent-card" class="dashboard-card mid-six p-4 recent-fixed w-100" style="background: white; border: 2px solid #e9ecef; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
-                    <h4><i class="fas fa-sliders-h me-2 text-success"></i>Calibration Summary</h4>
+                    <h4 class="d-flex align-items-center justify-content-between">
+                        <span><i class="fas fa-sliders-h me-2 text-success"></i>Calibration Summary</span>
+                        <span id="calibration-readiness-badge" class="badge bg-secondary">Yükleniyor</span>
+                    </h4>
                     <div id="calibration-summary" class="mt-3 small text-muted" style="max-height: 430px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable both-edges;">Loading...</div>
                 </div>
             </div>
@@ -634,74 +641,84 @@
                     <h5><i class="fas fa-robot me-2 text-info"></i>AI Simulation</h5>
                     <div class="small text-muted mb-2">Virtual trading - 606 hisse</div>
                     
-                    <!-- Compact Duration & Status -->
-                    <div class="row g-1 mb-2">
-                        <div class="col-7">
-                            <select class="form-select form-select-sm" id="simulation-duration" style="font-size: 0.8rem;">
-                                <option value="12">12h</option>
-                                <option value="24">24h</option>
-                                <option value="48" selected>48h</option>
-                                <option value="72">72h</option>
-                                <option value="168">1w</option>
-                            </select>
-                        </div>
-                        <div class="col-5">
-                            <div class="p-1 rounded text-center" style="background: #f8f9fa; border: 1px solid #dee2e6;">
-                                <div class="small text-dark fw-bold" id="sim-balance" style="font-size: 0.75rem;">₺0.00</div>
-                                <small class="text-success" id="sim-profit" style="font-size: 0.7rem;">±0%</small>
+                    <!-- Scrollable simulation area -->
+                    <div style="max-height: 350px; overflow-y: auto; padding-right: 5px;">
+                        <!-- Status -->
+                        <div id="simulation-status" class="mb-2">
+                            <div class="p-2 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
+                                <div class="small fw-bold text-dark" id="sim-status-text">No Active Simulation</div>
+                                <small class="text-muted" id="sim-details" style="font-size: 0.7rem;">Start a new simulation to test AI performance</small>
                             </div>
                         </div>
-                    </div>
-                    
-                    <!-- Status -->
-                    <div id="simulation-status" class="mb-2">
-                        <div class="p-2 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
-                            <div class="small fw-bold text-dark" id="sim-status-text">No Active Test</div>
-                            <small class="text-muted" id="sim-details" style="font-size: 0.7rem;">Select duration & start</small>
-                        </div>
-                    </div>
-                    
-                    <!-- Compact Controls -->
-                    <div class="row g-1">
-                        <div class="col-6">
+                        
+                        <!-- Controls -->
+                        <div class="row g-1">
+                        <div class="col-4">
                             <button class="btn btn-success w-100 py-1 mb-1" id="start-simulation-btn" onclick="startSimulation()" style="font-size: 0.8rem;">
                                 <i class="fas fa-play me-1"></i>Start
                             </button>
                         </div>
-                        <div class="col-6">
+                        <div class="col-4">
                             <button class="btn btn-danger w-100 py-1 mb-1" id="stop-simulation-btn" onclick="stopSimulation()" disabled style="font-size: 0.8rem;">
                                 <i class="fas fa-stop me-1"></i>Stop
                             </button>
                         </div>
+                        <div class="col-4">
+                            <button class="btn btn-outline-secondary w-100 py-1 mb-1" onclick="openSimDetails()" style="font-size: 0.8rem;">
+                                <i class="fas fa-list me-1"></i>Details
+                            </button>
+                        </div>
                         <div class="col-12">
-                            <div class="input-group input-group-sm">
+                            <div class="input-group input-group-sm mb-2">
                                 <span class="input-group-text" style="font-size: 0.75rem;">₺</span>
                                 <input type="number" class="form-control" id="trade-amount" value="10000" min="1000" max="50000" style="font-size: 0.75rem;">
                             </div>
+                            <!-- Strategy params -->
+                            <div class="row g-1 mb-2">
+                                <div class="col-6">
+                                    <label class="form-label mb-0" style="font-size:0.7rem;">Horizon</label>
+                                    <select class="form-select form-select-sm" id="sim-horizon" style="font-size:0.8rem;">
+                                        <option value="1d" selected>1d</option>
+                                        <option value="3d">3d</option>
+                                        <option value="7d">7d</option>
+                                        <option value="14d">14d</option>
+                                        <option value="30d">30d</option>
+                                    </select>
+                                </div>
+                                <div class="col-6">
+                                    <label class="form-label mb-0" style="font-size:0.7rem;">Top N</label>
+                                    <input type="number" class="form-control form-control-sm" id="sim-topn" value="10" min="1" max="10" style="font-size:0.8rem;">
+                                </div>
+                                <div class="col-6">
+                                    <label class="form-label mb-0" style="font-size:0.7rem;">Commission</label>
+                                    <div class="input-group input-group-sm">
+                                        <input type="number" class="form-control" id="sim-commission" value="0.0005" step="0.0001" min="0" max="0.01" style="font-size:0.8rem;">
+                                        <span class="input-group-text" style="font-size:0.75rem;">ratio</span>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <label class="form-label mb-0" style="font-size:0.7rem;">Stop-loss %</label>
+                                    <div class="input-group input-group-sm">
+                                        <input type="number" class="form-control" id="sim-stoploss" value="3" step="0.5" min="0" max="20" style="font-size:0.8rem;">
+                                        <span class="input-group-text" style="font-size:0.75rem;">%</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row g-2 mt-1">
+                                <div class="col-12">
+                                    <label class="form-label mb-0" style="font-size:0.7rem;">Relatif Düşüş %</label>
+                                    <div class="input-group input-group-sm">
+                                        <input type="number" class="form-control" id="sim-rel-drop" value="20" step="1" min="1" max="50" style="font-size:0.8rem;">
+                                        <span class="input-group-text" style="font-size:0.75rem;">%</span>
+                                    </div>
+                                    <div class="form-text" style="font-size:0.65rem;">En yüksek güven skorundan düşüş eşiği</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
+                    </div><!-- End scrollable simulation area -->
                     
-                    <!-- Compact Stats -->
-                    <div class="row g-1 mt-2" id="simulation-stats" style="display: none;">
-                        <div class="col-4 text-center">
-                            <div class="p-1 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
-                                <div class="small text-muted" style="font-size: 0.7rem;">Trades</div>
-                                <div class="fw-bold text-dark" id="sim-trades" style="font-size: 0.8rem;">0</div>
-                            </div>
-                        </div>
-                        <div class="col-4 text-center">
-                            <div class="p-1 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
-                                <div class="small text-muted" style="font-size: 0.7rem;">Win%</div>
-                                <div class="fw-bold text-success" id="sim-winrate" style="font-size: 0.8rem;">0%</div>
-                            </div>
-                        </div>
-                        <div class="col-4 text-center">
-                            <div class="p-1 rounded" style="background: #f8f9fa; border: 1px solid #dee2e6;">
-                                <div class="small text-muted" style="font-size: 0.7rem;">Time</div>
-                                <div class="fw-bold text-dark" id="sim-runtime" style="font-size: 0.8rem;">0h</div>
-                            </div>
-                        </div>
-                    </div>
+                    <!-- Compact Stats removed (legacy) -->
                 </div>
             </div>
 
@@ -759,14 +776,14 @@
       <div class="modal-dialog modal-xl modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
-            <h5 class="modal-title">System Report</h5>
+            <h5 class="modal-title">Sistem Raporu</h5>
             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
           </div>
           <div class="modal-body" id="reportModalBody">
             <div class="text-muted">Loading...</div>
           </div>
           <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Kapat</button>
           </div>
         </div>
       </div>
@@ -855,9 +872,19 @@ document.addEventListener('DOMContentLoaded', function() {
                         const headerEl = document.getElementById('automation-status-header');
                         const jobsElement = null; // removed scheduled-jobs widget
                         
-                        if (statusElement && statusElement.textContent !== currentStatus) {
+                        if (statusElement) {
+                            // Text
                             statusElement.textContent = currentStatus;
+                            // Badge color
+                            const cls = isRunning ? 'bg-success' : 'bg-danger';
+                            statusElement.classList.remove('bg-success','bg-danger','bg-warning','bg-info','bg-secondary','bg-primary');
+                            statusElement.classList.add(cls);
                             console.log('🔄 Automation status updated to:', currentStatus);
+                        }
+                        if (headerEl) {
+                            // Header metric color hint
+                            headerEl.classList.remove('text-success','text-danger','text-warning');
+                            headerEl.classList.add(isRunning ? 'text-success' : 'text-danger');
                         }
                         if (headerEl && headerEl.textContent !== currentStatus) {
                             headerEl.textContent = currentStatus;
@@ -874,15 +901,45 @@ document.addEventListener('DOMContentLoaded', function() {
                             const statusEl = document.getElementById('automation-status');
                             const headerEl = document.getElementById('automation-status-header');
                             const txt = (aut === 'RUNNING') ? 'RUNNING' : (aut === 'STOPPED' ? 'STOPPED' : 'CHECKING...');
-                            if (statusEl) statusEl.textContent = txt;
-                            if (headerEl) headerEl.textContent = txt;
+                            if (statusEl) {
+                                statusEl.textContent = txt;
+                                const isRun = (txt === 'RUNNING');
+                                const isCheck = (txt === 'CHECKING...');
+                                statusEl.classList.remove('bg-success','bg-danger','bg-warning','bg-info','bg-secondary','bg-primary');
+                                statusEl.classList.add(isCheck ? 'bg-warning' : (isRun ? 'bg-success' : 'bg-danger'));
+                            }
+                            if (headerEl) {
+                                headerEl.textContent = txt;
+                                headerEl.classList.remove('text-success','text-danger','text-warning');
+                                headerEl.classList.add(txt === 'CHECKING...' ? 'text-warning' : (txt === 'RUNNING' ? 'text-success' : 'text-danger'));
+                            }
                         } else {
-                            const _as = document.getElementById('automation-status'); if (_as) { _as.textContent = 'CHECKING...'; }
-                            const _ah = document.getElementById('automation-status-header'); if (_ah) { _ah.textContent = 'CHECKING...'; }
+                            const _as = document.getElementById('automation-status');
+                            if (_as) {
+                                _as.textContent = 'CHECKING...';
+                                _as.classList.remove('bg-success','bg-danger');
+                                _as.classList.add('bg-warning');
+                            }
+                            const _ah = document.getElementById('automation-status-header');
+                            if (_ah) {
+                                _ah.textContent = 'CHECKING...';
+                                _ah.classList.remove('text-success','text-danger');
+                                _ah.classList.add('text-warning');
+                            }
                         }
                     } catch (_) {
-                        const _as = document.getElementById('automation-status'); if (_as) { _as.textContent = 'CHECKING...'; }
-                        const _ah = document.getElementById('automation-status-header'); if (_ah) { _ah.textContent = 'CHECKING...'; }
+                        const _as = document.getElementById('automation-status');
+                        if (_as) {
+                            _as.textContent = 'CHECKING...';
+                            _as.classList.remove('bg-success','bg-danger');
+                            _as.classList.add('bg-warning');
+                        }
+                        const _ah = document.getElementById('automation-status-header');
+                        if (_ah) {
+                            _ah.textContent = 'CHECKING...';
+                            _ah.classList.remove('text-success','text-danger');
+                            _ah.classList.add('text-warning');
+                        }
                     }
                 }
 
@@ -955,6 +1012,32 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 updateHealthStatus(healthData);
                 updatePerformanceChart(healthData);
+
+                // --- AI Simulation status (active/no-active) ---
+                try {
+                    const starting = window.__simStarting === true;
+                    const active = window.__simActive === true;
+                    const stEl = document.getElementById('sim-status-text');
+                    const sdEl = document.getElementById('sim-details');
+                    const startBtn = document.getElementById('start-simulation-btn');
+                    const stopBtn = document.getElementById('stop-simulation-btn');
+                    if (starting) {
+                        if (stEl) stEl.textContent = 'Starting...';
+                        if (sdEl) sdEl.textContent = 'Submitting backtest request';
+                        if (startBtn) startBtn.setAttribute('disabled','disabled');
+                        if (stopBtn) stopBtn.setAttribute('disabled','disabled');
+                    } else if (active) {
+                        if (stEl) stEl.textContent = 'Active Simulation';
+                        if (sdEl) sdEl.textContent = window.__simSummary || 'Running...';
+                        if (startBtn) startBtn.setAttribute('disabled','disabled');
+                        if (stopBtn) stopBtn.removeAttribute('disabled');
+                    } else {
+                        if (stEl) stEl.textContent = 'No Active Simulation';
+                        if (sdEl) sdEl.textContent = 'Start a new simulation to test AI performance';
+                        if (startBtn) startBtn.removeAttribute('disabled');
+                        if (stopBtn) stopBtn.setAttribute('disabled','disabled');
+                    }
+                } catch (_) {}
                 
             // Update Recent Tasks & dynamic pipeline info
             await updateRecentTasks();
@@ -973,6 +1056,422 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
 
+        // --- Simulation Controls ---
+        async function startSimulation() {
+            try {
+                if (window.__simActive) { try { alert('Aktif bir simülasyon zaten çalışıyor'); } catch(_){} return; }
+                const stEl = document.getElementById('sim-status-text');
+                const sdEl = document.getElementById('sim-details');
+                const startBtn = document.getElementById('start-simulation-btn');
+                const stopBtn = document.getElementById('stop-simulation-btn');
+                
+                if (stEl) stEl.textContent = 'Başlatılıyor...';
+                if (sdEl) sdEl.textContent = 'Simülasyon hazırlanıyor';
+                if (startBtn) startBtn.setAttribute('disabled','disabled');
+
+                const capital = parseFloat(document.getElementById('trade-amount').value || '10000');
+                const horizonSel = (document.getElementById('sim-horizon')?.value || '7d');
+                const topN = parseInt(document.getElementById('sim-topn')?.value || '10');
+                const commission = parseFloat(document.getElementById('sim-commission')?.value || '0.0005');
+                const stopPctUi = parseFloat(document.getElementById('sim-stoploss')?.value || '3');
+                const relDropPctUi = parseFloat(document.getElementById('sim-rel-drop')?.value || '20');
+                
+                const body = {
+                    initial_capital: isFinite(capital) ? capital : 10000,
+                    horizon: horizonSel,
+                    topN: (isFinite(topN) ? Math.max(1, Math.min(10, topN)) : 10),
+                    commission: (isFinite(commission) ? commission : 0.0005),
+                    stop_loss_pct: isFinite(stopPctUi) ? (stopPctUi / 100.0) : 0.03,
+                    relative_drop_threshold: isFinite(relDropPctUi) ? (relDropPctUi / 100.0) : 0.20
+                };
+                
+                const res = await fetch('/api/internal/simulation/forward-start', {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json', 
+                        'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' 
+                    },
+                    body: JSON.stringify(body)
+                });
+                
+                const data = await res.json().catch(()=>null);
+                if (!res.ok || !data) {
+                    const msg = (data && data.error) ? data.error : `HTTP ${res.status}`;
+                    if (stEl) stEl.textContent = 'Hata';
+                    if (sdEl) sdEl.textContent = msg;
+                    if (startBtn) startBtn.removeAttribute('disabled');
+                    try { alert('Simülasyon başlatılamadı: ' + msg); } catch(_){}
+                    return;
+                }
+                
+                window.__simActive = true;
+                if (stEl) stEl.textContent = 'Aktif Simülasyon';
+                if (sdEl) sdEl.textContent = `Gün ${data.elapsed_days}/${data.duration_days} | Sermaye: ₺${data.portfolio.equity.toFixed(2)}`;
+                if (stopBtn) stopBtn.removeAttribute('disabled');
+                if (startBtn) startBtn.removeAttribute('disabled');
+                
+                // Start polling for status updates
+                if (window.__simPollInterval) clearInterval(window.__simPollInterval);
+                window.__simPollInterval = setInterval(updateSimulationStatus, 5000);
+                
+                console.log('✅ Forward simulation started');
+                
+            } catch (e) {
+                console.error('startSimulation error', e);
+                const stEl = document.getElementById('sim-status-text');
+                const sdEl = document.getElementById('sim-details');
+                const startBtn = document.getElementById('start-simulation-btn');
+                if (stEl) stEl.textContent = 'Hata';
+                if (sdEl) sdEl.textContent = String(e?.message||'İstek başarısız');
+                if (startBtn) startBtn.removeAttribute('disabled');
+                try { alert('Hata: ' + (e?.message || 'Bilinmeyen hata')); } catch(_){}
+            }
+        }
+
+        async function stopSimulation() {
+            try {
+                const res = await fetch('/api/internal/simulation/forward-stop', {
+                    method: 'POST',
+                    headers: { 
+                        'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' 
+                    }
+                });
+                
+                const data = await res.json().catch(()=>null);
+                if (window.__simPollInterval) clearInterval(window.__simPollInterval);
+                window.__simActive = false;
+                
+                const stEl = document.getElementById('sim-status-text');
+                const sdEl = document.getElementById('sim-details');
+                if (stEl) stEl.textContent = 'Simülasyon Yok';
+                if (sdEl) sdEl.textContent = '';
+                
+                if (data && data.summary) {
+                    try { openSimDetails(data); } catch(_){}
+                    console.log('✅ Simulation stopped, P&L:', data.summary.pnl);
+                }
+                
+            } catch (e) {
+                console.error('stopSimulation error', e);
+                try { alert('Durdurma hatası: ' + (e?.message || 'Bilinmeyen hata')); } catch(_){}
+            }
+        }
+        
+        async function updateSimulationStatus() {
+            try {
+                const res = await fetch('/api/internal/simulation/status', {
+                    headers: { 'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' }
+                });
+                const data = await res.json().catch(()=>null);
+                
+                if (!data || !data.active) {
+                    if (window.__simPollInterval) clearInterval(window.__simPollInterval);
+                    window.__simActive = false;
+                    const stEl = document.getElementById('sim-status-text');
+                    const sdEl = document.getElementById('sim-details');
+                    if (stEl) stEl.textContent = 'Simülasyon Yok';
+                    if (sdEl) sdEl.textContent = '';
+                    return;
+                }
+                
+                window.__simActive = true;
+                
+                // Update status text
+                const stEl = document.getElementById('sim-status-text');
+                if (stEl) {
+                    stEl.textContent = `Aktif: ${data.horizon} (Gün ${data.elapsed_days}/${data.duration_days})`;
+                }
+                
+                // Update details
+                const sdEl = document.getElementById('sim-details');
+                if (sdEl) {
+                    const pnl = data.portfolio.pnl || 0;
+                    const pnlSign = pnl >= 0 ? '+' : '';
+                    const equity = data.portfolio.equity || 0;
+                    const posCount = data.portfolio.positions?.length || 0;
+                    sdEl.textContent = `${posCount} pozisyon | Sermaye: ₺${equity.toFixed(0)} | P&L: ${pnlSign}₺${pnl.toFixed(2)}`;
+                }
+                
+                // Update buttons
+                const startBtn = document.getElementById('start-simulation-btn');
+                const stopBtn = document.getElementById('stop-simulation-btn');
+                if (startBtn) startBtn.disabled = true;
+                if (stopBtn) stopBtn.disabled = false;
+                
+            } catch (e) {
+                console.error('Status poll error', e);
+            }
+        }
+
+        async function openSimDetails(preloaded) {
+            let content = preloaded;
+            
+            // If no preloaded data, fetch from API
+            if (!content) {
+                try {
+                    const res = await fetch('/api/internal/simulation/status', {
+                        headers: { 'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' }
+                    });
+                    content = await res.json();
+                    if (!content.active) {
+                        alert('Aktif simulasyon yok!');
+                        return;
+                    }
+                } catch (e) {
+                    console.error('Failed to fetch simulation status', e);
+                    alert('Simulasyon verisi alınamadı!');
+                    return;
+                }
+            }
+            
+            const body = document.getElementById('reportModalBody');
+            
+            // Extract data from simulation state
+            const portfolio = content.portfolio || {};
+            const pnl = Number(portfolio.pnl || 0);
+            const equity = Number(portfolio.equity || 0);
+            const cash = Number(portfolio.cash || 0);
+            const initialCapital = Number(content.params?.initial_capital || 100000);
+            const ret = ((equity - initialCapital) / initialCapital * 100);
+            
+            const trades = Array.isArray(content.trades) ? content.trades : [];
+            const totalTrades = trades.length;
+            const commTotal = trades.reduce((sum, t) => sum + (t.commission || 0), 0);
+            const positions = Array.isArray(content.portfolio?.positions) ? content.portfolio.positions : [];
+            const snapshots = Array.isArray(content.daily_snapshots) ? content.daily_snapshots : [];
+            
+            // Calculate hit rate (profitable trades)
+            const buyTrades = trades.filter(t => t.action === 'buy');
+            const sellTrades = trades.filter(t => t.action === 'sell');
+            const profitableSells = sellTrades.filter(t => {
+                const buyPrice = buyTrades.find(b => b.symbol === t.symbol)?.price || 0;
+                return t.price > buyPrice;
+            }).length;
+            const hitRate = sellTrades.length > 0 ? (profitableSells / sellTrades.length * 100) : 0;
+            
+            // Simulation progress
+            const elapsedDays = content.elapsed_days || 0;
+            const durationDays = content.duration_days || 0;
+            const horizon = content.horizon || '';
+            const startTime = content.start_time ? new Date(content.start_time).toLocaleString('tr-TR') : 'N/A';
+            
+            body.innerHTML = `
+              <div class="alert alert-info mb-3">
+                <strong>📊 Simulasyon Durumu:</strong> ${horizon} | 
+                Gün ${elapsedDays}/${durationDays} | 
+                Başlangıç: ${startTime}
+              </div>
+              <div class="row g-3 mb-3">
+                <div class="col-md-3">
+                  <div class="card bg-light">
+                    <div class="card-body p-2">
+                      <small class="text-muted">Equity</small>
+                      <div class="h5 mb-0">₺${equity.toFixed(2)}</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-md-3">
+                  <div class="card ${pnl >= 0 ? 'bg-success' : 'bg-danger'} text-white">
+                    <div class="card-body p-2">
+                      <small>P&L</small>
+                      <div class="h5 mb-0">₺${pnl.toFixed(2)}</div>
+                      <small>${ret.toFixed(2)}%</small>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-md-3">
+                  <div class="card bg-light">
+                    <div class="card-body p-2">
+                      <small class="text-muted">Nakit</small>
+                      <div class="h5 mb-0">₺${cash.toFixed(2)}</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-md-3">
+                  <div class="card bg-light">
+                    <div class="card-body p-2">
+                      <small class="text-muted">İşlem / Komisyon</small>
+                      <div class="h6 mb-0">${totalTrades} / ₺${commTotal.toFixed(2)}</div>
+                      <small>Hit: ${hitRate.toFixed(0)}%</small>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="row g-3 mb-3">
+                <div class="col-md-8"><canvas id="simEquityChart" height="140"></canvas></div>
+                <div class="col-md-4"><canvas id="simDrawdownChart" height="140"></canvas></div>
+              </div>
+              <div class="row g-3">
+                <div class="col-md-7">
+                  <h6>📈 Açık Pozisyonlar (${positions.length})</h6>
+                  <div class="table-responsive" style="max-height:280px; overflow:auto;">
+                    <table class="table table-sm table-hover mb-0" style="font-size:0.85rem;">
+                      <thead class="table-dark">
+                        <tr>
+                          <th>Sembol</th>
+                          <th>Adet</th>
+                          <th>Giriş ₺</th>
+                          <th>Güven</th>
+                          <th>Ufuk</th>
+                          <th>Maliyet ₺</th>
+                          <th>Giriş Zamanı</th>
+                        </tr>
+                      </thead>
+                      <tbody id="sim-pos-tbody"></tbody>
+                    </table>
+                  </div>
+                </div>
+                <div class="col-md-5">
+                  <h6>📋 İşlem Geçmişi (son 20)</h6>
+                  <div class="table-responsive" style="max-height:280px; overflow:auto;">
+                    <table class="table table-sm table-hover mb-0" style="font-size:0.85rem;">
+                      <thead class="table-dark">
+                        <tr>
+                          <th>Zaman</th>
+                          <th>Sembol</th>
+                          <th>Yön</th>
+                          <th>Adet</th>
+                          <th>Fiyat ₺</th>
+                          <th>Sebep</th>
+                        </tr>
+                      </thead>
+                      <tbody id="sim-trades-tbody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            `;
+            
+            // Fill positions table
+            const pt = document.getElementById('sim-pos-tbody');
+            if (pt) {
+                pt.innerHTML = positions.map(p => {
+                    const entryTime = p.entry_time ? new Date(p.entry_time).toLocaleString('tr-TR', {
+                        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                    }) : 'N/A';
+                    const confPct = Math.min(100, Math.max(0, (p.entry_confidence||0)*100));
+                    return `
+                        <tr>
+                            <td><strong>${p.symbol}</strong></td>
+                            <td class="text-end">${p.shares || 0}</td>
+                            <td class="text-end">${(p.entry_price||0).toFixed(2)}</td>
+                            <td><span class="badge bg-info">${confPct.toFixed(0)}%</span></td>
+                            <td><span class="badge bg-secondary">${p.entry_horizon || 'N/A'}</span></td>
+                            <td class="text-end">${(p.entry_cost||0).toFixed(2)}</td>
+                            <td style="font-size:0.75rem;">${entryTime}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+            
+            // Fill trades table
+            const tt = document.getElementById('sim-trades-tbody');
+            if (tt) {
+                tt.innerHTML = trades.slice(-20).reverse().map(t => {
+                    const time = t.time ? new Date(t.time).toLocaleString('tr-TR', {
+                        hour: '2-digit', minute: '2-digit', second: '2-digit'
+                    }) : 'N/A';
+                    const actionBadge = t.action === 'buy' ? 
+                        '<span class="badge bg-success">AL</span>' : 
+                        '<span class="badge bg-danger">SAT</span>';
+                    const reasonMap = {
+                        'initial_buy': '🚀 İlk',
+                        'stop_loss': '🛑 Stop',
+                        'sell_signal': '📉 Sinyal',
+                        'confidence_drop': '⚠️ Güven↓',
+                        'rotation': '🔄 Rot.'
+                    };
+                    const reasonText = reasonMap[t.reason] || t.reason || 'N/A';
+                    return `
+                        <tr>
+                            <td style="font-size:0.7rem;">${time}</td>
+                            <td><strong>${t.symbol}</strong></td>
+                            <td>${actionBadge}</td>
+                            <td class="text-end">${t.shares || 0}</td>
+                            <td class="text-end">${(t.price||0).toFixed(2)}</td>
+                            <td style="font-size:0.75rem;">${reasonText}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+            
+            // Draw charts
+            try {
+                const labels = snapshots.map(s => s.date);
+                const values = snapshots.map(s => s.equity);
+                
+                if (values.length > 0) {
+                    const ctx = document.getElementById('simEquityChart').getContext('2d');
+                    if (window.__simEquityChart) window.__simEquityChart.destroy();
+                    window.__simEquityChart = new Chart(ctx, { 
+                        type: 'line', 
+                        data: { 
+                            labels, 
+                            datasets: [{ 
+                                label: 'Sermaye', 
+                                data: values, 
+                                borderColor: '#0d6efd', 
+                                backgroundColor: 'rgba(13,110,253,0.15)', 
+                                tension: 0.15, 
+                                fill: true, 
+                                pointRadius: 2 
+                            }] 
+                        }, 
+                        options: { 
+                            responsive: true, 
+                            maintainAspectRatio: false, 
+                            plugins: { legend: { display: false } }, 
+                            scales: { 
+                                x: { display: true }, 
+                                y: { ticks: { callback: (v) => '₺'+Number(v).toFixed(0) } } 
+                            } 
+                        } 
+                    });
+                    
+                    // Drawdown calculation
+                    const dd = [];
+                    let peak = -Infinity;
+                    for (let i = 0; i < values.length; i++) {
+                        peak = Math.max(peak, values[i] || 0);
+                        const dv = peak > 0 ? ((values[i] - peak) / peak) * 100.0 : 0;
+                        dd.push(dv);
+                    }
+                    
+                    const ctx2 = document.getElementById('simDrawdownChart').getContext('2d');
+                    if (window.__simDDChart) window.__simDDChart.destroy();
+                    window.__simDDChart = new Chart(ctx2, { 
+                        type: 'line', 
+                        data: { 
+                            labels, 
+                            datasets: [{ 
+                                label: 'Düşüş %', 
+                                data: dd, 
+                                borderColor: '#dc3545', 
+                                backgroundColor: 'rgba(220,53,69,0.15)', 
+                                tension: 0.15, 
+                                fill: true, 
+                                pointRadius: 2 
+                            }] 
+                        }, 
+                        options: { 
+                            responsive: true, 
+                            maintainAspectRatio: false, 
+                            plugins: { legend: { display: false } }, 
+                            scales: { 
+                                x: { display: true }, 
+                                y: { ticks: { callback: (v) => (Number(v) || 0).toFixed(0) + '%' } } 
+                            } 
+                        } 
+                    });
+                }
+            } catch (e) { 
+                console.warn('Chart rendering failed', e); 
+            }
+            
+            const modal = new bootstrap.Modal(document.getElementById('reportModal'));
+            modal.show();
+        }
+
         // Update health status display
         function updateHealthStatus(healthData) {
             const healthContainer = document.getElementById('health-status');
@@ -983,7 +1482,19 @@ document.addEventListener('DOMContentLoaded', function() {
             const health = healthData.health_check;
             const systems = health.systems || {};
             const overall = (health.overall_status || 'unknown').toLowerCase();
-            const badge = (s) => s === 'healthy' ? 'success' : (s === 'warning' ? 'warning' : (s === 'connected' ? 'success' : 'danger'));
+            const badge = (key, s) => {
+                try {
+                    const v = String(s || '').toLowerCase();
+                    if (key === 'automation_engine') {
+                        if (v === 'running') return 'success';
+                        if (v === 'stopped') return 'danger';
+                        if (v === 'checking' || v === 'pending') return 'warning';
+                    }
+                    if (v === 'healthy' || v === 'connected') return 'success';
+                    if (v === 'warning' || v === 'degraded') return 'warning';
+                    return 'danger';
+                } catch (_) { return 'secondary'; }
+            };
 
             // Build modern card layout consistently with static HTML above
             const card = (title, subtitle, id, statusKey) => {
@@ -995,7 +1506,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             <div class="fw-bold">${title}</div>
                             <small class="text-muted">${subtitle}</small>
                         </div>
-                        <span class="badge bg-${badge(val)}" id="${id}">${val}</span>
+                        <span class="badge bg-${badge(statusKey, val)}" id="${id}">${val}</span>
                     </div>
                 </div>`;
             };
@@ -1352,13 +1863,16 @@ document.addEventListener('DOMContentLoaded', function() {
         async function generateReport() {
             try {
                 addLog('INFO', 'Generating system report...');
-                const [repRes, histRes] = await Promise.all([
-                    fetch('/api/admin/automation/report?v=' + Date.now()),
-                    fetch('/api/internal/automation/pipeline-history?v=' + Date.now(), { headers: { 'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' } })
+                const [repRes, histRes, trainSumRes] = await Promise.all([
+                    // Use public automation report which returns { report: { aggregates, volume, ... } }
+                    fetch('/api/automation/report?v=' + Date.now()),
+                    fetch('/api/internal/automation/pipeline-history?v=' + Date.now(), { headers: { 'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' } }),
+                    fetch('/api/internal/reports/training-summary?v=' + Date.now(), { headers: { 'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' } })
                 ]);
                 const rep = repRes.ok ? await repRes.json() : { status: 'error' };
                 const hist = histRes.ok ? await histRes.json() : { status: 'error' };
-                renderReportModal(rep, hist);
+                const trainSummary = trainSumRes.ok ? await trainSumRes.json() : { status: 'error' };
+                renderReportModal(rep, hist, trainSummary);
                 const modalEl = document.getElementById('reportModal');
                 const modal = new bootstrap.Modal(modalEl);
                 modal.show();
@@ -1368,7 +1882,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
 
-        function renderReportModal(rep, hist) {
+        function renderReportModal(rep, hist, trainSummary) {
             try {
                 const body = document.getElementById('reportModalBody');
                 // Aggregate metrics since automation start
@@ -1407,34 +1921,68 @@ document.addEventListener('DOMContentLoaded', function() {
                     </tr>`;
                 }).join('');
 
+                // Training summary (best-effort)
+                const ts = trainSummary && trainSummary.status === 'success' ? trainSummary : null;
+                const tsOk = ts && (ts.ok || ts.ok === 0) ? Number(ts.ok) : null;
+                const tsFail = ts && (ts.fail || ts.fail === 0) ? Number(ts.fail) : null;
+                const tsHitMean = ts && ts.aggregates && ts.aggregates.hit_rate ? ts.aggregates.hit_rate.mean : null;
+                const tsNrmseMean = ts && ts.aggregates && ts.aggregates.nrmse ? ts.aggregates.nrmse.mean : null;
+                const tsLogPath = ts && ts.log_path ? ts.log_path : '';
+
+                // Build per-horizon table (prefer metrics file if available)
+                const mfByH = (trainSummary && trainSummary.metrics_file && trainSummary.metrics_file.by_horizon) ? trainSummary.metrics_file.by_horizon : {};
+                const aggrByH = (trainSummary && trainSummary.aggregates && trainSummary.aggregates.by_horizon) ? trainSummary.aggregates.by_horizon : {};
+                const hasMf = (() => {
+                    try {
+                        return Object.values(mfByH).some(v => {
+                            if (!v) return false;
+                            const nc = Number(v.nrmse_count || 0);
+                            const hc = Number(v.hit_rate_count || 0);
+                            const nm = (v.nrmse_mean != null);
+                            const hm = (v.hit_rate_mean != null);
+                            return (nc > 0 || hc > 0 || nm || hm);
+                        });
+                    } catch(_) { return false; }
+                })();
+                const prefByH = hasMf ? mfByH : aggrByH;
+                const hkeys = ['1d','3d','7d','14d','30d'];
+                const rowsH = hkeys.map(h => {
+                    const r = prefByH[h] || {};
+                    const nrm = (r.nrmse_mean != null) ? Number(r.nrmse_mean).toFixed(3) : '-';
+                    const hitm = (r.hit_rate_mean != null) ? (Number(r.hit_rate_mean).toFixed(2) + '%') : '-';
+                    const nc = (r.nrmse_count != null) ? r.nrmse_count : '-';
+                    const hc = (r.hit_rate_count != null) ? r.hit_rate_count : '-';
+                    return `<tr><td>${h}</td><td>${nrm}</td><td>${hitm}</td><td>${nc}</td><td>${hc}</td></tr>`;
+                }).join('');
+
                 body.innerHTML = `
                     <div class="row g-3 mb-3">
                         <div class="col-6 col-md-3">
                             <div class="p-3 rounded text-center" style="background:#f8f9fa;border:1px solid #e9ecef;">
-                                <div class="small text-muted">Cycle</div>
+                                <div class="small text-muted">Döngü</div>
                                 <div class="h4 mb-0">${cycle}</div>
-                                <div class="small text-muted mt-1">since start: ${aggr.cycles ?? '-'}</div>
+                                <div class="small text-muted mt-1">başlangıçtan beri: ${aggr.cycles ?? '-'}</div>
                             </div>
                         </div>
                         <div class="col-6 col-md-3">
                             <div class="p-3 rounded text-center" style="background:#f8fff9;border:1px solid #e2f3e7;">
-                                <div class="small text-muted">Analyzed</div>
+                                <div class="small text-muted">Analiz Edilen</div>
                                 <div class="h4 mb-0">${analyzed}</div>
-                                <div class="small text-muted mt-1">since start: ${aggr.analyzed ?? '-'}</div>
+                                <div class="small text-muted mt-1">başlangıçtan beri: ${aggr.analyzed ?? '-'}</div>
                             </div>
                         </div>
                         <div class="col-6 col-md-3">
                             <div class="p-3 rounded text-center" style="background:#f6fbff;border:1px solid #e3f0fb;">
-                                <div class="small text-muted">Collected</div>
+                                <div class="small text-muted">Toplanan</div>
                                 <div class="h4 mb-0">${collected}</div>
-                                <div class="small text-muted mt-1">since start: ${aggr.collected ?? '-'}</div>
+                                <div class="small text-muted mt-1">başlangıçtan beri: ${aggr.collected ?? '-'}</div>
                             </div>
                         </div>
                         <div class="col-6 col-md-3">
                             <div class="p-3 rounded text-center" style="background:#fffaf6;border:1px solid #fde8d9;">
-                                <div class="small text-muted">Updated</div>
+                                <div class="small text-muted">Güncellenen</div>
                                 <div class="h4 mb-0">${updated}</div>
-                                <div class="small text-muted mt-1">since start: ${aggr.updated ?? '-'}</div>
+                                <div class="small text-muted mt-1">başlangıçtan beri: ${aggr.updated ?? '-'}</div>
                             </div>
                         </div>
                     </div>
@@ -1443,10 +1991,45 @@ document.addEventListener('DOMContentLoaded', function() {
                         <div class="col-12">
                             <div class="p-3 rounded" style="background:#ffffff;border:1px solid #e9ecef;">
                                 <div class="d-flex flex-wrap gap-3 align-items-center">
-                                    <div><strong>Since Started:</strong> <span class="text-muted">${sinceStarted || '-'}</span></div>
-                                    <div><strong>Total Trainings:</strong> <span>${(aggr && (aggr.train_total ?? aggr.train_total === 0)) ? aggr.train_total : '-'}</span></div>
-                                    <div><strong>Total Signals:</strong> <span>${(aggr && (aggr.signals_total ?? aggr.signals_total === 0)) ? aggr.signals_total : '-'}</span></div>
-                                    <div><strong>YOLO Detections:</strong> <span>${(aggr && (aggr.yolo_detections ?? aggr.yolo_detections === 0)) ? aggr.yolo_detections : '-'}</span></div>
+                                    <div><strong>Training OK/Fail:</strong> <span>${(tsOk ?? '-') + ' / ' + (tsFail ?? '-')}</span></div>
+                                    <div><strong>Hit-rate mean:</strong> <span>${(tsHitMean != null) ? (tsHitMean.toFixed(2) + '%') : '-'}</span></div>
+                                    <div><strong>nRMSE mean:</strong> <span>${(tsNrmseMean != null) ? tsNrmseMean.toFixed(3) : '-'}</span></div>
+                                    <div class="text-truncate" style="max-width:420px;"><strong>Log:</strong> <span class="text-muted">${tsLogPath || '-'}</span></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row g-3 mb-3">
+                        <div class="col-12">
+                            <div class="p-3 rounded" style="background:#ffffff;border:1px solid #e9ecef;">
+                                <div class="d-flex flex-wrap gap-3 align-items-center">
+                                    <div><strong>Başlangıç:</strong> <span class="text-muted">${sinceStarted || '-'}</span></div>
+                                    <div><strong>Toplam Eğitim:</strong> <span>${(aggr && (aggr.train_total ?? aggr.train_total === 0)) ? aggr.train_total : '-'}</span></div>
+                                    <div><strong>Toplam Sinyal:</strong> <span>${(aggr && (aggr.signals_total ?? aggr.signals_total === 0)) ? aggr.signals_total : '-'}</span></div>
+                                    <div><strong>YOLO Tespiti:</strong> <span>${(aggr && (aggr.yolo_detections ?? aggr.yolo_detections === 0)) ? aggr.yolo_detections : '-'}</span></div>
+                                    <div><strong>FinGPT Sinyali:</strong> <span>${(aggr && (aggr.fingpt_detections ?? aggr.fingpt_detections === 0)) ? aggr.fingpt_detections : '-'}</span></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row g-3 mb-3">
+                        <div class="col-12">
+                            <div class="p-3 rounded" style="background:#ffffff;border:1px solid #e9ecef;">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <strong>Ufuk Bazlı Metrikler</strong>
+                                    <small class="text-muted">Son eğitim/metriklerden</small>
+                                </div>
+                                <div class="table-responsive" style="max-height:220px;">
+                                    <table class="table table-sm table-striped align-middle mb-0">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th>Ufuk</th><th>nRMSE (ortalama)</th><th>Hit-rate (ortalama)</th><th>nRMSE n</th><th>Hit n</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="perHTableBody">${rowsH}</tbody>
+                                    </table>
                                 </div>
                             </div>
                         </div>
@@ -1466,7 +2049,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         </div>
                         <div class="col-md-4">
                             <label class="form-label small">Timeframe</label>
-                            <select class="form-select form-select-sm" id="filterTimeframe" disabled>
+                            <select class="form-select form-select-sm" id="filterTimeframe">
                                 <option value="1">1d</option>
                                 <option value="3" selected>3d</option>
                                 <option value="7">7d</option>
@@ -1527,6 +2110,27 @@ document.addEventListener('DOMContentLoaded', function() {
                                             </tr>
                                         </thead>
                                         <tbody id="volumeSymbolsList"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row g-3 mt-3" id="tradableSection">
+                        <div class="col-12">
+                            <div class="p-3 rounded" style="background:#ffffff;border:1px solid #e9ecef;">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <strong>Trade Edilebilir Adaylar</strong>
+                                    <small class="text-muted">Ufuk filtresine göre</small>
+                                </div>
+                                <div class="table-responsive" style="max-height:260px;">
+                                    <table class="table table-sm table-striped align-middle mb-0">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th>Sembol</th><th>Güven</th><th>Ort. Hacim</th><th>Ufuk</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="tradableListBody"><tr><td colspan="4" class="text-muted">Yükleniyor...</td></tr></tbody>
                                     </table>
                                 </div>
                             </div>
@@ -1621,12 +2225,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         // Update search result count
                         const countEl = document.getElementById('searchResultCount');
                         if (countEl) {
-                            if (q) {
-                                countEl.textContent = `(${filtered.length} sonuç)`;
-                                countEl.className = 'text-success';
-                            } else {
-                                countEl.textContent = '';
-                            }
+                            countEl.textContent = q ? `(${filtered.length} sonuç)` : '';
+                            if (q) countEl.className = 'text-success';
                         }
                         
                         listEl.innerHTML = rowsHtml || '<tr><td colspan="3" class="text-muted">Sonuç bulunamadı</td></tr>';
@@ -1658,6 +2258,66 @@ document.addEventListener('DOMContentLoaded', function() {
                     } else if (sectionEl) {
                         sectionEl.style.display = 'none';
                     }
+                } catch (_) { /* ignore */ }
+
+                // Bind timeframe filter to per-horizon table
+                try {
+                    const tfSel = document.getElementById('filterTimeframe');
+                    const tbody = document.getElementById('perHTableBody');
+                    const map = { '1': '1d', '3': '3d', '7': '7d', '14': '14d', '30': '30d' };
+                    function renderPerHTable() {
+                        if (!tbody) return;
+                        const val = (tfSel && tfSel.value) ? tfSel.value : '3';
+                        const want = map[val] || null;
+                        const src = prefByH || {};
+                        const keys = want ? [want] : ['1d','3d','7d','14d','30d'];
+                        const html = keys.map(h => {
+                            const r = src[h] || {};
+                            const nrm = (r.nrmse_mean != null) ? Number(r.nrmse_mean).toFixed(3) : '-';
+                            const hitm = (r.hit_rate_mean != null) ? (Number(r.hit_rate_mean).toFixed(2) + '%') : '-';
+                            const nc = (r.nrmse_count != null) ? r.nrmse_count : '-';
+                            const hc = (r.hit_rate_count != null) ? r.hit_rate_count : '-';
+                            return `<tr><td>${h}</td><td>${nrm}</td><td>${hitm}</td><td>${nc}</td><td>${hc}</td></tr>`;
+                        }).join('');
+                        tbody.innerHTML = html || '<tr><td colspan="5" class="text-muted">No data</td></tr>';
+                    }
+                    if (tfSel) {
+                        tfSel.addEventListener('change', renderPerHTable);
+                    }
+                    renderPerHTable();
+                } catch (_) { /* ignore */ }
+
+                // Tradable candidates loader
+                try {
+                    const tfSel = document.getElementById('filterTimeframe');
+                    const tBody = document.getElementById('tradableListBody');
+                    const map = { '1': '1d', '3': '3d', '7': '7d', '14': '14d', '30': '30d' };
+                    async function loadTradables() {
+                        if (!tBody) return;
+                        const tf = tfSel && tfSel.value ? tfSel.value : '7';
+                        const horizon = map[tf] || '7d';
+                        tBody.innerHTML = '<tr><td colspan="4" class="text-muted">Yükleniyor...</td></tr>';
+                        try {
+                            const res = await fetch(`/api/internal/reports/tradable?horizon=${encodeURIComponent(horizon)}&limit=20`, { headers: { 'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw' } });
+                            const json = res.ok ? await res.json() : { status: 'error' };
+                            if (json && json.status === 'success') {
+                                const rows = Array.isArray(json.items) ? json.items : [];
+                                const html = rows.map(r => `<tr>
+                                    <td>${r.symbol}</td>
+                                    <td>${(Number(r.confidence || 0)).toFixed(3)}</td>
+                                    <td>${r.avg_volume != null ? Number(r.avg_volume).toLocaleString('tr-TR') : '-'}</td>
+                                    <td>${r.horizon || '-'}</td>
+                                </tr>`).join('');
+                                tBody.innerHTML = html || '<tr><td colspan="4" class="text-muted">Aday bulunamadı</td></tr>';
+                            } else {
+                                tBody.innerHTML = '<tr><td colspan="4" class="text-muted">Veri alınamadı</td></tr>';
+                            }
+                        } catch (e) {
+                            tBody.innerHTML = '<tr><td colspan="4" class="text-muted">Hata oluştu</td></tr>';
+                        }
+                    }
+                    if (tfSel) tfSel.addEventListener('change', loadTradables);
+                    loadTradables();
                 } catch (_) { /* ignore */ }
 
             } catch (e) {
@@ -1744,221 +2404,17 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // ==========================================
-        // PAPER TRADING SIMULATION FUNCTIONS
+        // Legacy paper-trading stubs (disabled)
         // ==========================================
-        
         let currentSimulationId = null;
-        
-        // Start new simulation
-        async function startSimulation() {
-            const tradeAmountInput = document.getElementById('trade-amount');
-            const durationSelect = document.getElementById('simulation-duration');
-            const startBtn = document.getElementById('start-simulation-btn');
-            const stopBtn = document.getElementById('stop-simulation-btn');
-            
-            const tradeAmount = parseFloat(tradeAmountInput.value) || 10000;
-            const durationHours = parseInt(durationSelect.value) || 48;
-            
-            try {
-                startBtn.disabled = true;
-                startBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Starting...';
-                
-                const response = await fetch('/api/simulation/start', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        initial_balance: 100000,  // Unlimited budget
-                        trade_amount: tradeAmount,  // Parametrik trade amount
-                        duration_hours: durationHours,
-                        session_name: `AI Test ${tradeAmount}₺/signal ${durationHours}h - ${new Date().toLocaleDateString()}`
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (data.status === 'success') {
-                    currentSimulationId = data.session.id;
-                    startBtn.disabled = true;
-                    stopBtn.disabled = false;
-                    
-                    updateSimulationUI(data.session);
-                    addLog('SUCCESS', `✅ Simulation started: ID ${currentSimulationId}`);
-                } else {
-                    throw new Error(data.message);
-                }
-                
-            } catch (error) {
-                addLog('ERROR', `❌ Simulation start failed: ${error.message}`);
-                alert('Simulation start failed: ' + error.message);
-            } finally {
-                startBtn.disabled = false;
-                startBtn.innerHTML = '<i class="fas fa-play me-2"></i>Start 48h Test';
-            }
+        // Redirect checkSimulationStatus to updateSimulationStatus for forward simulation
+        async function checkSimulationStatus() { 
+            return await updateSimulationStatus(); 
         }
-        
-        // Stop current simulation
-        async function stopSimulation() {
-            if (!currentSimulationId) return;
-            
-            const stopBtn = document.getElementById('stop-simulation-btn');
-            
-            try {
-                stopBtn.disabled = true;
-                stopBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Stopping...';
-                
-                const response = await fetch(`/api/simulation/${currentSimulationId}/stop`, {
-                    method: 'POST'
-                });
-                
-                const data = await response.json();
-                
-                if (data.status === 'success') {
-                    updateSimulationUI(data.session);
-                    addLog('INFO', `🛑 Simulation stopped: ID ${currentSimulationId}`);
-                    
-                    document.getElementById('start-simulation-btn').disabled = false;
-                    stopBtn.disabled = true;
-                } else {
-                    throw new Error(data.message);
-                }
-                
-            } catch (error) {
-                addLog('ERROR', `❌ Simulation stop failed: ${error.message}`);
-                alert('Simulation stop failed: ' + error.message);
-            } finally {
-                stopBtn.innerHTML = '<i class="fas fa-stop me-2"></i>Stop Test';
-            }
-        }
-        
-        // Check simulation status
-        async function checkSimulationStatus() {
-            try {
-                // Get list of recent simulations
-                const response = await fetch('/api/simulation/list');
-                const data = await response.json();
-                
-                if (data.status === 'success' && data.sessions.length > 0) {
-                    // Find active simulation
-                    const activeSession = data.sessions.find(s => s.status === 'active');
-                    
-                    if (activeSession) {
-                        currentSimulationId = activeSession.id;
-                        await updateSimulationStatus(activeSession.id);
-                    } else {
-                        // No active simulation
-                        resetSimulationUI();
-                    }
-                }
-                
-            } catch (error) {
-                console.error('Simulation status check failed:', error);
-            }
-        }
-        
-        // Update simulation status with performance data
-        async function updateSimulationStatus(sessionId) {
-            try {
-                const response = await fetch(`/api/simulation/${sessionId}/status`);
-                const data = await response.json();
-                
-                if (data.status === 'success') {
-                    const session = data.performance.session;
-                    updateSimulationUI(session);
-                    
-                    // Update trade stats if available
-                    if (data.performance.open_positions) {
-                        updateTradeStats(data.performance);
-                    }
-                }
-                
-            } catch (error) {
-                console.error('Simulation status update failed:', error);
-            }
-        }
-        
-        // Update simulation UI elements
-        function updateSimulationUI(session) {
-            document.getElementById('sim-status-text').textContent = 
-                session.status === 'active' ? 'Simulation Running' : 'Simulation Completed';
-            
-            document.getElementById('sim-details').textContent = 
-                `Started: ${new Date(session.start_time).toLocaleString()}`;
-            
-            document.getElementById('sim-balance').textContent = 
-                `₺${session.current_balance.toFixed(2)}`;
-            
-            const profitLoss = session.profit_loss_percentage;
-            const profitElement = document.getElementById('sim-profit');
-            profitElement.textContent = `${profitLoss >= 0 ? '+' : ''}${profitLoss.toFixed(2)}%`;
-            profitElement.style.color = profitLoss >= 0 ? '#28a745' : '#dc3545';
-            
-            // Update stats
-            document.getElementById('sim-trades').textContent = session.total_trades;
-            document.getElementById('sim-winrate').textContent = `${session.win_rate.toFixed(1)}%`;
-            
-            // Calculate runtime from session times
-            let runtimeHours = 0;
-            try {
-                const start = new Date(session.start_time);
-                const end = session.end_time ? new Date(session.end_time) : new Date();
-                runtimeHours = Math.max(0, (end - start) / 3600000);
-            } catch (e) {
-                runtimeHours = 0;
-            }
-            let runtimeText;
-            if (runtimeHours < 1) {
-                const runtimeMinutes = Math.floor(runtimeHours * 60);
-                runtimeText = `${runtimeMinutes}m`;
-            } else {
-                runtimeText = `${runtimeHours.toFixed(1)}h`;
-            }
-            document.getElementById('sim-runtime').textContent = runtimeText;
-            
-            // Show stats panel
-            document.getElementById('simulation-stats').style.display = 'block';
-            
-            // Update button states
-            const isActive = session.status === 'active';
-            document.getElementById('start-simulation-btn').disabled = isActive;
-            document.getElementById('stop-simulation-btn').disabled = !isActive;
-        }
-        
-        // Reset simulation UI to default state
-        function resetSimulationUI() {
-            document.getElementById('sim-status-text').textContent = 'No Active Simulation';
-            document.getElementById('sim-details').textContent = 'Start a new simulation to test AI performance';
-            document.getElementById('sim-balance').textContent = '₺0.00';
-            document.getElementById('sim-profit').textContent = '±0%';
-            document.getElementById('sim-profit').style.color = '#6c757d';
-            
-            document.getElementById('simulation-stats').style.display = 'none';
-            
-            document.getElementById('start-simulation-btn').disabled = false;
-            document.getElementById('stop-simulation-btn').disabled = true;
-            
-            currentSimulationId = null;
-        }
-        
-        // View detailed simulation results
-        function viewSimulationDetails() {
-            if (currentSimulationId) {
-                // Open simulation details in new tab/modal
-                window.open(`/api/simulation/${currentSimulationId}/status`, '_blank');
-            } else {
-                alert('No active simulation to view');
-            }
-        }
-        
-        // Update trade statistics
-        function updateTradeStats(performance) {
-            const trades = performance.trades || [];
-            const recentTrades = trades.slice(0, 5); // Last 5 trades
-            
-            // Could add more detailed trade info here
-            console.log('Recent trades:', recentTrades);
-        }
+        function updateSimulationUI(){ /* no-op */ }
+        function resetSimulationUI(){ /* no-op */ }
+        function viewSimulationDetails(){ try{ openSimDetails(); }catch(_){} }
+        function updateTradeStats(){ /* no-op */ }
 
         async function loadCoverage(){
             try{
@@ -2008,17 +2464,52 @@ document.addEventListener('DOMContentLoaded', function() {
                 const ps = (j && j.param_store && j.param_store.horizons) ? j.param_store.horizons : {};
                 const m7 = j.metrics_7d || {};
                 const m30 = j.metrics_30d || {};
+                const m90 = j.metrics_90d || {};  // ⚡ NEW: 90-day metrics
                 const ab7 = j.ab_7d || {};
+                const ab7Mag = j.ab_7d_magnitude || {};  // ⚡ NEW: Magnitude-based A/B test
+                const thresholdConfig = j.threshold_config || {};  // ⚡ NEW: Threshold configuration
                 const genAt = (j && j.param_store && j.param_store.generated_at) ? j.param_store.generated_at : '-';
-                // Header
-                let html = `<div class="mb-2"><small class="text-muted">Kalibrasyon tarihi:</small> <code>${genAt}</code>
-                <div class="small text-muted">Güven değeri isotonic kalibrasyon ile düzeltilir; eşikler sinyal kalitesi için optimize edilir.</div></div>`;
+                // Sample readiness map from skipped_horizons
+                const minSamples = Number((j && j.param_store && j.param_store.min_samples) ? j.param_store.min_samples : 150);
+                const skipArr = (j && j.param_store && Array.isArray(j.param_store.skipped_horizons)) ? j.param_store.skipped_horizons : [];
+                const skipMap = {};
+                try {
+                    (skipArr || []).forEach(x => { if (x && x.horizon) { skipMap[x.horizon] = x.reason || ''; } });
+                } catch(_) {}
+                // Header with calibration state badge
+                const cstate = j.calibration_state || {};
+                const isBypass = !!cstate.bypass;
+                const pen = (typeof cstate.penalty_factor === 'number') ? ` ×${Number(cstate.penalty_factor).toFixed(2)}` : '';
+                const badgeColor = isBypass ? 'bg-warning text-dark' : 'bg-success';
+                const badgeText = isBypass ? 'Bypass' : 'Aktif';
+                
+                // ⚡ NEW: Online adjustment status
+                const onlineAdj = j.online_adjustment || {};
+                const onlineAdjEnabled = !!onlineAdj.enabled;
+                const onlineAdjBadge = onlineAdjEnabled ? 
+                    `<span class="badge bg-info ms-2">Online Adjustment: AÇIK</span>` : 
+                    `<span class="badge bg-secondary ms-2">Online Adjustment: KAPALI</span>`;
+                
+                // ✅ SIMPLIFIED: Cleaner header
+                let html = `<div class="mb-3 p-2 bg-light rounded">
+                  <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div>
+                      <span class="badge ${badgeColor} me-2">${badgeText}</span>
+                      ${onlineAdjBadge}
+                      <small class="text-muted ms-2">Son güncelleme: ${genAt.split('T')[0]}</small>
+                    </div>
+                    <div class="form-check form-switch">
+                      <input class="form-check-input" type="checkbox" id="calibToggle" ${isBypass ? '' : 'checked'}>
+                      <label class="form-check-label" for="calibToggle">${isBypass ? 'Aktif Et' : 'Kapat'}</label>
+                    </div>
+                  </div>
+                </div>`;
                 // Helper (hoisted) for badge colors
                 function pickColor(v){ if(v===null) return '#e9ecef'; if(v>=70) return '#2a9d8f'; if(v>=50) return '#ffd166'; return '#ef476f'; }
                 // Rows with mini gauge + mini reliability
                 ['1d','3d','7d','14d','30d'].forEach((h,i)=>{
                     const th = (ps[h] && ps[h].thresholds) ? ps[h].thresholds : {};
-                    const iso = (ps[h] && ps[h].isotonic) ? ps[h].isotonic : [];
+                    // ✅ REMOVED: Isotonic badge (clutter reduction - not used anyway)
                     const accPct = (m7[h] && typeof m7[h].acc==='number') ? (m7[h].acc*100) : null;
                     const accStr = accPct!==null ? accPct.toFixed(1)+'%' : '-';
                     const cnt = (m7[h] && m7[h].count) ? m7[h].count : 0;
@@ -2033,32 +2524,132 @@ document.addEventListener('DOMContentLoaded', function() {
                     const challN = (abb && abb.chall && typeof abb.chall.n==='number') ? abb.chall.n : 0;
                     const gaugeId = `calibGauge_${h}`;
                     const gaugeId30 = `calibGauge30_${h}`;
-                    const relId = `relChart_${h}`;
+                    // Sample status badge per horizon
+                    const reason = skipMap[h];
+                    let sampleBadge = '';
+                    // Check if we have enough samples (use actual count, not just reason)
+                    const totalSamples = Math.max(cnt, cnt30);
+                    if (totalSamples === 0) {
+                        // No samples at all
+                        sampleBadge = `<span class="badge bg-secondary ms-2">Örnek yetersiz (0/${minSamples})</span>`;
+                    } else if (reason) {
+                        // Has reason (not enough samples)
+                        let got = null;
+                        try {
+                            const mm = String(reason).match(/not_enough_samples:(\d+)/);
+                            got = mm ? parseInt(mm[1], 10) : null;
+                        } catch(_) { got = null; }
+                        const txt = (got !== null && !Number.isNaN(got)) ? `Örnek yetersiz (${got}/${minSamples})` : 'Örnek yetersiz';
+                        sampleBadge = `<span class="badge bg-secondary ms-2">${txt}</span>`;
+                    } else if (totalSamples < minSamples) {
+                        // Has samples but not enough
+                        sampleBadge = `<span class="badge bg-warning text-dark ms-2">Örnek yetersiz (${totalSamples}/${minSamples})</span>`;
+                    } else {
+                        // Enough samples
+                        sampleBadge = `<span class="badge bg-success ms-2">Yeterli örnek</span>`;
+                    }
+                    // ✅ SIMPLIFIED: Cleaner layout with less clutter
+                    const hasData = cnt > 0 || cnt30 > 0;
+                    const hasProd = prodN > 0;
+                    const hasChall = challN > 0;
+                    
                     html += `
-                      <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
-                        <div class="flex-grow-1 pe-2">
-                          <div class="d-flex align-items-center">
-                            <span class="badge bg-light text-dark me-2">${h}</span>
-                            <small>Δ≥${((th.delta_thr??0.03)*100).toFixed(1)}% · conf≥${(th.conf_thr??0.65)}</small>
-                            ${lowSample ? '<span class="badge bg-warning text-dark ms-2">düşük örnek</span>':''}
+                      <div class="border rounded p-3 mb-3 ${!hasData ? 'bg-light' : 'bg-white'}">
+                        <div class="d-flex justify-content-between align-items-start">
+                          <div class="flex-grow-1">
+                            <div class="d-flex align-items-center mb-2">
+                              <span class="badge bg-primary me-2">${h}</span>
+                              ${sampleBadge}
+                            </div>
+                            ${hasData ? 
+                              `<div class="mb-2">
+                                <div class="mb-1"><small><strong>Model Başarı:</strong> Son 7 gün: <span class="badge" style="background:${pickColor(accPct)};">${accStr}</span> (${cnt} örnek)</small></div>
+                                <div class="mb-1"><small>Son 30 gün: <span class="badge" style="background:${pickColor(accPct30)};">${accStr30}</span> (${cnt30} örnek)</small></div>
+                                ${(() => {
+                                  const accPct90 = (m90[h] && typeof m90[h].acc==='number') ? (m90[h].acc*100) : null;
+                                  const accStr90 = accPct90!==null ? accPct90.toFixed(1)+'%' : '-';
+                                  const cnt90 = (m90[h] && m90[h].count) ? m90[h].count : 0;
+                                  return `<div><small>Son 90 gün: <span class="badge" style="background:${pickColor(accPct90)};">${accStr90}</span> (${cnt90} örnek)</small></div>`;
+                                })()}
+                              </div>` :
+                              '<div class="text-muted small mb-2">Henüz veri yok</div>'
+                            }
+                            ${hasProd ? 
+                              `<div class="mb-1">
+                                <small><strong>A/B Test (Yön):</strong> Prod: <span class="badge" style="background:${pickColor(prodAcc)};">${prodAcc!==null?prodAcc.toFixed(1)+'%':'-'}</span> (${prodN})
+                                ${hasChall ? 
+                                  `· Chall: <span class="badge" style="background:${pickColor(challAcc)};">${challAcc!==null?challAcc.toFixed(1)+'%':'-'}</span> (${challN})
+                                  ${challAcc !== null && prodAcc !== null && challAcc > prodAcc ? 
+                                    '<span class="badge bg-success ms-1">Challenger Daha İyi</span>' :
+                                    challAcc !== null && prodAcc !== null && challAcc < prodAcc ?
+                                    '<span class="badge bg-info ms-1">Production Daha İyi</span>' : ''
+                                  }` :
+                                  '<span class="badge bg-secondary ms-1">Challenger yok</span>'
+                                }
+                                </small>
+                                ${(() => {
+                                  const abbMag = (ab7Mag && ab7Mag[h]) ? ab7Mag[h] : {};
+                                  const prodAccMag = (abbMag && abbMag.prod && typeof abbMag.prod.acc==='number') ? (abbMag.prod.acc*100) : null;
+                                  const prodNMag = (abbMag && abbMag.prod && typeof abbMag.prod.n==='number') ? abbMag.prod.n : 0;
+                                  const challAccMag = (abbMag && abbMag.chall && typeof abbMag.chall.acc==='number') ? (abbMag.chall.acc*100) : null;
+                                  const challNMag = (abbMag && abbMag.chall && typeof abbMag.chall.n==='number') ? abbMag.chall.n : 0;
+                                  const hasProdMag = prodNMag > 0;
+                                  const hasChallMag = challNMag > 0;
+                                  if (hasProdMag || hasChallMag) {
+                                    return `<small><strong>A/B Test (Büyüklük):</strong> Prod: <span class="badge" style="background:${pickColor(prodAccMag)};">${prodAccMag!==null?prodAccMag.toFixed(1)+'%':'-'}</span> (${prodNMag})
+                                    ${hasChallMag ? 
+                                      `· Chall: <span class="badge" style="background:${pickColor(challAccMag)};">${challAccMag!==null?challAccMag.toFixed(1)+'%':'-'}</span> (${challNMag})
+                                      ${challAccMag !== null && prodAccMag !== null && challAccMag > prodAccMag ? 
+                                        '<span class="badge bg-success ms-1">Challenger Daha İyi</span>' :
+                                        challAccMag !== null && prodAccMag !== null && challAccMag < prodAccMag ?
+                                        '<span class="badge bg-info ms-1">Production Daha İyi</span>' : ''
+                                      }` :
+                                      '<span class="badge bg-secondary ms-1">Challenger yok</span>'
+                                    }
+                                    </small>`;
+                                  }
+                                  return '';
+                                })()}
+                              </div>` :
+                              hasData ? '<div class="mb-1"><small class="text-muted">A/B test verileri henüz yok</small></div>' : ''
+                            }
                           </div>
-                          <div class="small text-muted">Kapsama & doğruluk (7g): <strong>${accStr}</strong> <span class="text-muted">(n=${cnt})</span> · 30g: <strong>${accStr30}</strong> <span class="text-muted">(n=${cnt30})</span></div>
-                          <div class="small mt-1">
-                            <span class="badge me-1" style="background:${pickColor(prodAcc)};">Prod ${prodAcc!==null?prodAcc.toFixed(1)+'%':'-'}</span>
-                            <span class="text-muted">(n=${prodN||0})</span>
-                            <span class="badge ms-2 me-1" style="background:${pickColor(challAcc)};">Chall ${challAcc!==null?challAcc.toFixed(1)+'%':'-'}</span>
-                            <span class="text-muted">(n=${challN||0})</span>
-                            <small class="text-muted ms-2">A/B (7g)</small>
-                          </div>
-                        </div>
-                        <div class="d-flex align-items-center" style="gap:8px;">
-                          <canvas id="${gaugeId}" width="70" height="40"></canvas>
-                          <canvas id="${gaugeId30}" width="70" height="40"></canvas>
-                          <canvas id="${relId}" width="80" height="40"></canvas>
+                          ${hasData ? 
+                            `<div class="d-flex align-items-center ms-3" style="gap:8px;">
+                              <canvas id="${gaugeId}" width="60" height="35"></canvas>
+                              <canvas id="${gaugeId30}" width="60" height="35"></canvas>
+                            </div>` :
+                            ''
+                          }
                         </div>
                       </div>`;
                 });
                 el.innerHTML = html;
+
+                // 🔎 Readiness mini-rozet (üst başlık sağ tarafı) – local hesap (ek istek yok)
+                try {
+                    const keys = ['1d','3d','7d','14d','30d'];
+                    const need = Number(minSamples || 150);
+                    let readyCount = 0;
+                    let parts = [];
+                    keys.forEach(k=>{
+                        const c7 = (m7[k] && m7[k].count) ? m7[k].count : 0;
+                        const c30 = (m30[k] && m30[k].count) ? m30[k].count : 0;
+                        const cnt = Math.max(c7, c30);
+                        if (cnt >= need) readyCount += 1;
+                        parts.push(`${k}:${cnt}/${need}`);
+                    });
+                    const badge = document.getElementById('calibration-readiness-badge');
+                    if (badge){
+                        const allReady = (readyCount === keys.length);
+                        badge.className = 'badge ' + (allReady ? 'bg-success' : (readyCount>0 ? 'bg-warning text-dark' : 'bg-secondary'));
+                        badge.textContent = allReady ? 'Ready' : (readyCount>0 ? `Partial (${readyCount}/5)` : 'Not ready');
+                        badge.title = parts.join(' | ');
+                    }
+                } catch(e) {
+                    const badge = document.getElementById('calibration-readiness-badge');
+                    if (badge){ badge.className = 'badge bg-secondary'; badge.textContent = '—'; }
+                }
                 // Render gauges and reliability charts
                 const makeGauge = (id, pct)=>{
                     const ctx = document.getElementById(id);
@@ -2077,32 +2668,98 @@ document.addEventListener('DOMContentLoaded', function() {
                         options: {responsive:false, plugins:{legend:{display:false}, tooltip:{enabled:false}}}
                     });
                 };
-                const makeReliability = (id, isoPairs)=>{
-                    const ctx = document.getElementById(id);
-                    if(!ctx) return;
-                    // X: tahmin güveni (%), Y: gerçek isabet (%)
-                    const xs = (isoPairs||[]).map(p=> (Array.isArray(p)? p[0]: (p.c_in||0))*100);
-                    const ys = (isoPairs||[]).map(p=> (Array.isArray(p)? p[1]: (p.c_out||0))*100);
-                    const diag = [0,25,50,75,100];
-                    new Chart(ctx, {
-                        type: 'line',
-                        data: { labels: xs.length? xs : [0,100],
-                            datasets: [
-                              {label:'İdeal', data: diag, borderColor:'#ced4da', borderWidth:1, pointRadius:0, fill:false, tension:0.2},
-                              {label:'Kalibre', data: ys, borderColor:'#6c757d', borderWidth:2, pointRadius:0, fill:false, tension:0.2}
-                            ]
-                        },
-                        options: {responsive:false, plugins:{legend:{display:false}, tooltip:{enabled:false}}, scales:{x:{display:false}, y:{display:false, min:0, max:100}}}
-                    });
-                };
+                // ✅ REMOVED: makeReliability function (reliability chart not used)
                 ['1d','3d','7d','14d','30d'].forEach(h=>{
                     const accPct7 = (m7[h] && typeof m7[h].acc==='number') ? (m7[h].acc*100) : null;
                     const accPct30 = (m30[h] && typeof m30[h].acc==='number') ? (m30[h].acc*100) : null;
                     makeGauge(`calibGauge_${h}`, accPct7);
                     makeGauge(`calibGauge30_${h}`, accPct30);
-                    const iso = (ps[h] && ps[h].isotonic) ? ps[h].isotonic : [];
-                    makeReliability(`relChart_${h}`, iso);
                 });
+                // Bind toggle handler (soft toggle via internal API)
+                // ⚡ FIX: Remove old listener before adding new one to prevent duplicates
+                try {
+                    const tgl = document.getElementById('calibToggle');
+                    if (tgl) {
+                        // Remove old listener if exists
+                        if (window._calibToggleHandler) {
+                            tgl.removeEventListener('change', window._calibToggleHandler);
+                        }
+                        // Define new handler
+                        window._calibToggleHandler = async (ev) => {
+                            const toggle = ev.target;
+                            const desiredBypass = !toggle.checked; // checked => active => bypass=false
+                            
+                            try {
+                                console.log('🔧 Calibration toggle clicked:', { checked: toggle.checked, desiredBypass });
+                                
+                                // ⚡ UX: Show loading spinner in panel
+                                const summaryEl = document.getElementById('calibration-summary');
+                                const originalContent = summaryEl ? summaryEl.innerHTML : '';
+                                if (summaryEl) {
+                                    summaryEl.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin fa-2x text-primary"></i><br><small class="text-muted mt-2">Kalibrasyon güncelleniyor...</small></div>';
+                                }
+                                
+                                // ⚡ UX: Disable toggle during request
+                                toggle.disabled = true;
+                                
+                                const resp = await fetch('/api/internal/calibration/toggle', {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/json',
+                                        'X-Internal-Token': 'IBx_gsmQUL9oxymAgr67PxES7ACfKlk1Ex5F9jCCOFw'
+                                    },
+                                    body: JSON.stringify({ bypass: desiredBypass })
+                                });
+                                
+                                if (resp.ok) {
+                                    const result = await resp.json();
+                                    console.log('✅ Calibration toggle success:', result);
+                                    
+                                    // ⚡ UX: Wait a bit then reload panel (smooth transition)
+                                    setTimeout(async () => {
+                                        try {
+                                            await loadCalibrationSummary();
+                                            console.log('✅ Panel refreshed successfully');
+                                        } catch(err) {
+                                            console.error('❌ Panel refresh error:', err);
+                                            // Force reload on error
+                                            window.location.reload();
+                                        }
+                                    }, 500);
+                                } else {
+                                    const errorText = await resp.text();
+                                    console.error('❌ Calibration toggle failed:', resp.status, errorText);
+                                    
+                                    // ⚡ UX: Restore original content and revert toggle
+                                    if (summaryEl) {
+                                        summaryEl.innerHTML = originalContent;
+                                    }
+                                    toggle.checked = !toggle.checked;
+                                    toggle.disabled = false;
+                                    
+                                    // Show error
+                                    if (window.addLog) {
+                                        window.addLog('ERROR', '❌ Kalibrasyon değiştirilemedi: ' + resp.status);
+                                    }
+                                }
+                            } catch(e) {
+                                console.error('❌ Calibration toggle error:', e);
+                                
+                                // ⚡ UX: Reload panel to restore state
+                                loadCalibrationSummary();
+                                
+                                // Show error
+                                if (window.addLog) {
+                                    window.addLog('ERROR', '❌ Kalibrasyon hatası: ' + e.message);
+                                }
+                            }
+                        };
+                        // Add new listener
+                        tgl.addEventListener('change', window._calibToggleHandler);
+                    }
+                } catch(e) {
+                    console.error('❌ Calibration toggle setup error:', e);
+                }
             }catch(e){
                 const el = document.getElementById('calibration-summary');
                 if(el) el.textContent = 'Error loading';

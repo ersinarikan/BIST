@@ -37,24 +37,29 @@ class FinGPTAnalyzer:
             try:
                 # Türkçe sentiment model tercih et
                 import os
+                # ✅ FIX: Set TRANSFORMERS_CACHE and HF_HOME before loading model
+                cache_dir = os.getenv('TRANSFORMERS_CACHE', '/opt/bist-pattern/.cache/huggingface')
+                os.environ.setdefault('TRANSFORMERS_CACHE', cache_dir)
+                os.environ.setdefault('HF_HOME', cache_dir)
+                
                 use_turkish_model = os.getenv('USE_TURKISH_SENTIMENT', 'True').lower() == 'true'
                 
                 if use_turkish_model:
-                    # Türkçe sentiment modeli (öncelikli) - LOCAL PATH
-                    local_path = "/opt/bist-pattern/cache/huggingface/savasy/bert-base-turkish-sentiment-cased"
-                    if os.path.exists(local_path):
-                        model_name = local_path
-                        logger.info("🇹🇷 Türkçe sentiment modeli yükleniyor (local)...")
-                        self.model_name = "savasy/bert-base-turkish-sentiment-cased"
-                        self.tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)  # type: ignore
-                        self.model = AutoModelForSequenceClassification.from_pretrained(model_name, local_files_only=True)  # type: ignore
-                    else:
-                        # Fallback to network
-                        model_name = "savasy/bert-base-turkish-sentiment-cased"
-                        logger.info("🇹🇷 Türkçe sentiment modeli yükleniyor (network)...")
-                        self.model_name = model_name
-                        self.tokenizer = AutoTokenizer.from_pretrained(model_name)  # type: ignore
-                        self.model = AutoModelForSequenceClassification.from_pretrained(model_name)  # type: ignore
+                    # Türkçe sentiment modeli (öncelikli)
+                    model_name = "savasy/bert-base-turkish-sentiment-cased"
+                    logger.info(f"🇹🇷 Türkçe sentiment modeli yükleniyor (cache: {cache_dir})...")
+                    self.model_name = model_name
+                    try:
+                        # Try local first - cache'den yükle
+                        self.tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True, cache_dir=cache_dir)  # type: ignore
+                        self.model = AutoModelForSequenceClassification.from_pretrained(model_name, local_files_only=True, cache_dir=cache_dir)  # type: ignore
+                        logger.info("✅ Türkçe model yüklendi (local cache)")
+                    except Exception as cache_err:
+                        # Fallback to network if not in cache
+                        logger.info(f"📥 Türkçe model cache'de bulunamadı ({cache_err}), network'ten indiriliyor...")
+                        self.tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=cache_dir)  # type: ignore
+                        self.model = AutoModelForSequenceClassification.from_pretrained(model_name, cache_dir=cache_dir)  # type: ignore
+                        logger.info("✅ Türkçe model indirildi ve cache'lendi")
                 else:
                     # İngilizce FinBERT (fallback)
                     model_name = "ProsusAI/finbert"
@@ -320,8 +325,14 @@ class FinGPTAnalyzer:
         sentiment = sentiment_result.get('sentiment') or sentiment_result.get('overall_sentiment', 'neutral')
         confidence = sentiment_result.get('confidence', 0.0)
         
-        # Türkçe için düşürülmüş threshold (0.6 → 0.3)
-        if confidence < 0.3:
+        # ⚡ NEW: Confidence threshold (HPO-optimizable, default 0.3)
+        try:
+            from bist_pattern.core.config_manager import ConfigManager
+            threshold = float(ConfigManager.get('FINGPT_CONFIDENCE_THRESHOLD', '0.3'))
+        except Exception:
+            threshold = 0.3  # Default fallback
+        
+        if confidence < threshold:
             return 'NEUTRAL'
         
         if sentiment == 'positive':

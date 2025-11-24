@@ -42,10 +42,10 @@ class MLCoordinator:
             self.max_model_age_days = 10
             
         try:
-            # Align with enhanced_ml_system default: prefer ML_MIN_DATA_DAYS (fallback ML_MIN_DAYS), default 180
-            self.min_data_days = int(os.getenv('ML_MIN_DATA_DAYS', os.getenv('ML_MIN_DAYS', '180')))
+            # Align with enhanced_ml_system default: prefer ML_MIN_DATA_DAYS (fallback ML_MIN_DAYS), default 50
+            self.min_data_days = int(os.getenv('ML_MIN_DATA_DAYS', os.getenv('ML_MIN_DAYS', '50')))
         except Exception:
-            self.min_data_days = 180
+            self.min_data_days = 50
             
         try:
             self.training_cooldown_hours = int(os.getenv('ML_TRAINING_COOLDOWN_HOURS', '6'))
@@ -381,7 +381,12 @@ class MLCoordinator:
                 else:
                     logger.debug(f"⚠️ Enhanced ML model yok: {symbol}")
             except Exception as e:
-                logger.error(f"Enhanced ML tahmin hatası {symbol}: {e}")
+                # ✅ FIX: AŞAMA 6 - Model prediction hatası detaylı log
+                import traceback
+                error_trace = traceback.format_exc()
+                logger.error(f"❌ AŞAMA 6: {symbol}: Enhanced ML tahmin hatası: {e}")
+                logger.error(f"   Error type: {type(e).__name__}")
+                logger.debug(f"   Traceback:\n{error_trace}")
         
         result['timestamp'] = datetime.now().isoformat()
         result['coordinator_version'] = '1.0'

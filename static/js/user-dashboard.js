@@ -203,7 +203,7 @@ class UIRenderer {
               </button>
             </div>
           </div>
-          <div id="pred-${stock.symbol}" class="mt-2 small text-muted">
+          <div id="pred-${stock.symbol}" class="mt-0 small text-muted">
             ${predContent}
           </div>
           <div id="patt-${stock.symbol}" class="mt-2"></div>
@@ -224,7 +224,10 @@ class UIRenderer {
     const delta = signalData.delta || 0;
 
     const signal = getSignalLabel(confidence, delta, horizon);
-    const title = `${horizon.toUpperCase()} • Güven: %${confidence}`;
+    // ✅ FIX: Açıklayıcı title - Model güveni ve horizon belirtildi
+    const horizonLabel = horizon.toUpperCase().replace('D', 'G');  // 7d -> 7G
+    const deltaPct = formatPercentage(delta * 100);
+    const title = `${horizonLabel} Model Güveni: %${confidence} (Tahmin: ${deltaPct})`;
     
     signalEl.innerHTML = buildSignalHTML(
       signal.label, 
@@ -274,7 +277,21 @@ class UIRenderer {
     
     try {
       const hu = analysis?.ml_unified?.[horizon];
-      const bestTag = hu?.best || (hu?.enhanced ? 'enhanced' : (hu?.basic ? 'basic' : null));
+      // ✅ FIX: Check if enhanced exists and has better confidence/reliability than basic
+      // If best field is not set, prefer enhanced if available and has confidence > basic
+      let bestTag = hu?.best;
+      if (!bestTag) {
+        // No best field, determine best based on availability and quality
+        if (hu?.enhanced && hu?.basic) {
+          // Both exist, compare confidence/reliability
+          const enhConf = hu.enhanced.confidence || hu.enhanced.reliability || 0;
+          const basConf = hu.basic.confidence || hu.basic.reliability || 0;
+          bestTag = enhConf >= basConf ? 'enhanced' : 'basic';
+        } else {
+          // Only one exists
+          bestTag = hu?.enhanced ? 'enhanced' : (hu?.basic ? 'basic' : null);
+        }
+      }
       
       if (bestTag) {
         const badgeColor = bestTag === 'enhanced' ? 'warning text-dark' : 'info';
@@ -297,10 +314,13 @@ class UIRenderer {
       logDebug('Best model HTML error:', e);
     }
 
+    // ✅ FIX: İki satıra böl - "En iyi" badge'ı her zaman aynı hizada olsun
     el.innerHTML = `
-      ${predItems}
-      <span class="ms-2 ${changeClass}">Seçili ufuk ${horizon.toUpperCase()}: ${changeText}</span>
-      ${bestModelHTML}
+      <div class="mb-1">${predItems}</div>
+      <div class="d-flex align-items-center">
+        <span class="${changeClass}">Seçili ufuk ${horizon.toUpperCase()}: ${changeText}</span>
+        ${bestModelHTML ? `<span class="ms-2">${bestModelHTML}</span>` : ''}
+      </div>
     `;
   }
 
@@ -344,6 +364,7 @@ class UIRenderer {
 
   /**
    * Build ML unified badges for specific horizon
+   * ✅ FIX: Renk mantığı - delta_pct'e göre renk (yükseliş=yeşil, düşüş=kırmızı)
    */
   _buildMLBadges(analysis, horizon) {
     const badges = [];
@@ -360,12 +381,24 @@ class UIRenderer {
     // Basic model
     if (hu.basic) {
       const conf = Math.round((hu.basic.confidence || hu.basic.conf || 0) * 100);
+      const deltaPct = hu.basic.delta_pct;
       const isBest = best === 'basic';
+      
+      // ✅ FIX: delta_pct'e göre renk belirle
+      let color = 'info';  // Default (mavi)
+      if (typeof deltaPct === 'number') {
+        if (deltaPct > 0) {
+          color = 'success';  // Yeşil - yükseliş
+        } else if (deltaPct < 0) {
+          color = 'danger';   // Kırmızı - düşüş
+        }
+      }
+      
       const html = buildBadgeHTML(
         `Temel ${horizon.toUpperCase()}`,
-        'info',
+        color,
         `me-1 mb-1 ${isBest ? 'fw-bold' : ''}`,
-        `Temel • Güven %${conf}`
+        `Temel • Güven %${conf}${typeof deltaPct === 'number' ? ` • ${deltaPct >= 0 ? '+' : ''}${(deltaPct * 100).toFixed(1)}%` : ''}`
       );
       sources.push({ key: 'basic', html });
     }
@@ -373,12 +406,24 @@ class UIRenderer {
     // Enhanced model
     if (hu.enhanced) {
       const conf = Math.round((hu.enhanced.confidence || hu.enhanced.conf || 0) * 100);
+      const deltaPct = hu.enhanced.delta_pct;
       const isBest = best === 'enhanced';
+      
+      // ✅ FIX: delta_pct'e göre renk belirle
+      let color = 'warning';  // Default (sarı)
+      if (typeof deltaPct === 'number') {
+        if (deltaPct > 0) {
+          color = 'success';  // Yeşil - yükseliş
+        } else if (deltaPct < 0) {
+          color = 'danger';   // Kırmızı - düşüş
+        }
+      }
+      
       const html = buildBadgeHTML(
         `Gelişmiş ${horizon.toUpperCase()}`,
-        'warning',
+        color,
         `text-dark me-1 mb-1 ${isBest ? 'fw-bold' : ''}`,
-        `Gelişmiş • Güven %${conf}`
+        `Gelişmiş • Güven %${conf}${typeof deltaPct === 'number' ? ` • ${deltaPct >= 0 ? '+' : ''}${(deltaPct * 100).toFixed(1)}%` : ''}`
       );
       sources.push({ key: 'enhanced', html });
     }
@@ -391,6 +436,7 @@ class UIRenderer {
 
   /**
    * Build technical/visual pattern badges
+   * ✅ FIX: Renk mantığı - Signal'a göre renk (BULLISH=yeşil, BEARISH=kırmızı)
    */
   _buildPatternBadges(analysis, maxCount) {
     const patterns = Array.isArray(analysis.patterns) ? analysis.patterns : [];
@@ -408,13 +454,26 @@ class UIRenderer {
         const name = typeof window.translatePattern === 'function' 
           ? window.translatePattern(p.pattern || '') 
           : (p.pattern || '').toString().replace(/_/g, ' ');
-        const color = BADGE_COLORS[src] || BADGE_COLORS.default;
+        
+        // ✅ FIX: Signal'a göre renk belirle (öncelikli)
+        const signal = (p.signal || '').toUpperCase();
+        let color;
+        if (signal === 'BULLISH') {
+          color = 'success';  // Yeşil - yükseliş trendi
+        } else if (signal === 'BEARISH') {
+          color = 'danger';   // Kırmızı - düşüş trendi
+        } else if (signal === 'NEUTRAL') {
+          color = 'secondary'; // Gri - nötr
+        } else {
+          // Fallback: Source'a göre renk (eski mantık)
+          color = BADGE_COLORS[src] || BADGE_COLORS.default;
+        }
         
         return buildBadgeHTML(
           name,
           color,
           'me-1 mb-1',
-          `${translateSource(src)} • %${conf}`
+          `${translateSource(src)} • %${conf} • ${signal || 'N/A'}`
         );
       })
       .join('');
@@ -551,8 +610,11 @@ class UserDashboard {
 
     // Pattern analysis updates
     this.ws.on('pattern_analysis', (data) => {
-      if (this.state.isWatched(data.symbol)) {
-        this.state.updateAnalysis(data.symbol, data.data);
+      // ✅ FIX: Handle both formats - direct data or nested data.data
+      const symbol = data.symbol || (data.data && data.data.symbol) || null;
+      if (symbol && this.state.isWatched(symbol)) {
+        const analysis = data.data || data;  // Support both formats
+        this.state.updateAnalysis(symbol, analysis);
         this.handlePatternUpdate(data);
       }
     });
@@ -731,11 +793,15 @@ class UserDashboard {
    * Handle pattern analysis update
    */
   handlePatternUpdate(data) {
-    const { symbol, data: analysis } = data;
-    if (!this.state.isWatched(symbol)) return;
+    // ✅ FIX: Handle both formats - direct data or nested data.data
+    const symbol = data.symbol || (data.data && data.data.symbol) || null;
+    const analysis = data.data || data;  // Support both { data: {...} } and direct {...}
+    
+    if (!symbol || !this.state.isWatched(symbol)) return;
 
     // Update price
-    this.ui.updatePrice(symbol, analysis.current_price);
+    const currentPrice = analysis.current_price || analysis.price || 0;
+    this.ui.updatePrice(symbol, currentPrice);
 
     // Update signal
     const horizon = this.state.getCurrentHorizon();
@@ -746,6 +812,9 @@ class UserDashboard {
 
     // Update patterns
     this.ui.updatePatterns(symbol, analysis);
+    
+    // Update state
+    this.state.updateAnalysis(symbol, analysis);
 
     // Update timestamp
     this.ui.updateTimestamp();
@@ -765,12 +834,25 @@ class UserDashboard {
       let delta = null;
       let confidence = null;
 
-      // Try ml_unified first
+      // Try ml_unified first - use best model if available
       if (hu) {
-        const pick = hu.enhanced || hu.basic;
+        // ✅ FIX: Use best model if specified, otherwise prefer enhanced over basic
+        const bestModel = hu.best || (hu.enhanced ? 'enhanced' : (hu.basic ? 'basic' : null));
+        const pick = bestModel && hu[bestModel] ? hu[bestModel] : (hu.enhanced || hu.basic);
+        
         if (pick && typeof pick.delta_pct === 'number') {
           delta = pick.delta_pct;
-          confidence = pick.confidence || pick.reliability || 0.5;
+          // ✅ FIX: Use confidence or reliability, but don't default to 0.5 if missing
+          // If confidence is missing, try to calculate from reliability or use a lower default
+          confidence = pick.confidence;
+          if (confidence === undefined || confidence === null) {
+            confidence = pick.reliability;
+          }
+          if (confidence === undefined || confidence === null) {
+            // ✅ FIX: Lower default (0.3 = 30%) instead of 0.5 (50%)
+            // This indicates uncertainty rather than neutral confidence
+            confidence = 0.3;
+          }
         }
       }
 
@@ -779,7 +861,8 @@ class UserDashboard {
         const ep = analysis.enhanced_predictions[horizon];
         if (ep && typeof ep.ensemble_prediction === 'number') {
           delta = (ep.ensemble_prediction - current) / current;
-          confidence = ep.confidence || 0.5;
+          // ✅ FIX: Lower default (0.3) instead of 0.5
+          confidence = ep.confidence || 0.3;
         }
       }
 
@@ -788,15 +871,17 @@ class UserDashboard {
         const mp = analysis.ml_predictions[horizon];
         if (mp && typeof mp.price === 'number') {
           delta = (mp.price - current) / current;
-          confidence = 0.5; // Default for basic
+          // ✅ FIX: Lower default (0.3) for basic model
+          confidence = 0.3; // Default for basic (lower confidence)
         }
       }
 
       if (delta === null || !isFinite(delta)) return null;
 
+      // ✅ FIX: Lower default (0.3) instead of 0.5 if confidence is still missing
       return {
         delta,
-        confidence: typeof confidence === 'number' ? confidence : 0.5
+        confidence: typeof confidence === 'number' && confidence > 0 ? confidence : 0.3
       };
     } catch (e) {
       logDebug('Compute horizon signal error:', e);
@@ -1407,6 +1492,10 @@ class UserDashboard {
     }
   }
 
+  /**
+   * Render detail modal patterns
+   * ✅ FIX: Renk mantığı - Signal'a göre renk (BULLISH=yeşil, BEARISH=kırmızı)
+   */
   _renderDetailPatterns(analysis) {
     const patt = document.getElementById('detailPatterns');
     if (!patt) return;
@@ -1424,7 +1513,20 @@ class UserDashboard {
       const name = typeof window.translatePattern === 'function' 
         ? window.translatePattern(p.pattern || '') 
         : (p.pattern || '').replace(/_/g, ' ');
-      const color = BADGE_COLORS[src] || BADGE_COLORS.default;
+      
+      // ✅ FIX: Signal'a göre renk belirle (öncelikli)
+      const signal = (p.signal || '').toUpperCase();
+      let color;
+      if (signal === 'BULLISH') {
+        color = 'success';  // Yeşil - yükseliş trendi
+      } else if (signal === 'BEARISH') {
+        color = 'danger';   // Kırmızı - düşüş trendi
+      } else if (signal === 'NEUTRAL') {
+        color = 'secondary'; // Gri - nötr
+      } else {
+        // Fallback: Source'a göre renk (eski mantık)
+        color = BADGE_COLORS[src] || BADGE_COLORS.default;
+      }
       
       return `
         <div class="mb-1">
@@ -1444,6 +1546,10 @@ class UserDashboard {
     try {
       const uni = analysis?.ml_unified || {};
       const horizons = ['1d', '3d', '7d', '14d', '30d'];
+      
+      // Extract FinGPT patterns for badge (YOLO already shown in Formasyonlar)
+      const patterns = Array.isArray(analysis?.patterns) ? analysis.patterns : [];
+      const fingptPatterns = patterns.filter(p => p.source === 'FINGPT');
 
       if (Object.keys(uni).length === 0) {
         mlBox.innerHTML = '<span class="text-muted">ML tahmin bilgisi yok</span>';
@@ -1456,7 +1562,20 @@ class UserDashboard {
           return `<div class="mb-1"><strong>${h.toUpperCase()}</strong>: -</div>`;
         }
 
-        const best = item.best || (item.enhanced ? 'enhanced' : 'basic');
+        // ✅ FIX: Determine best model - use best field if available, otherwise compare quality
+        let best = item.best;
+        if (!best) {
+          // No best field, determine best based on availability and quality
+          if (item.enhanced && item.basic) {
+            // Both exist, compare confidence/reliability
+            const enhConf = item.enhanced.confidence || item.enhanced.reliability || 0;
+            const basConf = item.basic.confidence || item.basic.reliability || 0;
+            best = enhConf >= basConf ? 'enhanced' : 'basic';
+          } else {
+            // Only one exists
+            best = item.enhanced ? 'enhanced' : (item.basic ? 'basic' : null);
+          }
+        }
         const segments = [];
 
         // Process both basic and enhanced
@@ -1531,7 +1650,24 @@ class UserDashboard {
         return `<div class="mb-2"><strong>${h.toUpperCase()}</strong>: ${segments.join('')}${bestBadge}</div>`;
       }).join('');
 
-      mlBox.innerHTML = rows;
+      // Add FinGPT badge at the end (YOLO already shown in Formasyonlar section)
+      const additionalBadges = [];
+      
+      if (fingptPatterns.length > 0) {
+        const fgTop = fingptPatterns[0];
+        const fgConf = Math.round((fgTop.confidence || 0) * 100);
+        const fgSignal = fgTop.signal || 'NEUTRAL';
+        const fgNewsCount = fgTop.news_count || 0;
+        const fgIcon = fgSignal === 'BULLISH' ? '📈' : fgSignal === 'BEARISH' ? '📉' : '📊';
+        additionalBadges.push(`
+          <div class="mb-1">
+            <span class="badge bg-warning text-dark me-1">💡 Sezgisel</span>
+            <span class="text-muted small">${fgIcon} ${fgSignal} (%${fgConf}) • ${fgNewsCount} haber</span>
+          </div>
+        `);
+      }
+
+      mlBox.innerHTML = rows + (additionalBadges.length > 0 ? '<hr class="my-2">' + additionalBadges.join('') : '');
       logDebug('ML summary rendered');
     } catch (e) {
       console.error('ML summary render error:', e);

@@ -12,7 +12,8 @@ fi
 export FLASK_SECRET_KEY="${FLASK_SECRET_KEY:-daily-cron}"
 if [[ -z "${DATABASE_URL:-}" ]]; then
   DB_PASS="$(cat /opt/bist-pattern/.secrets/db_password 2>/dev/null || true)"
-  export DATABASE_URL="postgresql://bist_user:${DB_PASS}@127.0.0.1:5432/bist_pattern_db"
+  # ✅ FIX: Use PgBouncer port 6432 instead of direct Postgres 5432
+  export DATABASE_URL="postgresql://bist_user:${DB_PASS}@127.0.0.1:6432/bist_pattern_db"
 fi
 export BIST_LOG_PATH="${BIST_LOG_PATH:-/opt/bist-pattern/logs}"
 export ML_MIN_DATA_DAYS="${ML_MIN_DATA_DAYS:-200}"

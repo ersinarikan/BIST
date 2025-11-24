@@ -19,36 +19,11 @@ if [ ! -x "$PY" ]; then PY="python3"; fi
 
 log "start"
 
-# 1) outcomes (matured predictions)
-if [ "${RUN_POPULATE_OUTCOMES:-1}" != "0" ]; then
-  log "populate_outcomes"
-  if ! /opt/bist-pattern/scripts/run_populate_outcomes.sh; then
-    log "populate_outcomes FAILED"
-  fi
-else
-  log "populate_outcomes SKIPPED"
-fi
-
-# 2) metrics for yesterday
-DAY_YESTERDAY="$(date -d "yesterday" -I)"
-if [ "${RUN_EVALUATE_METRICS:-1}" != "0" ]; then
-  log "evaluate_metrics $DAY_YESTERDAY"
-  if ! /opt/bist-pattern/scripts/run_evaluate_metrics.sh "$DAY_YESTERDAY"; then
-    log "evaluate_metrics FAILED for $DAY_YESTERDAY"
-  fi
-else
-  log "evaluate_metrics SKIPPED"
-fi
-
-# 3) calibration (uses go_live/min_samples from wrapper)
-if [ "${RUN_CALIBRATE_CONFIDENCE:-1}" != "0" ]; then
-  log "calibrate_confidence"
-  if ! /opt/bist-pattern/scripts/run_calibrate_confidence.sh; then
-    log "calibrate_confidence FAILED"
-  fi
-else
-  log "calibrate_confidence SKIPPED"
-fi
+# ✅ FIX: Removed duplicates - these are handled by separate cron jobs:
+#   1) Populate Outcomes: 21:00 daily (run_populate_outcomes.sh)
+#   2) Evaluate Metrics: 00:05 daily (run_evaluate_metrics.sh)
+#   3) Calibrate Confidence: 00:15 daily (run_calibrate_confidence.sh)
+# Nightly Master only handles additional optimization tasks below
 
 # 4) optimize evidence weights (lightweight)
 if [ "${RUN_OPTIMIZE_WEIGHTS:-1}" != "0" ]; then

@@ -196,10 +196,20 @@ def register(app):
                                     ep = v['ensemble_prediction']
                                     if ep is not None:
                                         out[kk] = float(ep)
+                                        # ✅ FIX: Extract confidence if available
+                                        conf_key = f'{kk}_conf'
+                                        conf = v.get('confidence', 0.5)
+                                        if isinstance(conf, (int, float)):
+                                            out[conf_key] = float(conf)
                                 elif 'price' in v and isinstance(v['price'], (int, float)):
                                     price_val = v['price']
                                     if price_val is not None:
                                         out[kk] = float(price_val)
+                                        # ✅ FIX: Extract confidence if available
+                                        conf_key = f'{kk}_conf'
+                                        conf = v.get('confidence', 0.5)
+                                        if isinstance(conf, (int, float)):
+                                            out[conf_key] = float(conf)
                             elif isinstance(v, (int, float)):
                                 out[kk] = float(v)
                 except Exception:

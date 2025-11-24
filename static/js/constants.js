@@ -147,9 +147,9 @@ export const WS_EVENTS = {
 export const WS_CONFIG = {
   PATH: '/socket.io',
   TRANSPORTS: ['websocket', 'polling'],
-  RECONNECTION_DELAY: 1500,
+  RECONNECTION_DELAY: 3000,  // ✅ FIX: Increased from 1500ms to 3000ms to reduce server load
   RECONNECTION_ATTEMPTS: 8,
-  TIMEOUT: 20000
+  TIMEOUT: 10000  // ✅ FIX: Reduced from 20000ms to 10000ms for faster failure detection
 };
 
 // Cache and throttling

@@ -28,7 +28,8 @@ def ensure_env() -> None:
         except Exception:
             pw = ''
         if pw:
-            os.environ['DATABASE_URL'] = f'postgresql://bist_user:{pw}@127.0.0.1:5432/bist_pattern_db'
+            # ✅ FIX: Use PgBouncer port 6432 instead of direct Postgres 5432
+            os.environ['DATABASE_URL'] = f'postgresql://bist_user:{pw}@127.0.0.1:6432/bist_pattern_db'
     os.environ.setdefault('BIST_LOG_PATH', '/opt/bist-pattern/logs')
     os.environ.setdefault('ML_MIN_DATA_DAYS', '200')
 

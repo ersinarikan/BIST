@@ -94,7 +94,8 @@ def api_stocks_search():
             sql = _text("""
                 SELECT symbol, name, sector
                 FROM stocks
-                WHERE to_tsvector(:cfg, coalesce(symbol,'') || ' ' || coalesce(name,''))
+                WHERE is_active = true
+                  AND to_tsvector(:cfg, coalesce(symbol,'') || ' ' || coalesce(name,''))
                       @@ websearch_to_tsquery(:cfg, :q)
                 ORDER BY ts_rank_cd(
                     to_tsvector(:cfg, coalesce(symbol,'') || ' ' || coalesce(name,'')),
@@ -108,6 +109,7 @@ def api_stocks_search():
             # Fallback: ILIKE search
             pat = f"%{q.upper()}%"
             results = (db.session.query(Stock)
+                       .filter(Stock.is_active.is_(True))
                        .filter(or_(func.upper(Stock.symbol).like(pat), func.upper(Stock.name).like(pat)))
                        .limit(20).all())
         

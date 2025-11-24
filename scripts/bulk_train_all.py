@@ -1,8 +1,15 @@
 # flake8: noqa
 # pyright: reportMissingImports=false
 import os
+import sys
+sys.path.insert(0, '/opt/bist-pattern')
 os.environ.setdefault('PYTHONWARNINGS','ignore')
+# ✅ FIX: FinGPT cache path (www-data user can't access /root/.cache)
+os.environ.setdefault('TRANSFORMERS_CACHE', '/opt/bist-pattern/.cache/huggingface')
+os.environ.setdefault('HF_HOME', '/opt/bist-pattern/.cache/huggingface')
 from app import app, get_pattern_detector
+import logging
+from logging.handlers import RotatingFileHandler
 import traceback
 from datetime import datetime
 
@@ -32,12 +39,43 @@ with app.app_context():
         mlc = None
 
     try:
+        # Configure logging format to include PID and module
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(process)d %(name)s:%(levelname)s %(message)s')
+        # Add rotating file handler per-process under logs/training
+        try:
+            import os as _os
+            from datetime import datetime as _dt
+            _log_root = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+            _train_dir = _os.path.join(_log_root, 'training')
+            _os.makedirs(_train_dir, exist_ok=True)
+            _stamp = _dt.now().strftime('%Y%m%d_%H%M%S')
+            _pid = _os.getpid()
+            _fname = _os.path.join(_train_dir, f'train_{_stamp}_{_pid}.log')
+            _fh = RotatingFileHandler(_fname, maxBytes=10*1024*1024, backupCount=5)
+            _fh.setLevel(logging.INFO)
+            _fh.setFormatter(logging.Formatter('%(asctime)s %(process)d %(name)s:%(levelname)s %(message)s'))
+            root_logger = logging.getLogger()
+            root_logger.addHandler(_fh)
+            logging.getLogger(__name__).info(f"Training log file: {_fname}")
+        except Exception as _log_err:
+            logging.getLogger(__name__).warning(f"Training file logger setup failed: {_log_err}")
+
         # Optional stop-sentinel file path for graceful halt
         STOP_FILE = os.getenv('TRAIN_STOP_FILE', '/opt/bist-pattern/.cache/STOP_TRAIN')
         # Allow forcing a full retrain that bypasses coordinator gating
         FORCE_FULL_RETRAIN = str(os.getenv('FORCE_FULL_RETRAIN', '0')).lower() in ('1', 'true', 'yes')
-        # Ensure deterministic A→Z order
-        symbols = sorted([s.symbol for s in Stock.query.filter_by(is_active=True).all()])
+        # Ensure deterministic A→Z order and equity-only training universe with denylist fallback
+        try:
+            base_query = Stock.query.filter_by(is_active=True)
+            if hasattr(Stock, 'type'):
+                base_query = base_query.filter_by(type='EQUITY')
+            raw_symbols = [s.symbol for s in base_query.all()]
+        except Exception:
+            raw_symbols = [s.symbol for s in Stock.query.filter_by(is_active=True).all()]
+
+        import re
+        denylist = re.compile(r"USDTR|USDTRY|^XU|^OPX|^F_|VIOP|INDEX", re.IGNORECASE)
+        symbols = sorted([sym for sym in raw_symbols if sym and not denylist.search(sym)])
         ok_ml = fail_ml = skipped = 0
         ok_enh = fail_enh = 0
         log_dir = '/opt/bist-pattern/logs'
@@ -57,11 +95,24 @@ with app.app_context():
                 if df is None or getattr(df, 'empty', False):
                     df = det.get_stock_data(sym, days=0)
                 try:
-                    min_days = int(os.getenv('ML_MIN_DATA_DAYS', os.getenv('ML_MIN_DAYS', '180')))
+                    min_days = int(os.getenv('ML_MIN_DATA_DAYS', os.getenv('ML_MIN_DAYS', '50')))
                 except Exception:
-                    min_days = 180
+                    min_days = 50
+                
+                # 50 günden az veri → sadece temel analiz (Enhanced ML skip)
                 if df is None or len(df) < min_days:
+                    # Try basic ML for symbols with 25-50 days of data
+                    if len(df) >= 25:
+                        try:
+                            if ml:
+                                res = ml.train_models(sym, df)
+                                ok_ml += 1 if res else 0
+                                print(f"  [{i}] {sym}: Basic ML only ({len(df)} days)")
+                        except Exception as e:
+                            skipped += 1
+                    else:
                     skipped += 1
+                        print(f"  [{i}] {sym}: Skipped (insufficient data: {len(df)} days)")
                     continue
                 
                 # ✨ IMPROVED: Use ml_coordinator logic (like automation)

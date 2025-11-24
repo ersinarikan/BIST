@@ -78,18 +78,71 @@ class AsyncRSSNewsProvider:
     def _start_background_fetching(self):
         """Start background RSS fetching"""
         def _run_in_new_loop(coro):
+            """Run async coroutine in a new event loop (thread-safe)"""
             try:
-                loop = asyncio.new_event_loop()
+                # ✅ FIX: Get current loop or create new one in this thread
                 try:
-                    return loop.run_until_complete(coro)
-                finally:
+                    # Try to get existing loop in this thread
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # If loop is running, we need a new one in a new thread
+                        import concurrent.futures
+                        
+                        def _run_in_isolated_thread(coro):
+                            """Run coroutine in a completely isolated thread with new loop"""
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            try:
+                                return new_loop.run_until_complete(coro)
+                            finally:
+                                try:
+                                    pending = asyncio.all_tasks(new_loop)
+                                    for task in pending:
+                                        task.cancel()
+                                    if pending:
+                                        new_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                                    new_loop.close()
+                                    asyncio.set_event_loop(None)
+                                except Exception:
+                                    pass
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(_run_in_isolated_thread, coro)
+                            return future.result(timeout=30)
+                    else:
+                        return loop.run_until_complete(coro)
+                except RuntimeError:
+                    # No event loop in this thread, create new one
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
                     try:
-                        loop.close()
-                    except Exception:
-                        pass
+                        return loop.run_until_complete(coro)
+                    finally:
+                        try:
+                            pending = asyncio.all_tasks(loop)
+                            for task in pending:
+                                task.cancel()
+                            if pending:
+                                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                            loop.close()
+                            asyncio.set_event_loop(None)
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.error(f"RSS loop run error: {e}")
                 return None
+        
+        def _run_in_thread_with_loop(coro):
+            """Run coroutine in a completely isolated thread with new loop"""
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(coro)
+            finally:
+                try:
+                    loop.close()
+                    asyncio.set_event_loop(None)
+                except Exception:
+                    pass
         
         def background_fetcher():
             """Background thread that periodically fetches RSS feeds"""
@@ -98,7 +151,28 @@ class AsyncRSSNewsProvider:
                     # Check if it's time to fetch (every 5 minutes)
                     current_time = time.time()
                     if current_time - self._last_fetch_time > 300 and not self._fetching:  # 5 minutes
-                        _run_in_new_loop(self._fetch_all_feeds_async())
+                        # ✅ FIX: Use ThreadPoolExecutor for thread-safe execution
+                        import concurrent.futures
+                        
+                        def _run_in_isolated_thread():
+                            """Run in completely isolated thread with new loop"""
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            try:
+                                return loop.run_until_complete(self._fetch_all_feeds_async())
+                            finally:
+                                try:
+                                    pending = asyncio.all_tasks(loop)
+                                    for task in pending:
+                                        task.cancel()
+                                    if pending:
+                                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                                    loop.close()
+                                    asyncio.set_event_loop(None)
+                                except Exception:
+                                    pass
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                            executor.submit(_run_in_isolated_thread).result(timeout=60)
                     
                     # Sleep for 30 seconds before next check
                     time.sleep(30)
@@ -112,7 +186,29 @@ class AsyncRSSNewsProvider:
         thread.start()
         
         # Immediate first fetch (separate thread/loop)
-        self._background_pool.submit(lambda: _run_in_new_loop(self._fetch_all_feeds_async()))
+        def _first_fetch():
+            """Run first fetch in isolated thread"""
+            import concurrent.futures
+            
+            def _run_in_isolated_thread():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    return loop.run_until_complete(self._fetch_all_feeds_async())
+                finally:
+                    try:
+                        pending = asyncio.all_tasks(loop)
+                        for task in pending:
+                            task.cancel()
+                        if pending:
+                            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        loop.close()
+                        asyncio.set_event_loop(None)
+                    except Exception:
+                        pass
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                executor.submit(_run_in_isolated_thread).result(timeout=60)
+        self._background_pool.submit(_first_fetch)
     
     async def _create_session(self) -> aiohttp.ClientSession:
         """Create aiohttp session with proper configuration"""
@@ -254,6 +350,7 @@ class AsyncRSSNewsProvider:
         Returns cached news immediately
         """
         if not self.rss_sources:
+            logger.debug("📰 RSS sources not configured")
             return []
         
         try:
@@ -266,7 +363,7 @@ class AsyncRSSNewsProvider:
                     if time.time() - cached_entry['timestamp'] < self.cache_ttl:
                         all_news = cached_entry['data']
                         
-                        # Filter news relevant to symbol
+                        # ✅ STRICT FIX: Filter news relevant to symbol (symbol-specific only)
                         symbol_upper = symbol.upper()
                         relevant_news = []
                         
@@ -278,7 +375,14 @@ class AsyncRSSNewsProvider:
                                 if len(relevant_news) >= self.max_items:
                                     break
                         
-                        self._stats['cache_hits'] += 1
+                        # ✅ FIX: Only return if symbol-specific news found
+                        # Don't fall back to general financial news
+                        if relevant_news:
+                            self._stats['cache_hits'] += 1
+                            logger.debug(f"📰 Found {len(relevant_news)} specific news for {symbol}")
+                        else:
+                            logger.debug(f"📰 No specific news found for {symbol}")
+                        
                         return relevant_news[:self.max_items]
                 
                 # No fresh cache available
@@ -289,20 +393,30 @@ class AsyncRSSNewsProvider:
             return []
     
     def _is_relevant_news(self, text: str, symbol: str) -> bool:
-        """Check if news text is relevant to the symbol or general market"""
+        """Check if news text is STRICTLY relevant to the symbol"""
         if not text:
             return False
         
         text_upper = text.upper()
+        symbol_upper = symbol.upper()
         
-        # Direct symbol match
-        if symbol in text_upper:
+        # ⚠️ SPECIAL HANDLING: Symbols that are common words
+        # These need stricter matching to avoid false positives
+        AMBIGUOUS_SYMBOLS = {
+            'HEDEF': ['HEDEF GYO', 'HEDEF GAYR', 'HEDEF.IS', 'HEDEF HOLD', 'HEDEF HİSSE'],
+            'SASA': ['SASA POL', 'SASA.IS', 'SASA ŞİRKET'],
+            'MERIT': ['MERIT TUR', 'MERIT.IS', 'MERIT OTEL'],
+            'SELEC': ['SELEC.IS', 'SELEC ŞİRKET'],
+        }
+        
+        # If symbol is ambiguous, require company-specific keywords
+        if symbol_upper in AMBIGUOUS_SYMBOLS:
+            required_keywords = AMBIGUOUS_SYMBOLS[symbol_upper]
+            return any(keyword in text_upper for keyword in required_keywords)
+        
+        # For other symbols, simple match is OK
+        if symbol_upper in text_upper:
             return True
-        
-        # General financial keywords
-        for keyword in self.financial_keywords:
-            if keyword.upper() in text_upper:
-                return True
         
         return False
     
@@ -311,18 +425,66 @@ class AsyncRSSNewsProvider:
         if self._fetching:
             return False
         
+        # ✅ FIX: Use same thread-safe loop runner as _start_background_fetching
+        def _run_in_new_loop(coro):
+            """Run async coroutine in a new event loop (thread-safe)"""
+            try:
+                # ✅ FIX: Get current loop or create new one in this thread
+                try:
+                    # Try to get existing loop in this thread
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # If loop is running, we need a new one in a new thread
+                        import concurrent.futures
+                        
+                        def _run_in_isolated_thread(coro):
+                            """Run coroutine in a completely isolated thread with new loop"""
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            try:
+                                return new_loop.run_until_complete(coro)
+                            finally:
+                                try:
+                                    pending = asyncio.all_tasks(new_loop)
+                                    for task in pending:
+                                        task.cancel()
+                                    if pending:
+                                        new_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                                    new_loop.close()
+                                    asyncio.set_event_loop(None)
+                                except Exception:
+                                    pass
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(_run_in_isolated_thread, coro)
+                            return future.result(timeout=30)
+                    else:
+                        return loop.run_until_complete(coro)
+                except RuntimeError:
+                    # No event loop in this thread, create new one
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        return loop.run_until_complete(coro)
+                    finally:
+                        try:
+                            pending = asyncio.all_tasks(loop)
+                            for task in pending:
+                                task.cancel()
+                            if pending:
+                                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                            loop.close()
+                            asyncio.set_event_loop(None)
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.error(f"RSS refresh loop error: {e}")
+                return None
+        
         # Submit background refresh with graceful error handling  
         try:
             def safe_async_run():
                 try:
-                    loop = asyncio.new_event_loop()
-                    try:
-                        loop.run_until_complete(self._fetch_all_feeds_async())
-                    finally:
-                        try:
-                            loop.close()
-                        except Exception:
-                            pass
+                    _run_in_new_loop(self._fetch_all_feeds_async())
                 except RuntimeError as e:
                     if "cannot schedule new futures after interpreter shutdown" in str(e):
                         logger.debug("RSS: Interpreter shutdown, skipping background fetch")

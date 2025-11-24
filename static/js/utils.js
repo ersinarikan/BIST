@@ -90,12 +90,59 @@ export function getSignalLabel(confidence, delta, horizon = '7d') {
     if (signalType === SIGNALS.BULLISH || signalType === SIGNALS.BEARISH) {
       const labels = SIGNAL_LABELS[signalType];
       
-      if (confidence >= SIGNAL_CONFIDENCE.HIGH && abs >= MOVEMENT_THRESHOLDS.SMALL) {
-        label = confidence >= SIGNAL_CONFIDENCE.VERY_HIGH ? labels.high : labels.medium;
-      } else if (confidence >= SIGNAL_CONFIDENCE.MEDIUM && abs >= MOVEMENT_THRESHOLDS.MEDIUM) {
+      // ✅ FIX: Delta'ya göre esnek ve mantıklı sinyal belirleme
+      // Temel mantık: Confidence ve delta kombinasyonu
+      // Yüksek güven → küçük delta yeterli
+      // Düşük güven → büyük delta gerekli
+      // Çok küçük delta (< %0.1) → Bekleme (gürültü olabilir)
+      
+      // Minimum delta threshold (gürültü filtreleme)
+      const MIN_DELTA = 0.001;  // %0.1 - çok küçük hareketler gürültü olabilir
+      
+      if (abs < MIN_DELTA) {
+        // Delta çok küçük, gürültü olabilir → Bekleme
+        label = labels.low;
+      }
+      // 1. Çok yüksek güven (%85+) → Yüksek alım/satış (delta %0.5+)
+      else if (confidence >= SIGNAL_CONFIDENCE.VERY_HIGH && abs >= MOVEMENT_THRESHOLDS.SMALL) {
+        label = labels.high;
+      }
+      // 2. Yüksek güven (%70-85) → Alım/Satış sinyali (delta %0.5+)
+      else if (confidence >= SIGNAL_CONFIDENCE.HIGH && abs >= MOVEMENT_THRESHOLDS.SMALL) {
         label = labels.medium;
-      } else {
-        label = confidence >= SIGNAL_CONFIDENCE.SAFE_HOLD ? 'Güvenli bekleme' : labels.low;
+      }
+      // 3. Orta-yüksek güven (%60-70) → Delta'ya göre esnek
+      else if (confidence >= SIGNAL_CONFIDENCE.MEDIUM) {
+        // Orta güven + büyük hareket (%1.5+) → Alım/Satış
+        if (abs >= MOVEMENT_THRESHOLDS.MEDIUM) {
+          label = labels.medium;
+        }
+        // Orta güven + küçük ama anlamlı hareket (%0.2+) → Alım/Satış
+        else if (abs >= 0.002) {
+          label = labels.medium;
+        }
+        // Orta güven + çok küçük hareket → Bekleme
+        else {
+          label = labels.low;
+        }
+      }
+      // 4. Düşük güven (%55-60) → Sadece büyük hareketlerde sinyal
+      else if (confidence >= SIGNAL_CONFIDENCE.LOW) {
+        // Düşük güven + büyük hareket (%2+) → Alım/Satış
+        if (abs >= 0.02) {
+          label = labels.medium;
+        }
+        // Düşük güven + orta hareket (%1+) → Alım/Satış (daha riskli)
+        else if (abs >= 0.01) {
+          label = labels.medium;
+        }
+        else {
+          label = labels.low;
+        }
+      }
+      // 5. Çok düşük güven (< %55) → Bekleme (çok riskli)
+      else {
+        label = labels.low;
       }
     }
     

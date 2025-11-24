@@ -4,7 +4,7 @@ import os
 class Settings:
     SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "change-this-in-production")
     SQLALCHEMY_DATABASE_URI = os.getenv(
-        "DATABASE_URL", "postgresql://bist_user:5ex5chan5GE5*@localhost:5432/bist_pattern_db"
+        "DATABASE_URL", "postgresql://bist_user:5ex5chan5GE5*@127.0.0.1:6432/bist_pattern_db"
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")

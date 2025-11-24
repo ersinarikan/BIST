@@ -129,8 +129,9 @@ class Config:
     AUTO_START_PIPELINE = os.getenv('AUTO_START_PIPELINE', 'True').lower() == 'true'
 
     # Machine Learning Cache Paths
-    TRANSFORMERS_CACHE = os.getenv('TRANSFORMERS_CACHE', '/opt/bist-pattern/cache/huggingface')
-    HF_HOME = os.getenv('HF_HOME', '/opt/bist-pattern/cache/huggingface')
+    # ✅ FIX: Use .cache/huggingface (actual path) instead of cache/huggingface
+    TRANSFORMERS_CACHE = os.getenv('TRANSFORMERS_CACHE', '/opt/bist-pattern/.cache/huggingface')
+    HF_HOME = os.getenv('HF_HOME', '/opt/bist-pattern/.cache/huggingface')
 
     # Database connection alternatives (backwards compatibility)
     # Keep only env-driven values; no secrets in defaults

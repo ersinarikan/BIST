@@ -288,6 +288,7 @@ def register(app):
 
             metrics_7d, overall_acc_7d = _aggregate_last_ndays(7)
             metrics_30d, overall_acc_30d = _aggregate_last_ndays(30)
+            metrics_90d, overall_acc_90d = _aggregate_last_ndays(90)  # ⚡ NEW: 90-day metrics
 
             # A/B summary for last 7d (based on PredictionsLog.param_version tag and OutcomesLog.dir_hit)
             from models import PredictionsLog, OutcomesLog  # type: ignore
@@ -319,13 +320,89 @@ def register(app):
                     ab_7d[h][grp]['n'] = n
                     ab_7d[h][grp]['acc'] = (sum(vals) / n) if n else None
 
+            # ⚡ NEW: Calculate magnitude-based metrics for A/B test
+            ab_7d_magnitude = {}
+            try:
+                hkeys2 = ['1d', '3d', '7d', '14d', '30d']
+                ab_7d_magnitude = {h: {'prod': {'acc': None, 'n': 0}, 'chall': {'acc': None, 'n': 0}} for h in hkeys2}
+                dt_today2 = date.today()
+                dt_start2 = dt_today2 - timedelta(days=6)
+                rows2 = (
+                    db.session.query(PredictionsLog, OutcomesLog)
+                    .join(OutcomesLog, OutcomesLog.prediction_id == PredictionsLog.id)
+                    .filter(OutcomesLog.ts_eval >= dt_start2)
+                    .all()
+                )
+                tmp2 = {h: {'prod': [], 'chall': []} for h in hkeys2}
+                magnitude_tol = float(_os.getenv('MAGNITUDE_HIT_TOLERANCE', '0.05'))
+                for p2, o2 in rows2:
+                    try:
+                        h2 = (p2.horizon or '').strip()
+                        if h2 not in tmp2:
+                            continue
+                        pv2 = str(getattr(p2, 'param_version', '') or '')
+                        grp2 = 'chall' if 'ab:chall' in pv2 else 'prod'
+                        # Calculate magnitude hit on-the-fly
+                        delta_real = float(getattr(o2, 'delta_real') or 0.0)
+                        delta_pred = float(getattr(p2, 'delta_pred') or 0.0)
+                        dir_hit_val = bool(getattr(o2, 'dir_hit'))
+                        abs_err_val = float(getattr(o2, 'abs_err') or 0.0)
+                        price_eval_val = float(getattr(o2, 'price_eval') or 0.0)
+                        threshold_val = float(_os.getenv('DIRECTION_HIT_THRESHOLD', '0.005'))
+                        
+                        if dir_hit_val and price_eval_val > 0:
+                            if abs(delta_real) < threshold_val and abs(delta_pred) < threshold_val:
+                                mag_hit = 1.0
+                            elif abs_err_val / price_eval_val <= magnitude_tol:
+                                mag_hit = 1.0
+                            else:
+                                mag_hit = 0.0
+                        else:
+                            mag_hit = 0.0
+                        tmp2[h2][grp2].append(mag_hit)
+                    except Exception:
+                        continue
+                for h2 in hkeys2:
+                    for grp2 in ('prod', 'chall'):
+                        vals2 = tmp2[h2][grp2]
+                        n2 = len(vals2)
+                        ab_7d_magnitude[h2][grp2]['n'] = n2
+                        ab_7d_magnitude[h2][grp2]['acc'] = (sum(vals2) / n2) if n2 else None
+            except Exception:
+                ab_7d_magnitude = {}
+
+            # Calibration state from environment
+            try:
+                _raw = str(_os.getenv('BYPASS_ISOTONIC_CALIBRATION', '1')).strip().lower()
+                _bypass = _raw in ('1', 'true', 'yes', 'on')
+            except Exception:
+                _bypass = True
+            try:
+                _pf_env = _os.getenv('THRESHOLD_PENALTY_FACTOR', '')
+                _penalty = float(_pf_env) if (_pf_env is not None and str(_pf_env).strip() != '') else None
+            except Exception:
+                _penalty = None
+            calibration_state = {
+                'bypass': bool(_bypass),
+                'status': ('bypass' if _bypass else 'active'),
+                'penalty_factor': _penalty,
+            }
+
             return jsonify({
                 'param_store': pstore,
                 'metrics_7d': metrics_7d,
                 'overall_acc_7d': overall_acc_7d,
                 'metrics_30d': metrics_30d,
                 'overall_acc_30d': overall_acc_30d,
+                'metrics_90d': metrics_90d,  # ⚡ NEW: 90-day metrics
+                'overall_acc_90d': overall_acc_90d,  # ⚡ NEW: 90-day overall accuracy
                 'ab_7d': ab_7d,
+                'ab_7d_magnitude': ab_7d_magnitude,  # ⚡ NEW: Magnitude-based A/B test metrics
+                'calibration_state': calibration_state,
+                'threshold_config': {  # ⚡ NEW: Threshold configuration
+                    'direction_hit_threshold': float(_os.getenv('DIRECTION_HIT_THRESHOLD', '0.005')),
+                    'magnitude_hit_tolerance': float(_os.getenv('MAGNITUDE_HIT_TOLERANCE', '0.05')),
+                },
             })
         except Exception as e:
             logger.error(f"Calibration summary error: {e}")

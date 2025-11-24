@@ -49,7 +49,14 @@ const PATTERN_TRANSLATIONS = {
     'SPINNING_TOP': 'Dönen Top',
     'SHOOTING_STAR': 'Düşen Yıldız',
     'ENGULFING_BULLISH': 'Yutucu Mum (Yükseliş)',
-    'ENGULFING_BEARISH': 'Yutucu Mum (Düşüş)'
+    'ENGULFING_BEARISH': 'Yutucu Mum (Düşüş)',
+    // ✅ FIX: HARAMI ve MARUBOZU için signal'a göre çeviriler
+    'HARAMI_BULLISH': 'Harami (Yükseliş)',
+    'HARAMI_BEARISH': 'Harami (Düşüş)',
+    'HARAMI': 'Harami',  // Fallback
+    'MARUBOZU_BULLISH': 'Marubozu (Yükseliş)',
+    'MARUBOZU_BEARISH': 'Marubozu (Düşüş)',
+    'MARUBOZU': 'Marubozu'  // Fallback
 };
 
 // Pattern ismini Türkçe'ye çevir

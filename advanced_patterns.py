@@ -278,9 +278,23 @@ class AdvancedPatternDetector:
                             # Determine signal
                             if pattern_name in ['ENGULFING_BULLISH']:
                                 signal = 'BULLISH' if value > 0 else 'BEARISH'
+                                # ✅ FIX: Pattern ismini signal'a göre düzelt (ENGULFING_BULLISH vs ENGULFING_BEARISH)
+                                # Frontend'de doğru çeviri yapılabilmesi için
+                                if signal == 'BEARISH':
+                                    pattern_name = 'ENGULFING_BEARISH'
+                                # else: pattern_name zaten 'ENGULFING_BULLISH'
                             elif default_signal == 'NEUTRAL':
                                 # For neutral patterns, check if bullish or bearish
                                 signal = 'BULLISH' if value > 0 else 'BEARISH'
+                                # ✅ FIX: Pattern ismini signal'a göre düzelt (NEUTRAL pattern'ler için)
+                                if pattern_name == 'HARAMI':
+                                    pattern_name = 'HARAMI_BULLISH' if signal == 'BULLISH' else 'HARAMI_BEARISH'
+                                elif pattern_name == 'HARAMI_CROSS':
+                                    # ✅ FIX: HARAMI_CROSS için de isim sinyale göre ayarlansın
+                                    pattern_name = 'HARAMI_CROSS_BULLISH' if signal == 'BULLISH' else 'HARAMI_CROSS_BEARISH'
+                                elif pattern_name == 'MARUBOZU':
+                                    pattern_name = 'MARUBOZU_BULLISH' if signal == 'BULLISH' else 'MARUBOZU_BEARISH'
+                                # Diğer NEUTRAL pattern'ler için de eklenebilir
                             else:
                                 signal = default_signal
                             

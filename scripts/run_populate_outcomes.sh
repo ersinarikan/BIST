@@ -19,7 +19,7 @@ if [ ! -x "$PY" ]; then PY="python3"; fi
 
 echo "[populate-outcomes] $(date -Iseconds) start" >> "$BIST_LOG_PATH/populate_outcomes.log"
 LOCK_FILE="/opt/bist-pattern/logs/populate_outcomes.lock"
-exec flock -n "$LOCK_FILE" -c "nice -n 10 ionice -c2 -n7 \"$PY\" scripts/populate_outcomes.py --limit 2000 >> \"$BIST_LOG_PATH/populate_outcomes.log\" 2>&1" || {
+exec flock -n "$LOCK_FILE" -c "nice -n 10 ionice -c2 -n7 \"$PY\" scripts/populate_outcomes.py --limit 10000 >> \"$BIST_LOG_PATH/populate_outcomes.log\" 2>&1" || {
   echo "[populate-outcomes] $(date -Iseconds) busy lock: $LOCK_FILE" >> "$BIST_LOG_PATH/populate_outcomes.log"; exit 0; }
 
 

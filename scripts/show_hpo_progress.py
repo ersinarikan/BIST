@@ -1,0 +1,717 @@
+#!/usr/bin/env python3
+"""
+HPO Pipeline İlerleme Göstergesi - Yeni Versiyon
+
+Gösterir:
+- Kaçıncı trial'da olduğunu
+- O ana kadarki en iyi DirHit oranını
+- Güncel trial'daki DirHit'i
+- O an eğitim yapılıyorsa onu
+- Tamamlanan semboller ve ufuklar için istatistiksel bilgiler
+"""
+import sys
+import json
+import sqlite3
+import subprocess
+from pathlib import Path
+# datetime not required currently
+from collections import defaultdict
+from typing import Dict, Optional
+
+sys.path.insert(0, '/opt/bist-pattern')
+
+# Configuration
+STATE_FILE = Path('/opt/bist-pattern/results/continuous_hpo_state.json')
+RESULTS_DIR = Path('/opt/bist-pattern/results')
+# Canonical study directory (single source of truth)
+HPO_STUDIES_DIR = Path('/opt/bist-pattern/hpo_studies')
+TARGET_TRIALS = 1500  # PRODUCTION default
+
+
+def load_state() -> Dict:
+    """Load pipeline state"""
+    if not STATE_FILE.exists():
+        return {}
+    
+    try:
+        with open(STATE_FILE, 'r') as f:
+            content = f.read().strip()
+            if content.count('{') > 1:
+                last_brace = content.rfind('}')
+                if last_brace > 0:
+                    brace_count = 0
+                    start_pos = last_brace
+                    for i in range(last_brace, -1, -1):
+                        if content[i] == '}':
+                            brace_count += 1
+                        elif content[i] == '{':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                start_pos = i
+                                break
+                    content = content[start_pos:last_brace+1]
+            return json.loads(content)
+    except Exception:
+        return {}
+
+
+def get_active_hpo_processes() -> Dict[str, Dict]:
+    """Get active HPO processes and their information"""
+    active = {}
+    try:
+        result = subprocess.run(['ps', 'aux'], capture_output=True, text=True, timeout=5)
+        for line in result.stdout.split('\n'):
+            if 'optuna_hpo_with_feature_flags' in line and '--symbols' in line and '--horizon' in line:
+                # Parse command line
+                parts = line.split()
+                symbol = None
+                horizon = None
+                trials = TARGET_TRIALS
+                
+                for i, part in enumerate(parts):
+                    if part == '--symbols' and i + 1 < len(parts):
+                        symbol = parts[i + 1]
+                    elif part == '--horizon' and i + 1 < len(parts):
+                        try:
+                            horizon = int(parts[i + 1])
+                        except Exception:
+                            pass
+                    elif part == '--trials' and i + 1 < len(parts):
+                        try:
+                            trials = int(parts[i + 1])
+                        except Exception:
+                            pass
+                
+                if symbol and horizon:
+                    key = f"{symbol}_{horizon}d"
+                    active[key] = {
+                        'symbol': symbol,
+                        'horizon': horizon,
+                        'target_trials': trials,
+                        'pid': int(parts[1]) if len(parts) > 1 else None
+                    }
+    except Exception:
+        pass
+    
+    return active
+
+
+def get_trial_info_from_db(db_file: Path) -> Optional[Dict]:
+    """Get trial information from Optuna SQLite database"""
+    try:
+        if not db_file.exists():
+            return None
+        # ✅ FIX: Add timeout to handle concurrent access (96 HPO processes writing simultaneously)
+        # Timeout allows retry instead of immediate failure when DB is locked
+        conn = sqlite3.connect(str(db_file), timeout=30.0)
+        cursor = conn.cursor()
+        
+        # Get total trials
+        cursor.execute("SELECT COUNT(*) FROM trials")
+        total_trials = cursor.fetchone()[0]
+        
+        # Get running trials
+        cursor.execute("SELECT COUNT(*) FROM trials WHERE state='RUNNING'")
+        running_trials = cursor.fetchone()[0]
+        
+        # Get complete trials
+        cursor.execute("SELECT COUNT(*) FROM trials WHERE state='COMPLETE'")
+        complete_trials = cursor.fetchone()[0]
+        
+        # Get best trial (highest value) - Optuna v3+ uses trial_values table
+        cursor.execute("""
+            SELECT t.number, tv.value, t.state
+            FROM trials t
+            JOIN trial_values tv ON t.trial_id = tv.trial_id
+            WHERE t.state='COMPLETE' AND tv.value IS NOT NULL AND tv.value_type='FINITE'
+            ORDER BY tv.value DESC
+            LIMIT 1
+        """)
+        best_trial_row = cursor.fetchone()
+        best_trial_number = None
+        best_value = None
+        if best_trial_row:
+            best_trial_number, best_value, _ = best_trial_row
+        
+        # Get current trial (last running or last complete)
+        # ✅ FIX: Get RUNNING trial first, if none then get last COMPLETE trial
+        cursor.execute("""
+            SELECT t.number, COALESCE(tv.value, NULL), t.state
+            FROM trials t
+            LEFT JOIN trial_values tv ON t.trial_id = tv.trial_id AND tv.value_type='FINITE'
+            WHERE t.state = 'RUNNING'
+            ORDER BY t.number DESC
+            LIMIT 1
+        """)
+        current_trial_row = cursor.fetchone()
+        
+        # If no RUNNING trial, get last COMPLETE trial
+        if not current_trial_row:
+            cursor.execute("""
+                SELECT t.number, COALESCE(tv.value, NULL), t.state
+                FROM trials t
+                LEFT JOIN trial_values tv ON t.trial_id = tv.trial_id AND tv.value_type='FINITE'
+                WHERE t.state = 'COMPLETE'
+                ORDER BY t.number DESC
+                LIMIT 1
+            """)
+            current_trial_row = cursor.fetchone()
+        
+        current_trial_number = None
+        current_trial_value = None
+        current_trial_state = None
+        if current_trial_row:
+            current_trial_number, current_trial_value, current_trial_state = current_trial_row
+        
+        # Get DirHit from user_attrs for best trial
+        best_dirhit = None
+        if best_trial_number is not None:
+            # Try trial_user_attributes first (newer Optuna versions)
+            try:
+                cursor.execute("""
+                    SELECT value_json
+                    FROM trial_user_attributes
+                    WHERE trial_id = ? AND key = 'dirhit'
+                """, (best_trial_number,))
+                row = cursor.fetchone()
+                if row:
+                    try:
+                        import json
+                        best_dirhit = float(json.loads(row[0]))
+                    except Exception:
+                        pass
+            except Exception:
+                # Fallback to trial_user_attrs (older Optuna versions)
+                try:
+                    cursor.execute("""
+                        SELECT value
+                        FROM trial_user_attrs
+                        WHERE trial_id = ? AND key = 'dirhit'
+                    """, (best_trial_number,))
+                    row = cursor.fetchone()
+                    if row:
+                        try:
+                            best_dirhit = float(row[0])
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        
+        # Get DirHit from user_attrs for current trial
+        current_dirhit = None
+        if current_trial_number is not None:
+            # Try trial_user_attributes first (newer Optuna versions)
+            try:
+                cursor.execute("""
+                    SELECT value_json
+                    FROM trial_user_attributes
+                    WHERE trial_id = ? AND key = 'dirhit'
+                """, (current_trial_number,))
+                row = cursor.fetchone()
+                if row:
+                    try:
+                        import json
+                        current_dirhit = float(json.loads(row[0]))
+                    except Exception:
+                        pass
+            except Exception:
+                # Fallback to trial_user_attrs (older Optuna versions)
+                try:
+                    cursor.execute("""
+                        SELECT value
+                        FROM trial_user_attrs
+                        WHERE trial_id = ? AND key = 'dirhit'
+                    """, (current_trial_number,))
+                    row = cursor.fetchone()
+                    if row:
+                        try:
+                            current_dirhit = float(row[0])
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        
+        conn.close()
+        
+        return {
+            'total_trials': total_trials,
+            'running_trials': running_trials,
+            'complete_trials': complete_trials,
+            'best_trial_number': best_trial_number,
+            'best_value': best_value,
+            'best_dirhit': best_dirhit,
+            'current_trial_number': current_trial_number,
+            'current_trial_value': current_trial_value,
+            'current_trial_state': current_trial_state,
+            'current_dirhit': current_dirhit
+        }
+    except Exception as e:
+        import sys
+        import traceback
+        print(f"DEBUG: Error reading DB {db_file}: {e}", file=sys.stderr)
+        print(f"DEBUG: Traceback: {traceback.format_exc()}", file=sys.stderr)
+        return None
+
+
+def find_study_db(symbol: str, horizon: int, cycle: Optional[int] = None) -> Optional[Path]:
+    """Find the most recent study database file for symbol-horizon
+    
+    Priority:
+    1. New format with cycle: hpo_with_features_SYMBOL_hHORIZON_cCYCLE.db
+    2. New format (no cycle): hpo_with_features_SYMBOL_hHORIZON.db (legacy)
+    3. Old format (with timestamp): hpo_with_features_SYMBOL_hHORIZON_TIMESTAMP.db
+    
+    Args:
+        symbol: Stock symbol
+        horizon: Prediction horizon
+        cycle: Current cycle number (if None, uses state file cycle)
+    """
+    study_dirs = [HPO_STUDIES_DIR]
+    
+    # Get cycle from state if not provided
+    if cycle is None:
+        state = load_state()
+        cycle = state.get('cycle', 1)
+    
+    for study_dir in study_dirs:
+        if not study_dir.exists():
+            continue
+        
+        # ✅ FIX: Priority 1 - New format with cycle number (current format)
+        cycle_format_file = study_dir / f"hpo_with_features_{symbol}_h{horizon}_c{cycle}.db"
+        if cycle_format_file.exists():
+            return cycle_format_file
+        
+        # ✅ FIX: Priority 2 - Legacy format (no cycle) - only if cycle is 1 (first cycle)
+        if cycle == 1:
+            legacy_format_file = study_dir / f"hpo_with_features_{symbol}_h{horizon}.db"
+            if legacy_format_file.exists():
+                return legacy_format_file
+        
+        # ✅ FIX: Priority 3 - Old format (with timestamp) - fallback for legacy files
+        old_format_pattern = f"hpo_with_features_{symbol}_h{horizon}_*.db"
+        old_format_files = list(study_dir.glob(old_format_pattern))
+        if old_format_files:
+            # Filter out cycle format files, keep only timestamp format
+            timestamp_files = [f for f in old_format_files if not f.name.endswith(f'_c{cycle}.db')]
+            if timestamp_files:
+                # Return most recent old format file
+                timestamp_files = sorted(timestamp_files, key=lambda p: p.stat().st_mtime, reverse=True)
+                return timestamp_files[0]
+        
+        # ✅ FIX: Legacy patterns (for backward compatibility)
+        legacy_patterns = [
+            f"*{symbol}*h{horizon}*.db",
+            f"hpo_features_on_{symbol}_h{horizon}_*.db"
+        ]
+        for pattern in legacy_patterns:
+            legacy_files = list(study_dir.glob(pattern))
+            if legacy_files:
+                # Filter out cycle format files
+                filtered_files = [f for f in legacy_files if not f.name.endswith(f'_c{cycle}.db')]
+                if filtered_files:
+                    filtered_files = sorted(filtered_files, key=lambda p: p.stat().st_mtime, reverse=True)
+                    return filtered_files[0]
+    
+    return None
+
+
+def get_completed_tasks() -> Dict[str, Dict]:
+    """Get completed tasks from state file and also check study files for completed HPOs
+    
+    ✅ CRITICAL FIX: Only check study files from current cycle to avoid false positives from old cycles
+    """
+    state = load_state()
+    completed = {}
+    current_cycle = state.get('cycle', 1)
+    
+    # ✅ FIX: State dosyasında 'state' key'i var, 'tasks' değil
+    # Format: {"cycle": 1, "state": {"SYMBOL_HORIZONd": {...}, ...}}
+    tasks = state.get('state', {})
+    
+    # tasks bir dictionary (key: "SYMBOL_HORIZONd", value: task dict)
+    for key, task in tasks.items():
+        if isinstance(task, dict) and task.get('status') == 'completed':
+            # ✅ FIX: Only include tasks from current cycle
+            task_cycle = task.get('cycle', 0)
+            if task_cycle != current_cycle:
+                continue
+                
+            symbol = task.get('symbol', '')
+            horizon = task.get('horizon', 0)
+            task_key = f"{symbol}_{horizon}d"
+            
+            completed[task_key] = {
+                'symbol': symbol,
+                'horizon': horizon,
+                'hpo_dirhit': task.get('hpo_dirhit'),
+                'training_dirhit': task.get('training_dirhit'),
+                'adaptive_dirhit': task.get('adaptive_dirhit'),
+                'training_dirhit_wfv': task.get('training_dirhit_wfv'),
+                'training_dirhit_online': task.get('training_dirhit_online')
+            }
+    
+    # ✅ CRITICAL FIX: Also check study files for HPOs that completed but state file wasn't updated
+    # BUT: Only check study files from current cycle to avoid false positives from old cycles
+    study_dirs = [HPO_STUDIES_DIR]
+    for study_dir in study_dirs:
+        if not study_dir.exists():
+            continue
+        
+        # ✅ FIX: Find study files with cycle number (current format)
+        cycle_pattern = f'hpo_with_features_*_h*_c{current_cycle}.db'
+        db_files = list(study_dir.glob(cycle_pattern))
+        
+        # ✅ FIX: Also check legacy format (no cycle) only if cycle is 1
+        if current_cycle == 1:
+            legacy_pattern = 'hpo_with_features_*_h*.db'
+            legacy_files = list(study_dir.glob(legacy_pattern))
+            # Filter out cycle format files
+            legacy_files = [f for f in legacy_files if not f.name.endswith(f'_c{current_cycle}.db')]
+            db_files.extend(legacy_files)
+        
+        for db_file in db_files:
+            try:
+                # Extract symbol, horizon, and cycle from filename
+                name = db_file.name.replace('.db', '')
+                parts = name.split('_')
+                if len(parts) >= 5 and parts[0] == 'hpo' and parts[1] == 'with' and parts[2] == 'features':
+                    symbol = parts[3]
+                    horizon_str = parts[4]  # e.g., "h1"
+                    
+                    # Check if cycle number is in filename
+                    file_cycle = None
+                    if len(parts) >= 6 and parts[5].startswith('c'):
+                        try:
+                            file_cycle = int(parts[5][1:])
+                        except (ValueError, IndexError):
+                            pass
+                    
+                    # ✅ CRITICAL FIX: Only process files from current cycle
+                    if file_cycle is not None and file_cycle != current_cycle:
+                        continue
+                    # Legacy files (no cycle) are only valid for cycle 1
+                    if file_cycle is None and current_cycle != 1:
+                        continue
+                    
+                    if horizon_str.startswith('h'):
+                        try:
+                            horizon = int(horizon_str[1:])
+                            task_key = f"{symbol}_{horizon}d"
+                            
+                            # Skip if already in completed from state file
+                            if task_key in completed:
+                                continue
+                            
+                            # Check if this study has 1500 complete trials (HPO finished)
+                            trial_info = get_trial_info_from_db(db_file)
+                            if trial_info and trial_info.get('complete_trials', 0) >= 1490:  # Allow some margin
+                                # This HPO completed but state file doesn't show it as completed
+                                # Add it to completed list with info from study file
+                                if task_key not in completed:
+                                    completed[task_key] = {
+                                        'symbol': symbol,
+                                        'horizon': horizon,
+                                        'hpo_dirhit': trial_info.get('best_dirhit'),
+                                        'training_dirhit': None,
+                                        'adaptive_dirhit': None,
+                                        'training_dirhit_wfv': None,
+                                        'training_dirhit_online': None,
+                                        'from_study_file': True  # Mark as detected from study file
+                                    }
+                        except (ValueError, IndexError):
+                            continue
+            except Exception:
+                continue
+    
+    return completed
+
+
+def get_training_status() -> Dict[str, Dict]:
+    """Get training status from state file"""
+    state = load_state()
+    training = {}
+    
+    # ✅ FIX: State dosyasında 'state' key'i var, 'tasks' değil
+    tasks = state.get('state', {})
+    if not tasks:
+        return training
+    
+    # tasks bir dictionary (key: "SYMBOL_HORIZONd", value: task dict)
+    for key, task in tasks.items():
+        if isinstance(task, dict) and task.get('status') == 'training':
+            symbol = task.get('symbol', '')
+            horizon = task.get('horizon', 0)
+            task_key = f"{symbol}_{horizon}d"
+            
+            training[task_key] = {
+                'symbol': symbol,
+                'horizon': horizon
+            }
+    
+    return training
+
+
+def calculate_statistics(completed: Dict[str, Dict]) -> Dict:
+    """Calculate statistics for completed tasks"""
+    stats = {
+        'total_completed': len(completed),
+        'total_symbols': len(set(v['symbol'] for v in completed.values())),
+        'total_horizons': len(set(v['horizon'] for v in completed.values())),
+        'avg_hpo_dirhit': None,
+        'avg_training_dirhit': None,
+        'avg_adaptive_dirhit': None,
+        'best_hpo_dirhit': None,
+        'best_training_dirhit': None,
+        'best_adaptive_dirhit': None,
+        'horizon_stats': defaultdict(lambda: {'count': 0, 'avg_hpo': None, 'avg_training': None})
+    }
+    
+    hpo_dirhits = []
+    training_dirhits = []
+    adaptive_dirhits = []
+    
+    for key, task in completed.items():
+        horizon = task['horizon']
+        stats['horizon_stats'][horizon]['count'] += 1
+        
+        if task.get('hpo_dirhit') is not None:
+            hpo_dirhits.append(task['hpo_dirhit'])
+            if stats['horizon_stats'][horizon]['avg_hpo'] is None:
+                stats['horizon_stats'][horizon]['avg_hpo'] = []
+            stats['horizon_stats'][horizon]['avg_hpo'].append(task['hpo_dirhit'])
+        
+        if task.get('adaptive_dirhit') is not None:
+            adaptive_dirhits.append(task['adaptive_dirhit'])
+        
+        training_dirhit = task.get('adaptive_dirhit') or task.get('training_dirhit_online') or task.get('training_dirhit_wfv') or task.get('training_dirhit')
+        if training_dirhit is not None:
+            training_dirhits.append(training_dirhit)
+            if stats['horizon_stats'][horizon]['avg_training'] is None:
+                stats['horizon_stats'][horizon]['avg_training'] = []
+            stats['horizon_stats'][horizon]['avg_training'].append(training_dirhit)
+    
+    if hpo_dirhits:
+        stats['avg_hpo_dirhit'] = sum(hpo_dirhits) / len(hpo_dirhits)
+        stats['best_hpo_dirhit'] = max(hpo_dirhits)
+    
+    if training_dirhits:
+        stats['avg_training_dirhit'] = sum(training_dirhits) / len(training_dirhits)
+        stats['best_training_dirhit'] = max(training_dirhits)
+    
+    if adaptive_dirhits:
+        stats['avg_adaptive_dirhit'] = sum(adaptive_dirhits) / len(adaptive_dirhits)
+        stats['best_adaptive_dirhit'] = max(adaptive_dirhits)
+    
+    # Calculate averages per horizon
+    for horizon, h_stats in stats['horizon_stats'].items():
+        if h_stats['avg_hpo']:
+            h_stats['avg_hpo'] = sum(h_stats['avg_hpo']) / len(h_stats['avg_hpo'])
+        if h_stats['avg_training']:
+            h_stats['avg_training'] = sum(h_stats['avg_training']) / len(h_stats['avg_training'])
+    
+    return stats
+
+
+def main():
+    """Main function"""
+    print("=" * 100)
+    print("📊 HPO PIPELINE İLERLEME RAPORU")
+    print("=" * 100)
+    print()
+    
+    # Load state
+    state = load_state()
+    cycle = state.get('cycle', 0)
+    print(f"🔄 Cycle: {cycle}")
+    print()
+    
+    # Get active HPO processes
+    active_hpo = get_active_hpo_processes()
+    
+    # Get training status
+    training = get_training_status()
+    
+    # Get completed tasks
+    completed = get_completed_tasks()
+    
+    # Calculate statistics
+    stats = calculate_statistics(completed)
+    
+    # Display active HPOs
+    if active_hpo:
+        print("🔬 HPO YAPILIYOR:")
+        print("-" * 100)
+        for key, info in sorted(active_hpo.items()):
+            symbol = info['symbol']
+            horizon = info['horizon']
+            target_trials = info['target_trials']
+            
+            # Find study database (for current cycle)
+            state = load_state()
+            current_cycle = state.get('cycle', 1)
+            db_file = find_study_db(symbol, horizon, cycle=current_cycle)
+            if db_file:
+                trial_info = get_trial_info_from_db(db_file)
+                if trial_info:
+                    total = trial_info['total_trials']
+                    running = trial_info['running_trials']
+                    complete = trial_info['complete_trials']
+                    best_dirhit = trial_info.get('best_dirhit')
+                    current_dirhit = trial_info.get('current_dirhit')
+                    current_trial = trial_info.get('current_trial_number')
+                    best_trial = trial_info.get('best_trial_number')
+                    
+                    # Format output
+                    status_line = f"   {symbol}_{horizon}d: Trial {total}/{target_trials}"
+                    if running > 0:
+                        status_line += f" (Running: {running}, Complete: {complete})"
+                    else:
+                        status_line += f" (Complete: {complete})"
+                    
+                    print(status_line)
+                    
+                    # Show current trial DirHit
+                    if current_trial is not None:
+                        current_state = trial_info.get('current_trial_state', 'UNKNOWN')
+                        if current_state == 'RUNNING':
+                            # RUNNING trial - show trial number but indicate it's still running
+                            if current_dirhit is not None:
+                                print(f"      📍 Güncel Trial #{current_trial} (Running): DirHit = {current_dirhit:.2f}%")
+                            elif trial_info.get('current_trial_value') is not None:
+                                print(f"      📍 Güncel Trial #{current_trial} (Running): Score = {trial_info['current_trial_value']:.2f}")
+                            else:
+                                # RUNNING trial has no value yet - try to show last COMPLETE trial's value
+                                # Get last COMPLETE trial from DB
+                                db_file = find_study_db(symbol, horizon)
+                                if db_file and db_file.exists():
+                                    try:
+                                        # ✅ FIX: Add timeout for concurrent access
+                                        conn = sqlite3.connect(str(db_file), timeout=30.0)
+                                        cursor = conn.cursor()
+                                        cursor.execute("""
+                                            SELECT t.number, COALESCE(tv.value, NULL)
+                                            FROM trials t
+                                            LEFT JOIN trial_values tv ON t.trial_id = tv.trial_id AND tv.value_type='FINITE'
+                                            WHERE t.state = 'COMPLETE' AND tv.value IS NOT NULL
+                                            ORDER BY t.number DESC
+                                            LIMIT 1
+                                        """)
+                                        last_complete = cursor.fetchone()
+                                        conn.close()
+                                        if last_complete and last_complete[1] is not None:
+                                            print(f"      📍 Güncel Trial #{current_trial} (Running - hesaplanıyor...), Son Tamamlanan: Trial #{last_complete[0]} Score = {last_complete[1]:.2f}")
+                                        else:
+                                            print(f"      📍 Güncel Trial #{current_trial} (Running - hesaplanıyor...)")
+                                    except Exception:
+                                        print(f"      📍 Güncel Trial #{current_trial} (Running - hesaplanıyor...)")
+                                else:
+                                    print(f"      📍 Güncel Trial #{current_trial} (Running - hesaplanıyor...)")
+                        else:
+                            # COMPLETE trial - show value
+                        if current_dirhit is not None:
+                            print(f"      📍 Güncel Trial #{current_trial}: DirHit = {current_dirhit:.2f}%")
+                        elif trial_info.get('current_trial_value') is not None:
+                            print(f"      📍 Güncel Trial #{current_trial}: Score = {trial_info['current_trial_value']:.2f}")
+                    
+                    # Show best DirHit
+                    if best_trial is not None:
+                        if best_dirhit is not None:
+                            print(f"      🏆 En İyi Trial #{best_trial}: DirHit = {best_dirhit:.2f}%")
+                        elif trial_info.get('best_value') is not None:
+                            print(f"      🏆 En İyi Trial #{best_trial}: Score = {trial_info['best_value']:.2f}")
+                    
+                    print()
+                else:
+                    import sys
+                    print(f"   {symbol}_{horizon}d: Veritabanı okunamadı (DB: {db_file})", file=sys.stderr)
+                    print(f"   {symbol}_{horizon}d: Veritabanı okunamadı")
+                    print()
+            else:
+                import sys
+                print(f"DEBUG: No DB file found for {symbol}_{horizon}d", file=sys.stderr)
+                print(f"   {symbol}_{horizon}d: Study dosyası bulunamadı")
+                print()
+    else:
+        print("🔬 HPO YAPILIYOR: Yok")
+        print()
+    
+    # Display training
+    if training:
+        print("🎓 EĞİTİM YAPILIYOR:")
+        print("-" * 100)
+        for key, info in sorted(training.items()):
+            print(f"   {info['symbol']}_{info['horizon']}d")
+        print()
+    else:
+        print("🎓 EĞİTİM YAPILIYOR: Yok")
+        print()
+    
+    # Display completed tasks
+    if completed:
+        print("✅ TAMAMLANAN GÖREVLER:")
+        print("-" * 100)
+        for key, task in sorted(completed.items()):
+            symbol = task['symbol']
+            horizon = task['horizon']
+            hpo_dirhit = task.get('hpo_dirhit')
+            adaptive_dirhit = task.get('adaptive_dirhit')
+            training_dirhit = task.get('training_dirhit_online') or task.get('training_dirhit_wfv') or task.get('training_dirhit')
+            from_study_file = task.get('from_study_file', False)
+            
+            line = f"   {symbol}_{horizon}d:"
+            if hpo_dirhit is not None:
+                line += f" HPO DirHit={hpo_dirhit:.2f}%"
+            if adaptive_dirhit is not None:
+                line += f" Training DirHit={adaptive_dirhit:.2f}%"
+            elif training_dirhit is not None:
+                line += f" Training DirHit={training_dirhit:.2f}%"
+            if from_study_file:
+                line += " ⚠️ (State dosyasında 'completed' değil, study dosyasından tespit edildi)"
+            print(line)
+        print()
+    else:
+        print("✅ TAMAMLANAN GÖREVLER: Yok")
+        print()
+    
+    # Display statistics
+    if stats['total_completed'] > 0:
+        print("📊 İSTATİSTİKLER:")
+        print("-" * 100)
+        print(f"   Toplam Tamamlanan: {stats['total_completed']} görev")
+        print(f"   Toplam Sembol: {stats['total_symbols']}")
+        print(f"   Toplam Ufuk: {stats['total_horizons']}")
+        
+        if stats['avg_hpo_dirhit'] is not None:
+            print(f"   Ortalama HPO DirHit: {stats['avg_hpo_dirhit']:.2f}%")
+        if stats['best_hpo_dirhit'] is not None:
+            print(f"   En İyi HPO DirHit: {stats['best_hpo_dirhit']:.2f}%")
+        
+        if stats['avg_training_dirhit'] is not None:
+            print(f"   Ortalama Training DirHit: {stats['avg_training_dirhit']:.2f}%")
+        if stats['best_training_dirhit'] is not None:
+            print(f"   En İyi Training DirHit: {stats['best_training_dirhit']:.2f}%")
+        
+        if stats['avg_adaptive_dirhit'] is not None:
+            print(f"   Ortalama Adaptive DirHit: {stats['avg_adaptive_dirhit']:.2f}%")
+        if stats['best_adaptive_dirhit'] is not None:
+            print(f"   En İyi Adaptive DirHit: {stats['best_adaptive_dirhit']:.2f}%")
+        
+        print()
+        print("   Ufuk Bazında İstatistikler:")
+        for horizon in sorted(stats['horizon_stats'].keys()):
+            h_stats = stats['horizon_stats'][horizon]
+            print(f"      {horizon}d: {h_stats['count']} görev", end="")
+            if h_stats['avg_hpo'] is not None:
+                print(f", Ort. HPO DirHit: {h_stats['avg_hpo']:.2f}%", end="")
+            if h_stats['avg_training'] is not None:
+                print(f", Ort. Training DirHit: {h_stats['avg_training']:.2f}%", end="")
+            print()
+        print()
+    else:
+        print("📊 İSTATİSTİKLER: Henüz tamamlanan görev yok")
+        print()
+
+
+if __name__ == '__main__':
+    main()

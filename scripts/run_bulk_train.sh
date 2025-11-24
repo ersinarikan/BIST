@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-umask 0022
+# ✅ FIX: Set umask for group-writable files (002 = group writable)
+umask 0002
 
 ROOT_DIR="/opt/bist-pattern"
 cd "$ROOT_DIR"
@@ -23,6 +24,24 @@ fi
 
 export PYTHONWARNINGS=ignore
 export PYTHONPATH="$ROOT_DIR"
+# Default: let coordinator decide; set to 1 only for forced backfills
+export FORCE_FULL_RETRAIN=0
+export ML_MAX_MODEL_AGE_DAYS=6
+
+# ⚡ Load HPO parameters from latest optimization (if available)
+# This allows the bulk training to use optimized hyperparameters
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/load_hpo_params.sh"
+
+# ⚡ Enable all ML improvements for normal training (not HPO)
+export ML_USE_ADAPTIVE_LEARNING=1  # Phase 2 incremental learning on test data
+export ML_USE_SMART_ENSEMBLE=1     # Smart ensemble (consensus + performance)
+export ML_USE_STACKED_SHORT=1      # Meta-stacking for short horizons (1/3/7d)
+export ML_USE_REGIME_DETECTION=1  # Regime-aware feature weighting
+export STRICT_HORIZON_FEATURES=1  # Horizon-specific features
+export ENABLE_SEED_BAGGING=1      # Multi-seed training for robustness
+export N_SEEDS=3                  # Number of seeds for bagging
+export ML_EARLY_STOP_ROUNDS=50    # Early stopping rounds
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   echo "[DRY_RUN] Verifying environment and imports..."

@@ -33,9 +33,35 @@ access_log_format = (
 # Process naming
 proc_name = "bist-pattern-gunicorn"
 
-# Daemon mode
-daemon = os.getenv("GUNICORN_DAEMON", "False").lower() == "true"
+# Daemon mode - Always False when running under systemd
+daemon = False
+# PID file - optional, systemd doesn't need it but we keep for compatibility
 pidfile = os.getenv("GUNICORN_PIDFILE", "/opt/bist-pattern/gunicorn.pid")
+# Remove stale PID file on startup (handled by systemd ExecStartPre)
+if pidfile and os.path.exists(pidfile):
+    try:
+        # Check if process is actually running
+        with open(pidfile, 'r') as f:
+            old_pid = int(f.read().strip())
+        try:
+            # Check if this PID is actually a gunicorn process
+            try:
+                import psutil  # type: ignore
+            proc = psutil.Process(old_pid)
+            if 'gunicorn' not in ' '.join(proc.cmdline()).lower():
+                # PID file is stale (not a gunicorn process)
+                    os.remove(pidfile)
+            except ImportError:
+                # psutil yoksa temizlik yapmak güvenli
+                os.remove(pidfile)
+            except Exception:
+                # Her durumda güvenli tarafta kal: PID dosyasını temizle
+            os.remove(pidfile)
+        except Exception:
+            # PID dosyasını okuyamadıysak sessiz geç
+            pass
+    except Exception:
+        pass
 
 # User and group (env ile özelleştirilebilir)
 user = os.getenv("GUNICORN_USER", "www-data")

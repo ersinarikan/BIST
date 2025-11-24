@@ -50,7 +50,7 @@ class WebSocketHandler {
       reconnectionDelay: WS_CONFIG.RECONNECTION_DELAY,
       reconnectionAttempts: WS_CONFIG.RECONNECTION_ATTEMPTS,
       timeout: WS_CONFIG.TIMEOUT,
-      forceNew: true
+      forceNew: false  // ✅ FIX: Don't force new connection, reuse existing if available
     });
 
     this._attachEventListeners();

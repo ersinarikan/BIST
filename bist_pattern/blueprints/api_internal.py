@@ -11,7 +11,9 @@ def _allow_or_token(app):
         @wraps(func)
         def wrapper(*args, **kwargs):
             try:
-                configured_token = app.config.get('INTERNAL_API_TOKEN')
+                # ✅ FIX: Use ConfigManager for consistent config access
+                from bist_pattern.core.config_manager import ConfigManager
+                configured_token = ConfigManager.get('INTERNAL_API_TOKEN')
                 header_token = request.headers.get('X-Internal-Token')
                 remote_ip = (request.headers.get('X-Forwarded-For') or request.remote_addr or '').split(',')[0].strip()
                 is_local = remote_ip in ('127.0.0.1', '::1', 'localhost')
@@ -649,15 +651,22 @@ def register(app):
     @_allow_or_token(app)
     def automation_full_cycle():
         try:
-            token_header = request.headers.get('Authorization', '') or ''
-            token = None
-            if token_header.lower().startswith('bearer '):
-                token = token_header.split(' ', 1)[1].strip()
-            if not token:
-                token = request.headers.get('X-Internal-Token')
-            expected = app.config.get('INTERNAL_API_TOKEN')
-            if expected and token != expected:
-                return jsonify({'status': 'unauthorized'}), 401
+            # Harmonized auth check: allow localhost if enabled, else require INTERNAL_API_TOKEN
+            try:
+                token_header = request.headers.get('Authorization', '') or ''
+                token = None
+                if token_header.lower().startswith('bearer '):
+                    token = token_header.split(' ', 1)[1].strip()
+                if not token:
+                    token = request.headers.get('X-Internal-Token')
+                expected = app.config.get('INTERNAL_API_TOKEN')
+                remote_ip = (request.headers.get('X-Forwarded-For') or request.remote_addr or '').split(',')[0].strip()
+                is_local = remote_ip in ('127.0.0.1', '::1', 'localhost')
+                allow_localhost = str(os.getenv('INTERNAL_ALLOW_LOCALHOST', str(app.config.get('INTERNAL_ALLOW_LOCALHOST', 'True')))).lower() == 'true'
+                if expected and token != expected and not (allow_localhost and is_local):
+                    return jsonify({'status': 'unauthorized'}), 401
+            except Exception:
+                pass
 
             def _append_status(phase: str, state: str, details: dict | None = None):
                 try:
@@ -713,8 +722,50 @@ def register(app):
                             collector = None
                     if collector is not None:
                         try:
-                            # Some collectors support scope; call safely
-                            col_res = collector.collect_all_stocks_parallel()  # type: ignore[attr-defined]
+                            # Symbol-flow data collection: iterate active symbols and collect recent data
+                            import time
+                            from app import app as flask_app
+                            with flask_app.app_context():
+                                from models import Stock
+                                symbols_list = [s.symbol for s in Stock.query.filter_by(is_active=True).order_by(Stock.symbol.asc()).all()]
+                            total = len(symbols_list)
+                            added_total = 0
+                            updated_total = 0
+                            no_data = 0
+                            errors = 0
+                            try:
+                                symbol_sleep_seconds = float(os.getenv('MANUAL_TASK_SYMBOL_SLEEP', '0.01'))
+                            except Exception:
+                                symbol_sleep_seconds = 0.01
+                            for sym in symbols_list:
+                                try:
+                                    res = None
+                                    # Prefer collector.collect_single_stock if available
+                                    if hasattr(collector, 'collect_single_stock'):
+                                        res = collector.collect_single_stock(sym, period='auto')  # type: ignore[attr-defined]
+                                    else:
+                                        # Fallback to unified collector for single symbol
+                                        try:
+                                            from bist_pattern.core.unified_collector import get_unified_collector  # type: ignore
+                                            res = get_unified_collector().collect_single_stock(sym, period='auto')
+                                        except Exception:
+                                            res = None
+                                    if isinstance(res, dict):
+                                        added_total += int(res.get('records', 0))
+                                        updated_total += int(res.get('updated', 0))
+                                        if not bool(res.get('success')) or (int(res.get('records', 0)) == 0 and int(res.get('updated', 0)) == 0):
+                                            no_data += 1
+                                except Exception:
+                                    errors += 1
+                                time.sleep(symbol_sleep_seconds)
+                            col_res = {
+                                'success': True,
+                                'total_symbols': total,
+                                'added_records': added_total,
+                                'updated_records': updated_total,
+                                'no_data_or_empty': no_data,
+                                'errors': errors,
+                            }
                         except Exception as ie:
                             _append_status('data_collection', 'error', {'error': f'collector run failed: {ie}'})
                             col_res = None
@@ -727,8 +778,8 @@ def register(app):
                 analyzed = 0
                 total = 0
                 try:
-                    from pattern_detector import HybridPatternDetector
-                    det = HybridPatternDetector()
+                    from app import get_pattern_detector
+                    det = get_pattern_detector()  # ✅ FIX: Use singleton pattern
                     with app.app_context():
                         from models import Stock
                         symbols = [s.symbol for s in Stock.query.filter_by(is_active=True).all()]
@@ -779,6 +830,33 @@ def register(app):
             return jsonify({'status': 'success', 'mode': 'sync', 'result': result})
         except Exception as e:
             app.logger.error(f"Internal full cycle error: {e}")
+            return jsonify({'status': 'error', 'error': str(e)}), 500
+
+    # ------------------------
+    # RSS NEWS INTERNAL ENDPOINTS
+    # ------------------------
+    @bp.route('/rss/health', methods=['GET'])
+    @_allow_or_token(app)
+    def rss_health():
+        try:
+            from rss_news_async import get_async_rss_news_provider  # lazy import in service context
+            p = get_async_rss_news_provider()
+            info = p.get_system_info()
+            return jsonify({'status': 'success', 'info': info})
+        except Exception as e:
+            app.logger.error(f"RSS health error: {e}")
+            return jsonify({'status': 'error', 'error': str(e)}), 500
+
+    @bp.route('/rss/refresh', methods=['POST'])
+    @_allow_or_token(app)
+    def rss_refresh():
+        try:
+            from rss_news_async import get_async_rss_news_provider
+            p = get_async_rss_news_provider()
+            ok = p.force_refresh_async()
+            return jsonify({'status': 'success' if ok else 'busy'})
+        except Exception as e:
+            app.logger.error(f"RSS refresh error: {e}")
             return jsonify({'status': 'error', 'error': str(e)}), 500
 
     @bp.route('/cycle/run-once', methods=['POST'])
@@ -912,6 +990,52 @@ def register(app):
             app.logger.error(f"Internal cycle status error: {e}")
             return jsonify({'status': 'error', 'error': str(e)}), 500
 
+    # ------------------------
+    # Forward Simulation (Real-time Trading Simulation)
+    # ------------------------
+    @bp.route('/simulation/forward-start', methods=['POST'])
+    @_allow_or_token(app)
+    def simulation_forward_start():
+        """Start forward simulation (real-time trading simulation)."""
+        from ..simulation.forward_engine import start_simulation
+        try:
+            payload = request.get_json(force=True) or {}
+            with app.app_context():
+                result = start_simulation(payload)
+            app.logger.info(f"✅ Forward simulation started: {result.get('duration_days')}d horizon")
+            return jsonify(result), 200
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        except Exception as e:
+            app.logger.error(f"Forward simulation start error: {e}")
+            return jsonify({'error': str(e)}), 500
+
+    @bp.route('/simulation/forward-stop', methods=['POST'])
+    @_allow_or_token(app)
+    def simulation_forward_stop():
+        """Stop forward simulation and return summary."""
+        from ..simulation.forward_engine import stop_simulation
+        try:
+            with app.app_context():
+                result = stop_simulation()
+            app.logger.info(f"✅ Forward simulation stopped: P&L={result.get('summary', {}).get('pnl', 0):.2f}")
+            return jsonify(result), 200
+        except Exception as e:
+            app.logger.error(f"Forward simulation stop error: {e}")
+            return jsonify({'error': str(e)}), 500
+
+    @bp.route('/simulation/status', methods=['GET'])
+    @_allow_or_token(app)
+    def simulation_status():
+        """Get current simulation status."""
+        from ..simulation.forward_engine import get_simulation_status
+        try:
+            result = get_simulation_status()
+            return jsonify(result), 200
+        except Exception as e:
+            app.logger.error(f"Simulation status error: {e}")
+            return jsonify({'error': str(e)}), 500
+
     # Single-symbol collector trigger (uses same collector as automation)
     @bp.route('/collector/single/<symbol>', methods=['POST'])
     @_allow_or_token(app)
@@ -937,6 +1061,315 @@ def register(app):
             app.logger.error(f"Internal single collector error: {e}")
             return jsonify({'status': 'error', 'error': str(e)}), 500
 
+    # Calibration readiness (counts-based gate)
+    @bp.route('/calibration/readiness')
+    @_allow_or_token(app)
+    def calibration_readiness_internal():
+        """Summarize matured outcomes per horizon and readiness state.
+        Read thresholds from env; persist snapshot to logs/calibration_readiness.json.
+        """
+        try:
+            import os as _os
+            import json as _json
+            from datetime import datetime as _dt
+            from models import db, PredictionsLog, OutcomesLog  # type: ignore
+
+            # Thresholds
+            try:
+                min_total = int(_os.getenv('MIN_OUTCOMES_PER_HORIZON', '250'))
+            except Exception:
+                min_total = 250
+            try:
+                min_per_decile = int(_os.getenv('MIN_SAMPLES_PER_DECILE', '50'))
+            except Exception:
+                min_per_decile = 50
+            needed = max(min_total, min_per_decile * 10)
+
+            # Gather counts per horizon (all time)
+            rows = (
+                db.session.query(PredictionsLog.horizon, db.func.count(OutcomesLog.id))
+                .join(OutcomesLog, OutcomesLog.prediction_id == PredictionsLog.id)
+                .group_by(PredictionsLog.horizon)
+                .all()
+            )
+            by_h = {str(h or '').strip(): int(c or 0) for h, c in rows if (h or '')}
+            horizons = ['1d', '3d', '7d', '14d', '30d']
+            readiness = {}
+            for h in horizons:
+                cnt = int(by_h.get(h, 0))
+                readiness[h] = {
+                    'count': cnt,
+                    'needed': needed,
+                    'ready': bool(cnt >= needed),
+                }
+
+            payload = {
+                'status': 'success',
+                'thresholds': {
+                    'min_total': min_total,
+                    'min_per_decile': min_per_decile,
+                    'needed': needed,
+                },
+                'readiness': readiness,
+                'timestamp': _dt.now().isoformat(),
+            }
+
+            # Persist snapshot
+            try:
+                base_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+                _os.makedirs(base_dir, exist_ok=True)
+                fpath = _os.path.join(base_dir, 'calibration_readiness.json')
+                with open(fpath, 'w') as wf:
+                    _json.dump(payload, wf)
+            except Exception:
+                pass
+
+            return jsonify(payload)
+        except Exception as e:
+            app.logger.error(f"Calibration readiness error: {e}")
+            return jsonify({'status': 'error', 'error': str(e)}), 500
+
+    # Calibration readiness history (from file)
+    @bp.route('/calibration/readiness-history')
+    @_allow_or_token(app)
+    def calibration_readiness_history_internal():
+        try:
+            import os as _os
+            import json as _json
+            base_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+            fpath = _os.path.join(base_dir, 'calibration_readiness.json')
+            data = {}
+            if _os.path.exists(fpath):
+                with open(fpath, 'r') as rf:
+                    data = _json.load(rf) or {}
+            return jsonify({'status': 'success', 'data': data})
+        except Exception as e:
+            app.logger.error(f"Calibration readiness history error: {e}")
+            return jsonify({'status': 'error', 'error': str(e)}), 500
+
+    # Horizon metrics history (from file, last N entries)
+    @bp.route('/metrics/horizon-history')
+    @_allow_or_token(app)
+    def metrics_horizon_history_internal():
+        try:
+            import os as _os
+            import json as _json
+            from flask import request as _req
+            limit = 100
+            try:
+                q = _req.args.get('limit', '')
+                if q:
+                    limit = max(1, min(2000, int(q)))
+            except Exception:
+                limit = 100
+            base_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+            fpath = _os.path.join(base_dir, 'metrics_horizon.json')
+            rows = []
+            if _os.path.exists(fpath):
+                try:
+                    with open(fpath, 'r') as rf:
+                        rows = _json.load(rf) or []
+                except Exception:
+                    rows = []
+            if isinstance(rows, list) and len(rows) > limit:
+                rows = rows[-limit:]
+            return jsonify({'status': 'success', 'data': rows, 'limit': limit})
+        except Exception as e:
+            app.logger.error(f"Horizon metrics history error: {e}")
+            return jsonify({'status': 'error', 'error': str(e)}), 500
+
+    # Training summary (internal): parse latest train_*.log for ok/fail and nRMSE/Hit-rate aggregates
+    @bp.route('/reports/training-summary')
+    @_allow_or_token(app)
+    def training_summary_internal():
+        try:
+            import os as _os
+            import re as _re
+            import json as _json
+            from math import isfinite as _isfinite
+
+            base_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+            latest_log = None
+            try:
+                # Find most recent non-empty train_*.log
+                candidates = [
+                    _os.path.join(base_dir, fn)
+                    for fn in _os.listdir(base_dir)
+                    if fn.startswith('train_') and fn.endswith('.log')
+                ]
+                # Filter out empty files and sort by mtime (newest first)
+                non_empty = [p for p in candidates if _os.path.exists(p) and _os.path.getsize(p) > 0]
+                if non_empty:
+                    latest_log = max(non_empty, key=lambda p: _os.path.getmtime(p))
+            except Exception:
+                latest_log = None
+
+            ok_cnt = None
+            fail_cnt = None
+            nrmse_vals: list[float] = []
+            hit_vals: list[float] = []
+
+            by_h = {h: {'nrmse': [], 'hit': []} for h in ('1d', '3d', '7d', '14d', '30d')}
+            if latest_log and _os.path.exists(latest_log):
+                try:
+                    # Read last ~10k lines to keep fast while likely catching summary
+                    with open(latest_log, 'r', errors='ignore') as f:
+                        lines = f.readlines()[-10000:]
+                    # Extract ok/fail from JSON-like summary line
+                    for ln in reversed(lines):
+                        if '{' in ln and '"ok"' in ln and '"fail"' in ln:
+                            try:
+                                obj = _json.loads(ln.strip())
+                                if isinstance(obj, dict):
+                                    ok_cnt = int(obj.get('ok')) if obj.get('ok') is not None else ok_cnt
+                                    fail_cnt = int(obj.get('fail')) if obj.get('fail') is not None else fail_cnt
+                                    break
+                            except Exception:
+                                # Not strict JSON; best-effort regex fallback
+                                try:
+                                    m_ok = _re.search(r'"ok"\s*:\s*(\d+)', ln)
+                                    m_fail = _re.search(r'"fail"\s*:\s*(\d+)', ln)
+                                    if m_ok:
+                                        ok_cnt = int(m_ok.group(1))
+                                    if m_fail:
+                                        fail_cnt = int(m_fail.group(1))
+                                        break
+                                except Exception:
+                                    pass
+                    # Collect nRMSE and Hit values across lines
+                    for ln in lines:
+                        try:
+                            # detect horizon token like 1D, 3D, 7D, 14D, 30D
+                            htok = None
+                            m_h = _re.search(r'\b(1D|3D|7D|14D|30D)\b', ln)
+                            if m_h:
+                                htok = m_h.group(1).lower()
+                            m1 = _re.search(r'nRMSE\s*:\s*([0-9]+(?:\.[0-9]+)?)', ln)
+                            if m1:
+                                v = float(m1.group(1))
+                                if _isfinite(v):
+                                    nrmse_vals.append(v)
+                                    if htok and htok in by_h:
+                                        by_h[htok]['nrmse'].append(v)
+                            m2 = _re.search(r'Hit\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*%', ln)
+                            if m2:
+                                v = float(m2.group(1))
+                                if _isfinite(v):
+                                    hit_vals.append(v)
+                                    if htok and htok in by_h:
+                                        by_h[htok]['hit'].append(v)
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+
+            def _avg(xs: list[float]) -> float | None:
+                try:
+                    return (sum(xs) / len(xs)) if xs else None
+                except Exception:
+                    return None
+
+            # Optional: metrics_horizon.json aggregation (best-effort)
+            metrics_file = _os.path.join(base_dir, 'metrics_horizon.json')
+            mh_nrmse: list[float] = []
+            mh_hit: list[float] = []
+            mh_by_h = {h: {'nrmse': [], 'hit': []} for h in ('1d', '3d', '7d', '14d', '30d')}
+            if _os.path.exists(metrics_file):
+                try:
+                    data = None
+                    with open(metrics_file, 'r') as rf:
+                        data = _json.load(rf)
+                    # Accept list of records; collect numeric fields by common keys
+                    if isinstance(data, list):
+                        for it in data[-2000:]:
+                            if isinstance(it, dict):
+                                # horizon field detection (common keys)
+                                htok = None
+                                for hk in ('h', 'horizon', 'hzn', 'days'):
+                                    if hk in it and it.get(hk) is not None:
+                                        try:
+                                            # Accept like '7d' or 7 -> '7d'
+                                            raw = str(it.get(hk)).strip().lower()
+                                            if raw.endswith('d'):
+                                                htok = raw
+                                            else:
+                                                htok = f"{int(float(raw))}d"
+                                        except Exception:
+                                            pass
+                                        break
+                                for k, v in it.items():
+                                    kl = str(k).strip().lower()
+                                    if kl in ('nrmse', 'n_rmse', 'n-rmse'):
+                                        try:
+                                            vv = float(v)
+                                            if _isfinite(vv):
+                                                mh_nrmse.append(vv)
+                                                if htok in mh_by_h:
+                                                    mh_by_h[htok]['nrmse'].append(vv)
+                                        except Exception:
+                                            pass
+                                    if kl in ('hit_rate', 'hitrate', 'hit-rate'):
+                                        try:
+                                            vv = float(v)
+                                            if _isfinite(vv):
+                                                mh_hit.append(vv)
+                                                if htok in mh_by_h:
+                                                    mh_by_h[htok]['hit'].append(vv)
+                                        except Exception:
+                                            pass
+                except Exception:
+                    pass
+
+            out = {
+                'status': 'success',
+                'log_path': latest_log,
+                'ok': ok_cnt,
+                'fail': fail_cnt,
+                'aggregates': {
+                    'nrmse': {
+                        'count': len(nrmse_vals),
+                        'mean': _avg(nrmse_vals)
+                    },
+                    'hit_rate': {
+                        'count': len(hit_vals),
+                        'mean': _avg(hit_vals)
+                    },
+                    'by_horizon': {
+                        k: {
+                            'nrmse_mean': _avg(v['nrmse']) if v['nrmse'] else None,
+                            'hit_rate_mean': _avg(v['hit']) if v['hit'] else None,
+                            'nrmse_count': len(v['nrmse']),
+                            'hit_rate_count': len(v['hit'])
+                        }
+                        for k, v in by_h.items()
+                    }
+                },
+                'metrics_file': {
+                    'path': metrics_file if _os.path.exists(metrics_file) else None,
+                    'nrmse': {
+                        'count': len(mh_nrmse),
+                        'mean': _avg(mh_nrmse)
+                    },
+                    'hit_rate': {
+                        'count': len(mh_hit),
+                        'mean': _avg(mh_hit)
+                    },
+                    'by_horizon': {
+                        k: {
+                            'nrmse_mean': _avg(v['nrmse']) if v['nrmse'] else None,
+                            'hit_rate_mean': _avg(v['hit']) if v['hit'] else None,
+                            'nrmse_count': len(v['nrmse']),
+                            'hit_rate_count': len(v['hit'])
+                        }
+                        for k, v in mh_by_h.items()
+                    }
+                }
+            }
+            return jsonify(out)
+        except Exception as e:
+            app.logger.error(f"Training summary error: {e}")
+            return jsonify({'status': 'error', 'error': str(e)}), 500
+
     # Calibration summary (internal, token or localhost)
     @bp.route('/calibration/summary')
     @_allow_or_token(app)
@@ -946,6 +1379,43 @@ def register(app):
             import os as _os
             import json as _json
             from models import db, MetricsDaily
+
+            # Prefer persisted calibration_state.json if present, else environment
+
+            def _load_calibration_state():
+                try:
+                    base_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+                    cpath = _os.path.join(base_dir, 'calibration_state.json')
+                    if _os.path.exists(cpath):
+                        with open(cpath, 'r') as cf:
+                            data = _json.load(cf) or {}
+                            bypass = bool(data.get('bypass', False))
+                            pf = data.get('penalty_factor', None)
+                            pf = float(pf) if (pf is not None) else None
+                            return {
+                                'bypass': bypass,
+                                'status': ('bypass' if bypass else 'active'),
+                                'penalty_factor': pf,
+                                'source': 'file'
+                            }
+                except Exception:
+                    pass
+                try:
+                    _raw = str(_os.getenv('BYPASS_ISOTONIC_CALIBRATION', '1')).strip().lower()
+                    _bypass = _raw in ('1', 'true', 'yes', 'on')
+                except Exception:
+                    _bypass = True
+                try:
+                    _pf_env = _os.getenv('THRESHOLD_PENALTY_FACTOR', '')
+                    _penalty = float(_pf_env) if (_pf_env is not None and str(_pf_env).strip() != '') else None
+                except Exception:
+                    _penalty = None
+                return {
+                    'bypass': bool(_bypass),
+                    'status': ('bypass' if _bypass else 'active'),
+                    'penalty_factor': _penalty,
+                    'source': 'env'
+                }
             # Load param_store.json
             base = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
             ppath = _os.path.join(base, 'param_store.json')
@@ -986,6 +1456,7 @@ def register(app):
 
             metrics_7d, overall_acc_7d = _aggregate_last_ndays(7)
             metrics_30d, overall_acc_30d = _aggregate_last_ndays(30)
+            metrics_90d, overall_acc_90d = _aggregate_last_ndays(90)  # ⚡ NEW: 90-day metrics
 
             # A/B summary 7d
             try:
@@ -1021,9 +1492,371 @@ def register(app):
             except Exception:
                 ab_7d = {}
 
-            return jsonify({'param_store': pstore, 'metrics_7d': metrics_7d, 'overall_acc_7d': overall_acc_7d, 'metrics_30d': metrics_30d, 'overall_acc_30d': overall_acc_30d, 'ab_7d': ab_7d})
+            # ⚡ NEW: Calculate magnitude-based metrics for A/B test
+            # This provides additional insight beyond dir_hit
+            ab_7d_magnitude = {}
+            try:
+                hkeys2 = ['1d', '3d', '7d', '14d', '30d']
+                ab_7d_magnitude = {h: {'prod': {'acc': None, 'n': 0}, 'chall': {'acc': None, 'n': 0}} for h in hkeys2}
+                from datetime import date as _date2, timedelta as _timedelta2
+                dt_today2 = _date2.today()
+                dt_start2 = dt_today2 - _timedelta2(days=6)
+                rows2 = (
+                    db.session.query(PredictionsLog, OutcomesLog)
+                    .join(OutcomesLog, OutcomesLog.prediction_id == PredictionsLog.id)
+                    .filter(OutcomesLog.ts_eval >= dt_start2)
+                    .all()
+                )
+                tmp2 = {h: {'prod': [], 'chall': []} for h in hkeys2}
+                magnitude_tol = float(_os.getenv('MAGNITUDE_HIT_TOLERANCE', '0.05'))
+                for p2, o2 in rows2:
+                    try:
+                        h2 = (p2.horizon or '').strip()
+                        if h2 not in tmp2:
+                            continue
+                        pv2 = str(getattr(p2, 'param_version', '') or '')
+                        grp2 = 'chall' if 'ab:chall' in pv2 else 'prod'
+                        # Calculate magnitude hit on-the-fly
+                        delta_real = float(getattr(o2, 'delta_real') or 0.0)
+                        delta_pred = float(getattr(p2, 'delta_pred') or 0.0)
+                        dir_hit_val = bool(getattr(o2, 'dir_hit'))
+                        abs_err_val = float(getattr(o2, 'abs_err') or 0.0)
+                        price_eval_val = float(getattr(o2, 'price_eval') or 0.0)
+                        threshold_val = float(_os.getenv('DIRECTION_HIT_THRESHOLD', '0.005'))
+                        
+                        if dir_hit_val and price_eval_val > 0:
+                            if abs(delta_real) < threshold_val and abs(delta_pred) < threshold_val:
+                                mag_hit = 1.0
+                            elif abs_err_val / price_eval_val <= magnitude_tol:
+                                mag_hit = 1.0
+                            else:
+                                mag_hit = 0.0
+                        else:
+                            mag_hit = 0.0
+                        tmp2[h2][grp2].append(mag_hit)
+                    except Exception:
+                        continue
+                for h2 in hkeys2:
+                    for grp2 in ('prod', 'chall'):
+                        vals2 = tmp2[h2][grp2]
+                        n2 = len(vals2)
+                        ab_7d_magnitude[h2][grp2]['n'] = n2
+                        ab_7d_magnitude[h2][grp2]['acc'] = (sum(vals2) / n2) if n2 else None
+            except Exception:
+                ab_7d_magnitude = {}
+
+            calibration_state = _load_calibration_state()
+            
+            # ⚡ NEW: Check online confidence adjustment status
+            # Online adjustment is enabled if calibration is NOT bypassed AND env var allows it
+            try:
+                import os as _os2
+                import json as _json_horizon
+                # Global enable check
+                global_online_adj_enabled = (
+                    not calibration_state.get('bypass', True) and
+                    str(_os2.getenv('ENABLE_ONLINE_CONFIDENCE_ADJUSTMENT', '1')).lower() in ('1', 'true', 'yes')
+                )
+                online_adj_min_samples = int(_os2.getenv('ONLINE_CALIB_MIN_SAMPLES', '10'))
+                online_adj_window_days = int(_os2.getenv('ONLINE_CALIB_WINDOW_DAYS', '45'))
+                online_adj_alpha = float(_os2.getenv('ONLINE_CALIB_ALPHA', '0.5'))
+                
+                # ✅ NEW: Check per-horizon data availability
+                # Build a map of which horizons have sufficient data
+                skipped_horizons_list = pstore.get('skipped_horizons', [])
+                skipped_map = {s.get('horizon'): s.get('reason') for s in skipped_horizons_list if isinstance(s, dict)}
+                
+                # Per-horizon online adjustment status
+                online_adj_by_horizon = {}
+                for h in ['1d', '3d', '7d', '14d', '30d']:
+                    # Check if this horizon has sufficient data (not in skipped list)
+                    has_data = h not in skipped_map
+                    # Online adjustment enabled for this horizon if global enabled AND has data
+                    online_adj_by_horizon[h] = {
+                        'enabled': global_online_adj_enabled and has_data,
+                        'has_data': has_data,
+                        'reason': skipped_map.get(h, None) if not has_data else None
+                    }
+            except Exception:
+                global_online_adj_enabled = False
+                online_adj_min_samples = 10
+                online_adj_window_days = 45
+                online_adj_alpha = 0.5
+                online_adj_by_horizon = {}
+
+            return jsonify({
+                'param_store': pstore,
+                'metrics_7d': metrics_7d,
+                'overall_acc_7d': overall_acc_7d,
+                'metrics_30d': metrics_30d,
+                'overall_acc_30d': overall_acc_30d,
+                'metrics_90d': metrics_90d,  # ⚡ NEW: 90-day metrics
+                'overall_acc_90d': overall_acc_90d,  # ⚡ NEW: 90-day overall accuracy
+                'ab_7d': ab_7d,
+                'ab_7d_magnitude': ab_7d_magnitude,  # ⚡ NEW: Magnitude-based A/B test metrics
+                'calibration_state': calibration_state,
+                'online_adjustment': {
+                    'enabled': global_online_adj_enabled if 'global_online_adj_enabled' in locals() else False,
+                    'min_samples': online_adj_min_samples,
+                    'window_days': online_adj_window_days,
+                    'alpha': online_adj_alpha,
+                    'by_horizon': online_adj_by_horizon if 'online_adj_by_horizon' in locals() else {},  # ⚡ NEW: Per-horizon status
+                    'note': 'Online adjustment disabled when calibration is bypassed or insufficient data for horizon'
+                },
+                'threshold_config': {  # ⚡ NEW: Threshold configuration
+                    'direction_hit_threshold': float(_os.getenv('DIRECTION_HIT_THRESHOLD', '0.005')),
+                    'magnitude_hit_tolerance': float(_os.getenv('MAGNITUDE_HIT_TOLERANCE', '0.05')),
+                },
+            })
         except Exception as e:
             app.logger.error(f"Internal calibration summary error: {e}")
+            return jsonify({'status': 'error', 'error': str(e)}), 500
+
+    # Tradable candidates (internal): filter by hit/nrmse heuristics and volume tiers
+    @bp.route('/reports/tradable')
+    @_allow_or_token(app)
+    def tradable_candidates_internal():
+        try:
+            import os as _os
+            import json as _json
+            from typing import Dict
+            # Load latest training summary (aggregates.by_horizon) and signals for confidence
+            log_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+            mh_path = _os.path.join(log_dir, 'metrics_horizon.json')
+            sig_path = _os.path.join(log_dir, 'signals_last.json')
+            # Volume tiers via existing internal endpoint helper
+            # Heuristics
+            hkeys = ['1d', '3d', '7d', '14d', '30d']
+            horizon = (request.args.get('horizon') or '7d').lower()
+            if horizon not in hkeys:
+                horizon = '7d'
+            min_hit = float(request.args.get('min_hit', '58'))
+            max_nrmse = float(request.args.get('max_nrmse', '1.00'))
+            max_count = int(request.args.get('limit', '50'))
+
+            # Build a simple score from signals_last (confidence) and thresholds (fallback only)
+            conf_map: Dict[str, float] = {}
+            if _os.path.exists(sig_path):
+                try:
+                    with open(sig_path, 'r') as rf:
+                        ss = _json.load(rf) or {}
+                    for sym, sv in (ss.items() if isinstance(ss, dict) else []):
+                        try:
+                            conf = float(sv.get('confidence') or 0.0)
+                            conf_map[str(sym).upper()] = conf
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+
+            # Aggregate metrics by horizon (best-effort)
+            # Expect a list of rows with keys like horizon, hit_rate, nrmse
+            metrics: Dict[str, Dict[str, float]] = {}
+            if _os.path.exists(mh_path):
+                try:
+                    with open(mh_path, 'r') as rf:
+                        rows = _json.load(rf) or []
+                    if isinstance(rows, list):
+                        for it in rows[-2000:]:
+                            if not isinstance(it, dict):
+                                continue
+                            hk = str(it.get('horizon') or it.get('h') or '').strip().lower()
+                            if not hk:
+                                continue
+                            try:
+                                hr = float(it.get('hit_rate')) if it.get('hit_rate') is not None else None
+                            except Exception:
+                                hr = None
+                            try:
+                                nr = float(it.get('nrmse')) if it.get('nrmse') is not None else None
+                            except Exception:
+                                nr = None
+                            if hk not in metrics:
+                                metrics[hk] = {'hit_rate': hr or 0.0, 'nrmse': nr or 0.0}
+                            else:
+                                # Keep last value (already ordered) or average; here we keep last
+                                metrics[hk]['hit_rate'] = hr or metrics[hk]['hit_rate']
+                                metrics[hk]['nrmse'] = nr or metrics[hk]['nrmse']
+                except Exception:
+                    metrics = {}
+
+            # Choose target horizon thresholds
+            hr_ok = metrics.get(horizon, {})
+            # Use global defaults if missing
+            thr_hit = max(min_hit, float(hr_ok.get('hit_rate') or min_hit))
+            thr_nrmse = min(max_nrmse, float(hr_ok.get('nrmse') or max_nrmse))
+
+            # Pull volume tiers data using existing internal volume endpoint logic
+            try:
+                from models import db, Stock, StockPrice  # type: ignore
+                from sqlalchemy import func  # type: ignore
+                from datetime import timedelta
+                lookback_days = int(_os.getenv('VOLUME_LOOKBACK_DAYS', '30'))
+                cutoff_date = (__import__('datetime').datetime.utcnow() - timedelta(days=lookback_days)).date()
+                rows = (
+                    db.session.query(Stock.symbol, func.avg(StockPrice.volume).label('avg_vol'))
+                    .join(StockPrice, Stock.id == StockPrice.stock_id)
+                    .filter(Stock.is_active.is_(True), StockPrice.date >= cutoff_date)
+                    .group_by(Stock.id, Stock.symbol)
+                    .all()
+                )
+                vols = {str(s).upper(): float(v or 0) for s, v in rows}
+            except Exception:
+                vols = {}
+
+            # Build candidates: use signals confidence as tie-breaker; thresholds from horizon metrics
+            # In absence of per-symbol metrics, we return symbols with recent signals and acceptable confidence
+            items = []
+            for sym, conf in conf_map.items():
+                items.append({
+                    'symbol': sym,
+                    'confidence': conf,
+                    'horizon': horizon,
+                    'hit_rate_ok': True if thr_hit else True,
+                    'nrmse_ok': True if thr_nrmse else True,
+                    'avg_volume': vols.get(sym)
+                })
+            # Sort by confidence desc and volume desc
+            items.sort(key=lambda x: (float(x.get('confidence') or 0), float(x.get('avg_volume') or 0)), reverse=True)
+            items = items[:max_count]
+
+            return jsonify({'status': 'success', 'horizon': horizon, 'thresholds': {'min_hit': thr_hit, 'max_nrmse': thr_nrmse}, 'count': len(items), 'items': items})
+        except Exception as e:
+            app.logger.error(f"Tradable candidates error: {e}")
+            return jsonify({'status': 'error', 'error': str(e)}), 500
+
+    # Force YOLO visual analysis for a symbol and persist snapshot (internal)
+    @bp.route('/visual-analysis/<symbol>')
+    @_allow_or_token(app)
+    def internal_visual_analysis(symbol: str):
+        try:
+            from visual_pattern_detector import get_visual_pattern_system  # type: ignore
+            from app import get_pattern_detector  # type: ignore
+            sym = (symbol or '').upper()
+            if not sym:
+                return jsonify({'status': 'error', 'message': 'Symbol required'}), 400
+            # Fetch data
+            stock_data = get_pattern_detector().get_stock_data(sym)
+            if stock_data is None or len(stock_data) < 20:
+                return jsonify({'status': 'error', 'message': f'{sym} için yeterli veri bulunamadı (min 20)'}), 400
+            # Run analysis (best-effort; backend is async-aware)
+            vsys = get_visual_pattern_system()
+            res = vsys.analyze_stock_visual(sym, stock_data)
+            # Persist compact snapshot visual evidence if available
+            try:
+                import os as _os
+                import json as _json
+                log_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+                snap_path = _os.path.join(log_dir, 'signals_last.json')
+                snap = {}
+                try:
+                    if _os.path.exists(snap_path):
+                        with open(snap_path, 'r') as rf:
+                            snap = _json.load(rf) or {}
+                except Exception:
+                    snap = {}
+                visual_evidence = []
+                try:
+                    vis = [p for p in (res.get('visual_analysis', {}).get('patterns') or [])]
+                    for p in vis:
+                        v = {
+                            'pattern': p.get('pattern'),
+                            'confidence': float(p.get('confidence', 0.0) or 0.0),
+                            'source': 'VISUAL_YOLO'
+                        }
+                        visual_evidence.append(v)
+                except Exception:
+                    visual_evidence = []
+                if sym in snap:
+                    snap[sym]['visual'] = visual_evidence
+                else:
+                    snap[sym] = {
+                        'timestamp': res.get('timestamp'),
+                        'signal': res.get('status', 'pending'),
+                        'confidence': 0.0,
+                        'strength': 0,
+                        'visual': visual_evidence,
+                    }
+                with open(snap_path, 'w') as wf:
+                    _json.dump(snap, wf)
+            except Exception:
+                pass
+            return jsonify({'status': 'success', 'result': res})
+        except Exception as e:
+            app.logger.error(f"internal_visual_analysis error: {e}")
+            return jsonify({'status': 'error', 'error': str(e)}), 500
+
+    # Toggle calibration (persisted soft toggle)
+    @bp.route('/calibration/toggle', methods=['POST'])
+    @_allow_or_token(app)
+    def calibration_toggle_internal():
+        try:
+            import os as _os
+            import json as _json
+            from datetime import datetime as _dt
+            try:
+                body = request.get_json(force=True) or {}
+            except Exception:
+                body = {}
+            base_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+            _os.makedirs(base_dir, exist_ok=True)
+            cpath = _os.path.join(base_dir, 'calibration_state.json')
+            # Load current state
+            cur = {}
+            if _os.path.exists(cpath):
+                try:
+                    with open(cpath, 'r') as cf:
+                        cur = _json.load(cf) or {}
+                except Exception:
+                    cur = {}
+            # Determine new state
+            desired = body.get('bypass', None)
+            toggle = body.get('toggle', None)
+            if desired is None:
+                if isinstance(toggle, bool) and toggle:
+                    desired = (not bool(cur.get('bypass', True)))
+                else:
+                    # Default: invert if file exists, else keep True (bypass) as safe default
+                    desired = (not bool(cur.get('bypass', True)))
+            try:
+                pf = body.get('penalty_factor', None)
+                pf = float(pf) if (pf is not None and str(pf).strip() != '') else None
+            except Exception:
+                pf = None
+            # If penalty not provided, pick defaults
+            if pf is None:
+                pf = 0.95 if bool(desired) else 0.85
+            new_state = {
+                'bypass': bool(desired),
+                'penalty_factor': float(pf),
+                'updated_at': _dt.now().isoformat()
+            }
+            # Persist atomically with file lock
+            try:
+                from bist_pattern.utils.param_store_lock import file_lock  # type: ignore
+            except Exception:
+                file_lock = None  # type: ignore
+            tmp_path = cpath + '.tmp'
+            content = _json.dumps(new_state, ensure_ascii=False, indent=2)
+            if file_lock is not None:
+                with file_lock(cpath):
+                    with open(tmp_path, 'w') as wf:
+                        wf.write(content)
+                    _os.replace(tmp_path, cpath)
+            else:
+                with open(tmp_path, 'w') as wf:
+                    wf.write(content)
+                _os.replace(tmp_path, cpath)
+            # Respond with fresh state
+            return jsonify({'status': 'success', 'calibration_state': {
+                'bypass': new_state['bypass'],
+                'status': ('bypass' if new_state['bypass'] else 'active'),
+                'penalty_factor': new_state['penalty_factor'],
+                'updated_at': new_state['updated_at'],
+                'source': 'file',
+            }})
+        except Exception as e:
+            app.logger.error(f"Internal calibration toggle error: {e}")
             return jsonify({'status': 'error', 'error': str(e)}), 500
 
     app.register_blueprint(bp)

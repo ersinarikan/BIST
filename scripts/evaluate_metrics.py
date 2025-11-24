@@ -125,8 +125,13 @@ def compute_metrics(day: date) -> None:
             # Error metrics
             mae_vals = [abs(_safe_float(o.abs_err) or 0.0) for _p, o in items]
             mape_vals = [abs(_safe_float(o.mape) or 0.0) for _p, o in items]
-            mae = sum(mae_vals) / n if n else None
+            mae_raw = sum(mae_vals) / n if n else None
+            # ✅ FIX: Clamp mae to Numeric(8,4) range to prevent overflow
+            mae = max(0.0, min(9999.9999, mae_raw)) if mae_raw is not None else None
             mape = sum(mape_vals) / n if n else None
+            # ✅ FIX: Clamp mape to Numeric(8,4) range to prevent overflow
+            if mape is not None:
+                mape = max(0.0, min(9999.9999, mape))
 
             # Brier score (if prediction confidence present)
             briers = []
@@ -188,10 +193,23 @@ def compute_metrics(day: date) -> None:
             rec.mae = mae
             rec.mape = mape
             rec.brier = brier
+            # ✅ FIX: Clamp brier to Numeric(8,4) range to prevent overflow
+            if rec.brier is not None:
+                rec.brier = max(0.0, min(9999.9999, rec.brier))
             # Store PnL in percentage points (e.g. 2.5 => +2.5%)
-            rec.pnl = (pnl_pct * 100.0) if pnl_pct is not None else None
+            # ✅ FIX: Clamp pnl to Numeric(14,2) range to prevent overflow
+            if pnl_pct is not None:
+                pnl_clamped = max(-999999999999.99, min(999999999999.99, pnl_pct * 100.0))
+                rec.pnl = pnl_clamped
+            else:
+                rec.pnl = None
             rec.sharpe = sharpe
-            rec.max_dd = (max_dd * 100.0) if max_dd is not None else None
+            # ✅ FIX: Clamp max_dd to Numeric(6,3) range to prevent overflow
+            if max_dd is not None:
+                max_dd_clamped = max(-999.999, min(999.999, max_dd * 100.0))
+                rec.max_dd = max_dd_clamped
+            else:
+                rec.max_dd = None
         try:
             db.session.commit()
         except Exception:

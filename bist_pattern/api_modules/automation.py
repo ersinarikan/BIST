@@ -472,18 +472,27 @@ def automation_report():
                         signal_total = len(ss.keys()) if isinstance(ss, dict) else 0
             except Exception:
                 pass
-            # YOLO/AI breakdown from recent broadcasts is not persisted; approximate via patterns in signals_last
+            # YOLO/FinGPT breakdown from recent broadcasts (best-effort via signals_last)
             yolo_total = 0
+            fingpt_total = 0
             try:
-                # Count VISUAL evidence as YOLO hits
                 sig_path = os.path.join(log_dir, 'signals_last.json')
                 if os.path.exists(sig_path):
                     with open(sig_path, 'r') as f:
                         ss = json.load(f) or {}
                         for _, sv in (ss.items() if isinstance(ss, dict) else []):
-                            vis = sv.get('visual') or []
-                            if vis:
-                                yolo_total += len(vis)
+                            try:
+                                vis = sv.get('visual') or []
+                                if isinstance(vis, list):
+                                    yolo_total += sum(1 for v in vis if str(v.get('source', '')).upper() == 'VISUAL_YOLO') or len(vis)
+                            except Exception:
+                                pass
+                            try:
+                                ev = sv.get('evidence') or []
+                                if isinstance(ev, list):
+                                    fingpt_total += sum(1 for e in ev if str(e.get('source', '')).upper() == 'FINGPT')
+                            except Exception:
+                                pass
             except Exception:
                 pass
             # Attach to report
@@ -497,6 +506,7 @@ def automation_report():
                 'train_total': train_total,
                 'signals_total': signal_total,
                 'yolo_detections': yolo_total,
+                'fingpt_detections': fingpt_total,
                 'enhanced_analyses': None,
                 'basic_analyses': None,
             }

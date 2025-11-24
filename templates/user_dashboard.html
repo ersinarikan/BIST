@@ -50,6 +50,16 @@
             background: rgba(0, 123, 255, 0.1);
         }
         
+        /* ✅ FIX: Prediction bölümü için consistent hizalama */
+        #watchlist [id^="pred-"] {
+            min-height: 50px;  /* Minimum yükseklik garantisi */
+        }
+        
+        /* ✅ FIX: "En iyi" badge'ı her zaman aynı hizada */
+        #watchlist [id^="pred-"] .d-flex {
+            align-items: baseline;  /* Baseline alignment */
+        }
+        
         .price-change-positive { color: #28a745; }
         .price-change-negative { color: #dc3545; }
         
@@ -105,14 +115,19 @@
             <a class="navbar-brand" href="#">
                 <i class="fas fa-chart-line me-2"></i>BIST AI Hisse Takip
             </a>
+            <!-- ✅ FIX: Yardım butonu en sağa taşındı -->
             <div class="navbar-nav ms-auto">
                 <span class="navbar-text me-3" id="user-info">
                     <i class="fas fa-user me-2"></i>{{ user_name if user_name else 'Kullanıcı' }}
                 </span>
                 <a class="nav-link" href="/logout"><i class="fas fa-right-from-bracket me-1"></i>Çıkış</a>
-                <span class="navbar-text" id="connection-status">
+                <span class="navbar-text me-3" id="connection-status">
                     <i class="fas fa-wifi text-warning"></i> Bağlanıyor...
                 </span>
+                <button class="btn btn-outline-light btn-sm" data-bs-toggle="modal" data-bs-target="#helpModal" 
+                        title="Yardım ve Kullanım Rehberi">
+                    <i class="fas fa-question-circle me-1"></i>Yardım
+                </button>
             </div>
         </div>
     </nav>
@@ -129,14 +144,8 @@
                             <i class="fas fa-plus me-2"></i>Hisse Ekle
                         </button>
                     </div>
-                    <div id="watchlist">
-                        <!-- Takip edilen hisseler burada listelenecek -->
-                        <div class="text-center text-muted py-4">
-                            <i class="fas fa-chart-bar fa-3x mb-3"></i>
-                            <p>Henüz takip edilen hisse bulunmuyor.<br>Hisse eklemek için yukarıdaki butonu kullanın.</p>
-                        </div>
-                    </div>
-                    <div class="mt-3">
+                    <!-- ✅ FIX: Filtreler başlık ile hisse kartları arasına taşındı -->
+                    <div class="mb-3 pb-3 border-bottom">
                         <div class="row g-2 align-items-center">
                             <div class="col-6 col-md-3">
                                 <label class="form-label small mb-0">Sırala (Tahmin Ufku)</label>
@@ -167,6 +176,13 @@
                                 <label class="form-label small mb-0">Min değişim % (mutlak): <span id="pred-min-abs-val">0</span></label>
                                 <input type="range" min="0" max="50" step="1" value="0" id="pred-min-abs" class="form-range">
                             </div>
+                        </div>
+                    </div>
+                    <div id="watchlist">
+                        <!-- Takip edilen hisseler burada listelenecek -->
+                        <div class="text-center text-muted py-4">
+                            <i class="fas fa-chart-bar fa-3x mb-3"></i>
+                            <p>Henüz takip edilen hisse bulunmuyor.<br>Hisse eklemek için yukarıdaki butonu kullanın.</p>
                         </div>
                     </div>
                 </div>
@@ -302,6 +318,323 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Kapat</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ✅ YARDIM MODAL: Detaylı Kullanım Rehberi -->
+    <div class="modal fade" id="helpModal" tabindex="-1" aria-labelledby="helpModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title" id="helpModalLabel">
+                        <i class="fas fa-question-circle me-2"></i>Yardım ve Kullanım Rehberi
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" style="font-size: 0.95rem;">
+                    <!-- 1. Hisse Takibe Ekleme/Çıkarma -->
+                    <div class="mb-4">
+                        <h5 class="text-primary mb-3">
+                            <i class="fas fa-star me-2"></i>1. Hisse Takibe Nasıl Eklenir/Çıkarılır?
+                        </h5>
+                        <div class="card border-primary">
+                            <div class="card-body">
+                                <h6 class="text-success"><i class="fas fa-plus-circle me-1"></i>Hisse Ekleme:</h6>
+                                <ol>
+                                    <li><strong>"Takip Edilen Hisseler"</strong> kutucuğunun sağ üst köşesindeki <strong>"+ Hisse Ekle"</strong> butonuna tıklayın.</li>
+                                    <li>Açılan pencerede, takip etmek istediğiniz hissenin <strong>kodunu</strong> (örneğin: <code>AEFES</code>, <code>THYAO</code>) yazın veya şirket adını girin.</li>
+                                    <li>Listeden doğru hisseyi seçip <strong>"Ekle"</strong> butonuna basın.</li>
+                                    <li>Hisse, listenize eklenecek ve yapay zeka analizleri kısa süre içinde görünmeye başlayacaktır.</li>
+                                </ol>
+                                <h6 class="text-danger mt-3"><i class="fas fa-minus-circle me-1"></i>Hisse Çıkarma:</h6>
+                                <ol>
+                                    <li>Takip listenizden çıkarmak istediğiniz hissenin üzerine gelin.</li>
+                                    <li>Hissenin yanında belirecek olan <strong>"X"</strong> veya <strong>"Çıkar"</strong> butonuna tıklayın.</li>
+                                    <li>Onaylamanız istendiğinde <strong>"Evet"</strong> diyerek hisseyi listenizden çıkarabilirsiniz.</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 2. Görünen Rozetler (Sinyaller) -->
+                    <div class="mb-4">
+                        <h5 class="text-primary mb-3">
+                            <i class="fas fa-bell me-2"></i>2. Görünen Rozetler (Sinyaller) Nedir?
+                        </h5>
+                        <div class="card border-primary">
+                            <div class="card-body">
+                                <p>Takip ettiğiniz hisselerin yanında gördüğünüz <strong>renkli rozetler</strong>, yapay zekamızın o hisse için yaptığı anlık değerlendirmelerdir. Bu rozetler, hissenin gelecekteki olası hareket yönünü ve bu tahmine ne kadar güvendiğimizi gösterir.</p>
+                                
+                                <div class="row mt-3">
+                                    <div class="col-md-4 mb-3">
+                                        <div class="card border-success">
+                                            <div class="card-body text-center">
+                                                <i class="fas fa-arrow-up fa-2x text-success mb-2"></i>
+                                                <h6 class="text-success">Yeşil Rozet</h6>
+                                                <p class="mb-0"><strong>Yükseliş</strong></p>
+                                                <small class="text-muted">Yapay zekamız, hissenin fiyatının belirli bir süre içinde <strong>yükseleceğini</strong> tahmin ediyor.</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <div class="card border-danger">
+                                            <div class="card-body text-center">
+                                                <i class="fas fa-arrow-down fa-2x text-danger mb-2"></i>
+                                                <h6 class="text-danger">Kırmızı Rozet</h6>
+                                                <p class="mb-0"><strong>Düşüş</strong></p>
+                                                <small class="text-muted">Yapay zekamız, hissenin fiyatının belirli bir süre içinde <strong>düşeceğini</strong> tahmin ediyor.</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <div class="card border-secondary">
+                                            <div class="card-body text-center">
+                                                <i class="fas fa-pause fa-2x text-secondary mb-2"></i>
+                                                <h6 class="text-secondary">Gri/Sarı Rozet</h6>
+                                                <p class="mb-0"><strong>Bekleme</strong></p>
+                                                <small class="text-muted">Yapay zekamız, hissenin fiyat hareketinin <strong>belirsiz</strong> olduğunu veya yeterli sinyal bulunmadığını gösteriyor.</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="alert alert-info mt-3">
+                                    <strong><i class="fas fa-info-circle me-1"></i>Yüzde Değeri:</strong> Rozetin üzerindeki yüzde (%) değeri, yapay zekamızın bu tahmine olan <strong>güven seviyesini</strong> gösterir. Örneğin <strong>"%53"</strong> değeri, tahminin %53 güven seviyesinde olduğunu ifade eder. Yüzde ne kadar yüksekse, tahminin gerçekleşme olasılığı o kadar artar. <strong>%70 ve üzeri</strong> güven seviyeleri genellikle daha güvenilir tahminler olarak değerlendirilir.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 3. Formasyonlar ve Anlamları -->
+                    <div class="mb-4">
+                        <h5 class="text-primary mb-3">
+                            <i class="fas fa-shapes me-2"></i>3. Tüm Formasyonlar ve Anlamları
+                        </h5>
+                        <div class="card border-primary">
+                            <div class="card-body">
+                                <p>Yapay zekamız, hisse grafiklerinde oluşan ve gelecekteki fiyat hareketleri hakkında ipuçları veren özel şekilleri (formasyonları) tespit eder. Bu formasyonlar, deneyimli yatırımcıların kullandığı teknik analiz yöntemlerinin temelini oluşturur.</p>
+                                
+                                <div class="alert alert-warning">
+                                    <strong><i class="fas fa-exclamation-triangle me-1"></i>Önemli Not:</strong> Her formasyonun bir "yükseliş" veya "düşüş" sinyali vardır, ancak hiçbir zaman %100 kesin değildir. Yapay zekamız, bu formasyonları diğer verilerle birleştirerek daha güvenilir tahminler sunmaya çalışır.
+                                </div>
+
+                                <!-- Yükseliş Formasyonları -->
+                                <h6 class="text-success mt-4"><i class="fas fa-arrow-trend-up me-1"></i>Yükseliş Formasyonları (Genellikle Fiyat Artışı Beklenir):</h6>
+                                <div class="table-responsive mt-2">
+                                    <table class="table table-sm table-bordered">
+                                        <thead class="table-success">
+                                            <tr>
+                                                <th>Formasyon Adı</th>
+                                                <th>Açıklama</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr><td><strong>Çekiç (Hammer)</strong></td><td>Genellikle düşüş trendinin sonunda görülür, fiyatın yukarı döneceğine işaret edebilir.</td></tr>
+                                            <tr><td><strong>Ters Çekiç (Inverted Hammer)</strong></td><td>Düşüş sonrası potansiyel bir yükselişin habercisi olabilir.</td></tr>
+                                            <tr><td><strong>Boğa Yutan (Bullish Engulfing)</strong></td><td>Önceki düşüş mumunu tamamen yutan büyük bir yükseliş mumu, güçlü bir alım sinyali.</td></tr>
+                                            <tr><td><strong>Sabah Yıldızı (Morning Star)</strong></td><td>Düşüş trendinin sonunda oluşan üç mumlu bir formasyon, yükselişin başlangıcı olabilir.</td></tr>
+                                            <tr><td><strong>Üç Beyaz Asker (Three White Soldiers)</strong></td><td>Art arda gelen üç güçlü yükseliş mumu, güçlü bir yükseliş trendinin devamını gösterir.</td></tr>
+                                            <tr><td><strong>Yükselen Üçgen (Ascending Triangle)</strong></td><td>Fiyatın belirli bir direnç seviyesini kırmaya çalıştığını ve yukarı yönlü bir kırılma olabileceğini gösterir.</td></tr>
+                                            <tr><td><strong>Ters Omuz Baş Omuz (Inverse Head and Shoulders)</strong></td><td>Düşüş trendinin sonunda oluşan, güçlü bir yükseliş dönüş formasyonu.</td></tr>
+                                            <tr><td><strong>Çift Dip (Double Bottom)</strong></td><td>Fiyatın iki kez aynı seviyeye düşmesi ve bu seviyeyi destek olarak kullanması, yükseliş sinyali.</td></tr>
+                                            <tr><td><strong>Yükseliş Bayrağı (Bullish Flag)</strong></td><td>Yükseliş trendi içinde kısa bir düşüş düzeltmesi, trend devam sinyali.</td></tr>
+                                            <tr><td><strong>Fincan ve Kulp (Cup and Handle)</strong></td><td>Uzun vadeli yükseliş formasyonu, fiyatın toparlanıp yükselmeye devam edeceğini gösterir.</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                <!-- Düşüş Formasyonları -->
+                                <h6 class="text-danger mt-4"><i class="fas fa-arrow-trend-down me-1"></i>Düşüş Formasyonları (Genellikle Fiyat Azalışı Beklenir):</h6>
+                                <div class="table-responsive mt-2">
+                                    <table class="table table-sm table-bordered">
+                                        <thead class="table-danger">
+                                            <tr>
+                                                <th>Formasyon Adı</th>
+                                                <th>Açıklama</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr><td><strong>Asılan Adam (Hanging Man)</strong></td><td>Genellikle yükseliş trendinin sonunda görülür, fiyatın aşağı döneceğine işaret edebilir.</td></tr>
+                                            <tr><td><strong>Düşen Yıldız (Shooting Star)</strong></td><td>Yükseliş sonrası potansiyel bir düşüşün habercisi olabilir.</td></tr>
+                                            <tr><td><strong>Ayı Yutan (Bearish Engulfing)</strong></td><td>Önceki yükseliş mumunu tamamen yutan büyük bir düşüş mumu, güçlü bir satış sinyali.</td></tr>
+                                            <tr><td><strong>Akşam Yıldızı (Evening Star)</strong></td><td>Yükseliş trendinin sonunda oluşan üç mumlu bir formasyon, düşüşün başlangıcı olabilir.</td></tr>
+                                            <tr><td><strong>Üç Kara Karga (Three Black Crows)</strong></td><td>Art arda gelen üç güçlü düşüş mumu, güçlü bir düşüş trendinin devamını gösterir.</td></tr>
+                                            <tr><td><strong>Alçalan Üçgen (Descending Triangle)</strong></td><td>Fiyatın belirli bir destek seviyesini kırmaya çalıştığını ve aşağı yönlü bir kırılma olabileceğini gösterir.</td></tr>
+                                            <tr><td><strong>Omuz Baş Omuz (Head and Shoulders)</strong></td><td>Yükseliş trendinin sonunda oluşan, güçlü bir düşüş dönüş formasyonu.</td></tr>
+                                            <tr><td><strong>Çift Tepe (Double Top)</strong></td><td>Fiyatın iki kez aynı seviyeye çıkması ve bu seviyeyi direnç olarak kullanması, düşüş sinyali.</td></tr>
+                                            <tr><td><strong>Düşüş Bayrağı (Bearish Flag)</strong></td><td>Düşüş trendi içinde kısa bir yükseliş düzeltmesi, trend devam sinyali.</td></tr>
+                                            <tr><td><strong>Karanlık Bulut (Dark Cloud Cover)</strong></td><td>Yükseliş trendinin sonunda oluşan, güçlü bir satış baskısı sinyali.</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 4. Modal Detayları -->
+                    <div class="mb-4">
+                        <h5 class="text-primary mb-3">
+                            <i class="fas fa-info-circle me-2"></i>4. Detay Modalında Görünenler Nedir?
+                        </h5>
+                        <div class="card border-primary">
+                            <div class="card-body">
+                                <p>Bir hissenin üzerine tıkladığınızda açılan detay penceresi (modal), yapay zekamızın o hisse için yaptığı tüm analizleri daha derinlemesine gösterir. Burada gördüğünüz bilgiler, yapay zekanın tahminini nasıl oluşturduğuna dair "kanıtlar" sunar.</p>
+                                
+                                <h6 class="text-info mt-3"><i class="fas fa-calendar-alt me-1"></i>Bar Aralıkları (Horizon):</h6>
+                                <p>Yapay zekanın tahmin yaptığı <strong>zaman dilimleridir</strong>:</p>
+                                <ul>
+                                    <li><strong>1 Gün (1D):</strong> En kısa vadeli tahmin. Genellikle günlük işlemler için kullanılır.</li>
+                                    <li><strong>3 Gün (3D):</strong> Kısa vadeli tahmin. Hafta içi hareketleri öngörür.</li>
+                                    <li><strong>7 Gün (7D):</strong> Orta vadeli tahmin. Bir haftalık periyodu kapsar.</li>
+                                    <li><strong>14 Gün (14D):</strong> Biraz daha uzun vadeli tahmin. İki haftalık hareketleri öngörür.</li>
+                                    <li><strong>30 Gün (30D):</strong> Uzun vadeli tahmin. Bir aylık periyodu kapsar.</li>
+                                </ul>
+                                <p>Her zaman dilimi için ayrı bir tahmin ve güven seviyesi görebilirsiniz.</p>
+
+                                <h6 class="text-info mt-3"><i class="fas fa-chart-bar me-1"></i>Hacim Segmenti (Volume Segment):</h6>
+                                <p>Hissenin <strong>işlem hacminin</strong> (kaç adet hissenin alınıp satıldığı) ne kadar yoğun olduğunu gösterir:</p>
+                                <ul>
+                                    <li><strong>Düşük Hacim:</strong> Hissede az işlem yapılıyor. Fiyat hareketleri daha ani ve tahmin etmesi zor olabilir.</li>
+                                    <li><strong>Orta Hacim:</strong> Normal seviyede işlem yapılıyor. Fiyat hareketleri genellikle daha öngörülebilir.</li>
+                                    <li><strong>Yüksek Hacim:</strong> Hissede çok yoğun işlem yapılıyor. Genellikle büyük yatırımcıların ilgisini gösterir ve fiyat hareketleri daha güvenilir olabilir.</li>
+                                </ul>
+
+                                <h6 class="text-info mt-3"><i class="fas fa-shapes me-1"></i>Formasyonlar (Patterns):</h6>
+                                <p>Yapay zekanın hisse grafiğinde <strong>tespit ettiği tüm formasyonları</strong> burada görebilirsiniz. Her formasyonun yanında bir sinyal (Yükseliş/Düşüş) ve güven seviyesi bulunur. Bu, yapay zekanın tahminini destekleyen görsel kanıtlardır.</p>
+
+                                <h6 class="text-info mt-3"><i class="fas fa-brain me-1"></i>ML Özet (Birleşik) (ML Summary - Unified):</h6>
+                                <p>Yapay zekamızın <strong>farklı modelleri</strong> (XGBoost, LightGBM, CatBoost gibi) kullanarak yaptığı tahminlerin bir özetidir. Bu bölüm, tüm modellerin ortak görüşünü ve genel birleşik sinyali gösterir:</p>
+                                <ul>
+                                    <li><strong>Sinyal:</strong> Yükseliş, Düşüş veya Nötr.</li>
+                                    <li><strong>Güven:</strong> Birleşik tahminin güven seviyesi (yüzde olarak).</li>
+                                    <li><strong>Tahmini Getiri:</strong> Yapay zekanın o hisse için beklediği yüzde (%) getiri oranı. Örneğin "+%5.2" değeri, fiyatın %5.2 artacağını öngörür.</li>
+                                </ul>
+
+                                <h6 class="text-info mt-3"><i class="fas fa-search me-1"></i>Kanıt (Evidence):</h6>
+                                <p>Yapay zekanın nihai tahminini oluştururken kullandığı tüm <strong>"kanıtları"</strong> burada bulabilirsiniz. Bu, tahminin arkasındaki mantığı anlamanıza yardımcı olur:</p>
+                                <ul>
+                                    <li><strong>Pat (Pattern Score):</strong> Tespit edilen formasyonların toplam gücünü ve yönünü gösterir. <strong>Pozitif değerler</strong> yükseliş, <strong>negatif değerler</strong> düşüş formasyonlarının ağırlığını belirtir.</li>
+                                    <li><strong>Sent (Sentiment Score):</strong> Hisselerle ilgili haberlerin ve sosyal medya paylaşımlarının genel duygu durumunu (olumlu/olumsuz) gösterir. <strong>Pozitif değerler</strong> olumlu, <strong>negatif değerler</strong> olumsuz duygu durumuna işaret eder.</li>
+                                    <li><strong>YOLO (Visual Pattern):</strong> Yapay zekanın grafiklerdeki karmaşık görsel desenleri (YOLO teknolojisi ile) tespit edip etmediğini gösterir. Bu, formasyonları daha da güçlendiren bir kanıttır.</li>
+                                    <li><strong>1D Booster:</strong> Özellikle 1 günlük kısa vadeli tahminler için kullanılan ek bir güçlendirici sinyaldir.</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 5. Hisse Kartında Görünenler -->
+                    <div class="mb-4">
+                        <h5 class="text-primary mb-3">
+                            <i class="fas fa-id-card me-2"></i>5. Hisse Kartında Görünenler Nedir?
+                        </h5>
+                        <div class="card border-primary">
+                            <div class="card-body">
+                                <p>Takip listenizdeki her hisse için görüntülenen <strong>hisse kartı</strong>, o hisse hakkında temel bilgileri ve yapay zeka tahminlerini gösterir:</p>
+                                
+                                <div class="row mt-3">
+                                    <div class="col-md-6 mb-3">
+                                        <div class="card border-info">
+                                            <div class="card-body">
+                                                <h6 class="text-info"><i class="fas fa-tag me-1"></i>Hisse Kodu</h6>
+                                                <p class="mb-0">Hissenin <strong>BIST borsasındaki kısa kodudur</strong> (örneğin: AEFES, THYAO, AKBNK). Bu kodla borsada işlem yapılır.</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <div class="card border-info">
+                                            <div class="card-body">
+                                                <h6 class="text-info"><i class="fas fa-lira-sign me-1"></i>Fiyat</h6>
+                                                <p class="mb-0">Hissenin <strong>güncel fiyatıdır</strong> (örneğin: ₺14.46). Bu fiyat, son işlem fiyatını veya kapanış fiyatını gösterir.</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <div class="card border-info">
+                                            <div class="card-body">
+                                                <h6 class="text-info"><i class="fas fa-signal me-1"></i>Sinyal Durumu</h6>
+                                                <p class="mb-0">Yapay zekanın o hisse için verdiği <strong>tahmin sinyali</strong> (Yükseliş/Düşüş/Bekleme) ve güven seviyesi.</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <div class="card border-info">
+                                            <div class="card-body">
+                                                <h6 class="text-info"><i class="fas fa-clock me-1"></i>Son Güncelleme</h6>
+                                                <p class="mb-0">Yapay zeka tahmininin <strong>son ne zaman güncellendiğini</strong> gösterir. Tahminler genellikle her 5 dakikada bir güncellenir.</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="alert alert-info mt-3">
+                                    <strong><i class="fas fa-info-circle me-1"></i>Detaylı Bilgi İçin:</strong> Hisse kartına <strong>tıklayarak</strong> detay modalını açabilir ve daha fazla analiz bilgisi görebilirsiniz.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 6. Yüzde Değerleri -->
+                    <div class="mb-4">
+                        <h5 class="text-primary mb-3">
+                            <i class="fas fa-percentage me-2"></i>6. Yüzde Değerleri Neyi İfade Eder?
+                        </h5>
+                        <div class="card border-primary">
+                            <div class="card-body">
+                                <p>Uygulamada göreceğiniz yüzde (%) değerleri, <strong>farklı anlamlar taşıyabilir</strong>. İşte en yaygın kullanımları:</p>
+                                
+                                <h6 class="text-success mt-3"><i class="fas fa-check-circle me-1"></i>Güven Seviyesi (Confidence):</h6>
+                                <p>Bir hissenin sinyal rozetinde görünen yüzde (örneğin: <strong>"Bekleme (%53)"</strong>), yapay zekanın o tahmine olan <strong>güven seviyesidir</strong>:</p>
+                                <ul>
+                                    <li><strong>%0-40:</strong> Düşük güven. Tahmin belirsizdir, yatırım yapmadan önce ek bilgi beklenmelidir.</li>
+                                    <li><strong>%40-60:</strong> Orta güven. Tahmin makul ama kesin değildir. Dikkatli yaklaşılmalıdır.</li>
+                                    <li><strong>%60-80:</strong> Yüksek güven. Tahmin güvenilirdir, ancak yine de risk faktörü bulunur.</li>
+                                    <li><strong>%80-100:</strong> Çok yüksek güven. Tahmin oldukça güvenilir olarak değerlendirilebilir.</li>
+                                </ul>
+
+                                <h6 class="text-info mt-3"><i class="fas fa-chart-line me-1"></i>Tahmini Getiri (Predicted Return):</h6>
+                                <p>Detay modalında veya bazı kartlarda görünen yüzde (örneğin: <strong>"+%5.2"</strong> veya <strong>"-%3.1"</strong>), yapay zekanın o hisse için <strong>beklediği fiyat değişim oranıdır</strong>:</p>
+                                <ul>
+                                    <li><strong>Pozitif değer (+%5.2):</strong> Fiyatın <strong>artacağını</strong> öngörür. Örneğin, ₺100 olan bir hisse için "+%5.2" değeri, fiyatın yaklaşık ₺105.20'ye çıkacağını gösterir.</li>
+                                    <li><strong>Negatif değer (-%3.1):</strong> Fiyatın <strong>azalacağını</strong> öngörür. Örneğin, ₺100 olan bir hisse için "-%3.1" değeri, fiyatın yaklaşık ₺96.90'a düşeceğini gösterir.</li>
+                                </ul>
+
+                                <h6 class="text-warning mt-3"><i class="fas fa-exclamation-triangle me-1"></i>Önemli Hatırlatmalar:</h6>
+                                <div class="alert alert-warning">
+                                    <ul class="mb-0">
+                                        <li>Yüzde değerleri <strong>tahmindir</strong>, kesin sonuç değildir.</li>
+                                        <li>Borsa yatırımları her zaman <strong>risk içerir</strong> ve kayıp olasılığı bulunur.</li>
+                                        <li>Bu uygulama sadece bir <strong>analiz aracıdır</strong> ve yatırım tavsiyesi değildir.</li>
+                                        <li>Yatırım kararlarınızı kendi <strong>araştırmalarınız</strong> ve <strong>risk toleransınız</strong> doğrultusunda vermelisiniz.</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Genel Hatırlatmalar -->
+                    <div class="mb-4">
+                        <h5 class="text-primary mb-3">
+                            <i class="fas fa-lightbulb me-2"></i>Genel Hatırlatmalar
+                        </h5>
+                        <div class="card border-warning">
+                            <div class="card-body">
+                                <ul>
+                                    <li><strong>Güvenilirlik:</strong> Yapay zeka tahminleri yüksek teknoloji kullanır, ancak <strong>%100 kesin değildir</strong>. Borsa dinamikleri sürekli değişir.</li>
+                                    <li><strong>Risk Yönetimi:</strong> Yatırım yaparken mutlaka <strong>risk yönetimi</strong> yapmalı, sadece kaybetmeyi göze alabileceğiniz miktarlarla işlem yapmalısınız.</li>
+                                    <li><strong>Çeşitlendirme:</strong> Tüm yatırımınızı tek bir hisseye yapmayın. <strong>Portföyünüzü çeşitlendirin</strong>.</li>
+                                    <li><strong>Güncel Bilgi:</strong> Tahminler <strong>gerçek zamanlı olarak güncellenir</strong>, ancak piyasa koşulları hızla değişebilir.</li>
+                                    <li><strong>Destek:</strong> Sorularınız veya sorunlarınız için <strong>destek ekibimize</strong> ulaşabilirsiniz.</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                        <i class="fas fa-times me-1"></i>Kapat
+                    </button>
                 </div>
             </div>
         </div>

@@ -17,7 +17,31 @@ cd /opt/bist-pattern
 PY="/opt/bist-pattern/venv/bin/python3"
 if [ ! -x "$PY" ]; then PY="python3"; fi
 
-DAY="${1:-$(date -I)}"
+# ✅ FIX: Default to previous business day when called from cron (no argument)
+# This ensures we process the previous market day's data (skips weekends)
+if [ -z "${1:-}" ]; then
+    # Get yesterday
+    DAY="$(date -d "yesterday" -I)"
+    # Check if yesterday is weekend (Saturday=6, Sunday=7)
+    # date +%u returns: 1=Monday, 7=Sunday
+    DOW=$(date -d "$DAY" +%u)
+    # If weekend (Saturday=6 or Sunday=7), go back to previous Friday
+    if [ "$DOW" -eq 6 ]; then
+        # Yesterday was Saturday, go back to Friday
+        DAY="$(date -d "$DAY -1 day" -I)"
+    elif [ "$DOW" -eq 7 ]; then
+        # Yesterday was Sunday, go back 2 days to Friday
+        DAY="$(date -d "$DAY -2 days" -I)"
+    fi
+    # Final check: ensure DAY is a weekday (1-5)
+    FINAL_DOW=$(date -d "$DAY" +%u)
+    if [ "$FINAL_DOW" -ge 6 ]; then
+        # Still weekend (shouldn't happen), go back one more day
+        DAY="$(date -d "$DAY -1 day" -I)"
+    fi
+else
+    DAY="$1"
+fi
 echo "[evaluate-metrics] $(date -Iseconds) day=$DAY start" >> "$BIST_LOG_PATH/evaluate_metrics.log"
 LOCK_FILE="/opt/bist-pattern/logs/evaluate_metrics.lock"
 exec flock -n "$LOCK_FILE" -c "nice -n 10 ionice -c2 -n7 \"$PY\" scripts/evaluate_metrics.py --date \"$DAY\" >> \"$BIST_LOG_PATH/evaluate_metrics.log\" 2>&1" || {

@@ -43,8 +43,24 @@ fi
 WINDOW_DAYS="${CALIB_WINDOW_DAYS:-30}"
 MIN_SAMPLES="${CALIB_MIN_SAMPLES:-150}"
 
-echo "[calibrate-confidence] $(date -Iseconds) start" >> "$BIST_LOG_PATH/calibrate_confidence.log"
+# ⚡ NEW: Challenger optimization flags (optional, defaults to disabled)
+ENABLE_CHALLENGER_OPT="${ENABLE_CHALLENGER_OPTIMIZATION:-0}"
+ENABLE_PRODUCTION_PROMOTE="${ENABLE_PRODUCTION_PROMOTE:-0}"
+CHALL_MIN_SAMPLES="${CHALL_MIN_SAMPLES:-50}"
+CHALL_IMPROVEMENT_THRESHOLD="${CHALL_IMPROVEMENT_THRESHOLD:-0.02}"
+
+# Build command arguments
+CALIB_ARGS="--window-days $WINDOW_DAYS --min-samples $MIN_SAMPLES"
+if [ "$ENABLE_CHALLENGER_OPT" = "1" ]; then
+  CALIB_ARGS="$CALIB_ARGS --enable-challenger-opt"
+fi
+if [ "$ENABLE_PRODUCTION_PROMOTE" = "1" ]; then
+  CALIB_ARGS="$CALIB_ARGS --enable-production-promote"
+fi
+CALIB_ARGS="$CALIB_ARGS --min-samples-chall $CHALL_MIN_SAMPLES --improvement-threshold $CHALL_IMPROVEMENT_THRESHOLD"
+
+echo "[calibrate-confidence] $(date -Iseconds) start (challenger_opt=$ENABLE_CHALLENGER_OPT, promote=$ENABLE_PRODUCTION_PROMOTE)" >> "$BIST_LOG_PATH/calibrate_confidence.log"
 exec nice -n 10 ionice -c2 -n7 flock -n /opt/bist-pattern/logs/calibrate_confidence.lock \
-  "$PY" scripts/calibrate_confidence.py --window-days "$WINDOW_DAYS" --min-samples "$MIN_SAMPLES" $GO_LIVE_ARG "$@" >> "$BIST_LOG_PATH/calibrate_confidence.log" 2>&1
+  "$PY" scripts/calibrate_confidence.py $CALIB_ARGS $GO_LIVE_ARG "$@" >> "$BIST_LOG_PATH/calibrate_confidence.log" 2>&1
 
 

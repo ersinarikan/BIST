@@ -85,12 +85,24 @@ class MLPredictionSystem:
             return False
         
         try:
+            # ✅ FIX: Ensure directory exists and has correct permissions
+            os.makedirs(self.basic_model_dir, exist_ok=True)
+            
+            # ✅ FIX: Try to set permissions if possible (non-critical if fails)
+            try:
+                os.chmod(self.basic_model_dir, 0o775)
+            except Exception:
+                pass  # Non-critical, continue anyway
+            
             model_path = self._get_model_path(symbol)
             joblib.dump(models, model_path)  # type: ignore
             logger.debug(f"💾 Basic ML model saved to disk for {symbol}")
             return True
+        except PermissionError as e:
+            logger.warning(f"⚠️ Permission denied saving Basic ML model for {symbol}: {e}. Model will work in memory only.")
+            return False
         except Exception as e:
-            logger.error(f"Failed to save Basic ML model for {symbol}: {e}")
+            logger.error(f"❌ Failed to save Basic ML model for {symbol}: {e}")
             return False
 
     def create_technical_features(self, data: pd.DataFrame) -> pd.DataFrame:
