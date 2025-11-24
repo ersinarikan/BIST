@@ -855,7 +855,10 @@ class ContinuousHPOPipeline:
             except (OSError, PermissionError):
                 # May require root, ignore if fails
                 pass
-                
+            
+            # Run subprocess regardless of whether setting priority succeeded or failed
+            result: Optional[subprocess.CompletedProcess[str]] = None
+            try:
                 result = subprocess.run(
                     numa_cmd,
                     capture_output=True,
@@ -865,9 +868,17 @@ class ContinuousHPOPipeline:
                     env=env,  # Pass environment variables including DRY_RUN_TRIALS
                     preexec_fn=lambda: os.nice(-5) if hasattr(os, 'nice') else None
                 )
+            except Exception as e:
+                logger.error(f"❌ Failed to run HPO subprocess for {symbol} {horizon}d: {e}")
+                result = None
             finally:
                 release_hpo_slot(slot_fd)
                 logger.info(f"🔓 HPO slot released for {symbol} {horizon}d")
+            
+            # Check if subprocess completed successfully
+            if result is None:
+                logger.error(f"❌ HPO subprocess failed to start for {symbol} {horizon}d")
+                return None
             
             # ✅ FIX: Log subprocess output for debugging (use INFO level to ensure visibility)
             # ⚡ CRITICAL: Filter out web app logs (pattern_detector, unified_collector, etc.)
