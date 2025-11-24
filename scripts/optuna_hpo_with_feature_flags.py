@@ -14,7 +14,8 @@ import sys
 import json
 import argparse
 from datetime import datetime
-from typing import cast, Optional
+import math
+from typing import Any, Dict, List, Optional, cast
 
 import numpy as np
 import optuna
@@ -134,6 +135,63 @@ def dirhit(y_true: np.ndarray, y_pred: np.ndarray, thr: float = 0.005) -> float:
     if m.sum() == 0:
         return 0.0
     return float(np.mean(yt[m] == yp[m]) * 100.0)
+
+
+def _extract_model_metrics_for_horizon(train_result: Any, horizon: int) -> Dict[str, Dict[str, float]]:
+    """
+    Pull lightweight metrics (raw_r2, rmse, mape, confidence) for each base model
+    from EnhancedMLSystem.train_enhanced_models() return payload.
+    """
+    metrics: Dict[str, Dict[str, float]] = {}
+    if not isinstance(train_result, dict):
+        return metrics
+    horizon_key = f"{horizon}d"
+    horizon_models = train_result.get(horizon_key, {})
+    if not isinstance(horizon_models, dict):
+        return metrics
+    for model_name, info in horizon_models.items():
+        if not isinstance(info, dict):
+            continue
+        payload: Dict[str, float] = {}
+        for key in ('raw_r2', 'rmse', 'mape'):
+            val = info.get(key)
+            if isinstance(val, (int, float)) and math.isfinite(val):
+                payload[key] = float(val)
+        conf = info.get('score')
+        if isinstance(conf, (int, float)) and math.isfinite(conf):
+            payload['confidence'] = float(conf)
+        if payload:
+            metrics[model_name] = payload
+    return metrics
+
+
+def _aggregate_model_metrics(split_metrics: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+    """Average metrics across splits for each base learner."""
+    metric_keys = ('raw_r2', 'rmse', 'mape', 'confidence')
+    sums: Dict[str, Dict[str, float]] = {}
+    counts: Dict[str, Dict[str, int]] = {}
+    for split in split_metrics:
+        model_metrics = split.get('model_metrics') or {}
+        if not isinstance(model_metrics, dict):
+            continue
+        for model_name, metrics in model_metrics.items():
+            if not isinstance(metrics, dict):
+                continue
+            sums.setdefault(model_name, {k: 0.0 for k in metric_keys})
+            counts.setdefault(model_name, {k: 0 for k in metric_keys})
+            for key in metric_keys:
+                val = metrics.get(key)
+                if isinstance(val, (int, float)) and math.isfinite(val):
+                    sums[model_name][key] += float(val)
+                    counts[model_name][key] += 1
+    averages: Dict[str, Dict[str, float]] = {}
+    for model_name, metric_sum in sums.items():
+        averages[model_name] = {}
+        for key, total in metric_sum.items():
+            count = counts[model_name][key]
+            if count > 0:
+                averages[model_name][key] = total / count
+    return averages
 
 
 def calculate_dynamic_split(total_days: int, horizon: int) -> int:
@@ -519,9 +577,17 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
     
     dirhits = []
     nrmses = []
+    trial_symbol_metrics: Dict[str, Dict[str, Any]] = {}
     print(f"[hpo] Trial {trial.number}: Processing {len(symbols)} symbols: {symbols}", file=sys.stderr, flush=True)
     
     for sym in symbols:
+        symbol_key = f"{sym}_{horizon}d"
+        symbol_metric_entry: Dict[str, Any] = {
+            'symbol': sym,
+            'horizon': horizon,
+            'split_metrics': []
+        }
+        trial_symbol_metrics[symbol_key] = symbol_metric_entry
         print(f"[hpo] Trial {trial.number}: Fetching prices for {sym}...", file=sys.stderr, flush=True)
         df = fetch_prices(engine, sym)
         if df is None:
@@ -578,6 +644,8 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
                     print(f"[hpo] Traceback: {traceback.format_exc()}", file=sys.stderr, flush=True)
                 continue
             
+            split_model_metrics = _extract_model_metrics_for_horizon(result, horizon)
+            
             # Walk-forward prediction
             y_true = compute_returns(test_df, horizon)
             preds = np.full(len(test_df), np.nan, dtype=float)
@@ -596,6 +664,7 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
             
             valid_predictions = 0
             prediction_details = []  # Store first 5 and last 5 predictions for analysis (only first split)
+            split_ensemble_debug = None
             
             for t in range(len(test_df) - horizon):
                 try:
@@ -635,6 +704,26 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
                                     'direction_match': np.sign(pred_return) == np.sign(true_return) if not np.isnan(true_return) else None
                                 }
                                 prediction_details.append(pred_details)
+                            
+                            if split_ensemble_debug is None:
+                                hist_info = obj.get('historical_r2_used')
+                                weights_info = obj.get('ensemble_weights')
+                                hist_source = obj.get('historical_r2_source')
+                                debug_payload: Dict[str, Any] = {}
+                                if isinstance(hist_info, dict):
+                                    debug_payload['historical_r2'] = {
+                                        k: float(v) for k, v in hist_info.items()
+                                        if isinstance(v, (int, float)) and math.isfinite(v)
+                                    }
+                                if isinstance(weights_info, dict):
+                                    debug_payload['ensemble_weights'] = {
+                                        k: float(v) for k, v in weights_info.items()
+                                        if isinstance(v, (int, float)) and math.isfinite(v)
+                                    }
+                                if debug_payload:
+                                    if isinstance(hist_source, str):
+                                        debug_payload['source'] = hist_source
+                                    split_ensemble_debug = debug_payload
                     elif t == 0 and split_idx == 1:  # Log only first failure of first split
                         print(f"[hpo-debug] {sym} {horizon}d t={t}: ensemble_prediction invalid: {pred_price} (type: {type(pred_price).__name__})", file=sys.stderr, flush=True)
                 except Exception as e:
@@ -660,6 +749,13 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
             valid_mask = ~np.isnan(preds) & ~np.isnan(y_true.values)
             valid_count = valid_mask.sum()
             
+            dirhit_val: Optional[float] = None
+            rmse = None
+            mape = None
+            nrmse_val = float('nan')
+            mask_count = 0
+            mask_pct = 0.0
+            
             # 🔍 DEBUG: Calculate additional metrics
             if valid_count > 0:
                 # DirHit
@@ -673,8 +769,8 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
                 
                 # Threshold mask statistics
                 thr = 0.005
-                mask_count = ((np.abs(y_true_valid) > thr) & (np.abs(preds_valid) > thr)).sum()
-                mask_pct = (mask_count / valid_count) * 100 if valid_count > 0 else 0
+                mask_count = int(((np.abs(y_true_valid) > thr) & (np.abs(preds_valid) > thr)).sum())
+                mask_pct = (mask_count / valid_count) * 100 if valid_count > 0 else 0.0
                 
                 # Direction statistics
                 direction_matches = (np.sign(y_true_valid) == np.sign(preds_valid)).sum()
@@ -712,24 +808,49 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
                     f"y_true: {y_true_valid}/{len(y_true)} valid)",
                     file=sys.stderr, flush=True
                 )
+            
+            split_entry: Dict[str, Any] = {
+                'split_index': int(split_idx),
+                'train_days': int(len(train_df)),
+                'test_days': int(len(test_df)),
+                'valid_predictions': int(valid_count),
+                'model_metrics': split_model_metrics,
+                'dirhit': float(dirhit_val) if dirhit_val is not None else None,
+                'rmse': float(rmse) if isinstance(rmse, (int, float)) and math.isfinite(rmse) else None,
+                'mape': float(mape) if isinstance(mape, (int, float)) and math.isfinite(mape) else None,
+                'nrmse': float(nrmse_val) if isinstance(nrmse_val, (int, float)) and math.isfinite(nrmse_val) else None,
+                'mask_count': int(mask_count),
+                'mask_pct': float(mask_pct),
+            }
+            if split_ensemble_debug:
+                split_entry['ensemble_debug'] = split_ensemble_debug
+            symbol_metric_entry['split_metrics'].append(split_entry)
         
         # Average DirHit across all splits
+        avg_dirhit_value = None
         if split_dirhits:
-            avg_dirhit = float(np.mean(split_dirhits))
+            avg_dirhit_value = float(np.mean(split_dirhits))
             print(
-                f"[hpo] {sym} {horizon}d: Average DirHit across {len(split_dirhits)} splits: {avg_dirhit:.2f}% "
+                f"[hpo] {sym} {horizon}d: Average DirHit across {len(split_dirhits)} splits: {avg_dirhit_value:.2f}% "
                 f"(splits: {split_dirhits})",
                 file=sys.stderr, flush=True
             )
-            dirhits.append(avg_dirhit)
+            dirhits.append(avg_dirhit_value)
         else:
             print(f"[hpo] {sym} {horizon}d: No valid DirHit from any split", file=sys.stderr, flush=True)
         # Compute per-symbol nRMSE as the average across split nRMSE values
+        avg_nrmse_value = None
         if split_nrmses_local:
             try:
-                nrmses.append(float(np.mean(split_nrmses_local)))
+                avg_nrmse_local = float(np.mean(split_nrmses_local))
+                nrmses.append(avg_nrmse_local)
+                avg_nrmse_value = avg_nrmse_local
             except Exception:
                 pass
+        symbol_metric_entry['avg_dirhit'] = avg_dirhit_value
+        symbol_metric_entry['avg_nrmse'] = avg_nrmse_value
+        symbol_metric_entry['split_count'] = len(symbol_metric_entry['split_metrics'])
+        symbol_metric_entry['avg_model_metrics'] = _aggregate_model_metrics(symbol_metric_entry['split_metrics'])
     
     if not dirhits:
         print(f"[hpo] Trial {trial.number}: No DirHit values calculated for any symbol! Returning 0.0", file=sys.stderr, flush=True)
@@ -1060,6 +1181,9 @@ def main():
             'ENABLE_CATBOOST': '1' if best_params.get('model_choice') in ('cat', 'all') else '0',
         }
     }
+    symbol_metrics_best = best_trial.user_attrs.get('symbol_metrics')
+    if isinstance(symbol_metrics_best, dict):
+        result['best_trial_metrics'] = symbol_metrics_best
     
     # ✅ CRITICAL FIX: Atomic JSON file write (prevents corrupt files)
     # Write to temp file first, then atomic rename to prevent partial writes

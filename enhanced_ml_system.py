@@ -334,6 +334,9 @@ class EnhancedMLSystem:
         self.scalers = {}
         self.feature_importance = {}
         self.model_performance = {}
+        # Reference ensemble weights/metrics injected during evaluation (e.g., to mirror HPO behavior)
+        self.reference_historical_r2: Dict[str, Dict[str, float]] = {}
+        self.use_reference_historical_r2 = False
         # ⚡ NEW: Meta-learners storage (Ridge for stacking)
         self.meta_learners = {}  # {symbol_horizon: Ridge model}
         # ✅ FIX: Use ConfigManager for consistent config access
@@ -4824,6 +4827,10 @@ class EnhancedMLSystem:
                             # Short-only mode: only enable for short horizons
                             use_meta_for_horizon = horizon in (1, 3, 7)
                         
+                        historical_r2_map = None
+                        historical_r2_source = 'model'
+                        ensemble_weights_map = None
+                        
                         if use_meta_for_horizon and len(predictions_list) >= 2:
                             try:
                                 # Meta-features: base predictions as features
@@ -4892,20 +4899,37 @@ class EnhancedMLSystem:
                                     # Use raw_r2 from metrics if available, fallback to confidence (converted from R²)
                                     historical_r2 = []
                                     for info in model_predictions.values():
-                                        # Prefer raw_r2 (actual R² score) over confidence (converted from R²)
                                         r2_val = info.get('raw_r2')
                                         if r2_val is not None and isinstance(r2_val, (int, float)):
-                                            # Use raw R² directly (can be negative, smart_ensemble handles it)
                                             historical_r2.append(float(r2_val))
                                         else:
-                                            # Fallback: try to reverse-engineer R² from confidence
-                                            # confidence = _r2_to_confidence(r2), approximate inverse
                                             conf = float(info.get('confidence', 0.5))
-                                            # Rough inverse: conf ~ 0.3 + 0.65/(1+exp(-5*r2))
-                                            # For conf in [0.3, 0.95], approximate r2 ≈ (conf-0.3)/0.65 * 0.8
                                             approx_r2 = max(-0.5, min(0.8, (conf - 0.3) / 0.65 * 0.8))
                                             historical_r2.append(approx_r2)
-                                    historical_r2 = np.array(historical_r2)
+                                    historical_r2 = np.array(historical_r2, dtype=float)
+                                    
+                                    try:
+                                        ref_map = getattr(self, 'reference_historical_r2', {})
+                                        key = f"{symbol}_{horizon}d"
+                                        use_reference = getattr(self, 'use_reference_historical_r2', False)
+                                        ref_values = ref_map.get(key) if isinstance(ref_map, dict) else None
+                                        if use_reference and isinstance(ref_values, dict) and ref_values:
+                                            overridden = []
+                                            for idx, model_name in enumerate(model_predictions.keys()):
+                                                ref_val = ref_values.get(model_name)
+                                                if isinstance(ref_val, (int, float)):
+                                                    overridden.append(float(ref_val))
+                                                else:
+                                                    overridden.append(float(historical_r2[idx]))
+                                            historical_r2 = np.array(overridden, dtype=float)
+                                            historical_r2_source = 'reference'
+                                    except Exception:
+                                        historical_r2_source = 'model'
+                                    
+                                    historical_r2_map = {
+                                        model_name: float(historical_r2[idx])
+                                        for idx, model_name in enumerate(model_predictions.keys())
+                                    }
                                     
                                     # Smart ensemble: consensus + performance (HPO-optimizable)
                                     # ✅ FIX: Use correct parameter names (sigma, consensus_weight, performance_weight)
@@ -4946,6 +4970,13 @@ class EnhancedMLSystem:
                                     
                                     # Confidence: weighted average with disagreement penalty
                                     avg_confidence = np.average(weights, weights=final_weights) * confidence_scale
+                                    try:
+                                        ensemble_weights_map = {
+                                            model_name: float(final_weights[idx])
+                                            for idx, model_name in enumerate(model_predictions.keys())
+                                        }
+                                    except Exception:
+                                        ensemble_weights_map = None
                                     
                                     # Disagreement penalty (if models diverge)
                                     pred_std = np.std(predictions_list)
@@ -4993,6 +5024,9 @@ class EnhancedMLSystem:
                             'models': model_predictions,
                             'current_price': float(current_data['close'].iloc[-1]),
                             'model_count': len(model_predictions),
+                            'historical_r2_used': historical_r2_map,
+                            'historical_r2_source': historical_r2_source,
+                            'ensemble_weights': ensemble_weights_map,
                             **({'guard': guard_info} if guard_info else {}),
                         }
             

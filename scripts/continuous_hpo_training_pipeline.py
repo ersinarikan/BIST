@@ -22,9 +22,10 @@ import sys
 import json
 import time
 import logging
+import math
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 from dataclasses import dataclass, asdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import subprocess
@@ -48,6 +49,55 @@ os.environ['WRITE_ENHANCED_DURING_CYCLE'] = '0'
 if 'DATABASE_URL' not in os.environ:
     # PgBouncer default on localhost:6432 (fallback)
     os.environ['DATABASE_URL'] = 'postgresql://bist_user:5ex5chan5GE5*@127.0.0.1:6432/bist_pattern_db'
+
+
+def _get_best_trial_metrics_entry(hpo_result: Optional[Dict[str, Any]], symbol: str, horizon: int) -> Optional[Dict[str, Any]]:
+    if not isinstance(hpo_result, dict):
+        return None
+    metrics = hpo_result.get('best_trial_metrics')
+    if not isinstance(metrics, dict):
+        return None
+    key = f"{symbol}_{horizon}d"
+    entry = metrics.get(key)
+    return entry if isinstance(entry, dict) else None
+
+
+def _extract_reference_historical_r2(metrics_entry: Optional[Dict[str, Any]]) -> Optional[Dict[str, float]]:
+    if not isinstance(metrics_entry, dict):
+        return None
+    avg_metrics = metrics_entry.get('avg_model_metrics')
+    if not isinstance(avg_metrics, dict):
+        return None
+    ref_map: Dict[str, float] = {}
+    for model_name, stats in avg_metrics.items():
+        if not isinstance(stats, dict):
+            continue
+        raw = stats.get('raw_r2')
+        if isinstance(raw, (int, float)) and math.isfinite(raw):
+            ref_map[model_name] = float(raw)
+    return ref_map if ref_map else None
+
+
+def _extract_model_metrics_from_train_result(train_result: Any, horizon: int) -> Dict[str, Dict[str, float]]:
+    metrics: Dict[str, Dict[str, float]] = {}
+    if not isinstance(train_result, dict):
+        return metrics
+    horizon_key = f"{horizon}d"
+    horizon_models = train_result.get(horizon_key, {})
+    if not isinstance(horizon_models, dict):
+        return metrics
+    for model_name, info in horizon_models.items():
+        if not isinstance(info, dict):
+            continue
+        payload: Dict[str, float] = {}
+        for key in ('raw_r2', 'rmse', 'mape'):
+            val = info.get(key)
+            if isinstance(val, (int, float)) and math.isfinite(val):
+                payload[key] = float(val)
+        if payload:
+            metrics[model_name] = payload
+    return metrics
+
 
 # ⚡ CRITICAL: Configure logging BEFORE importing modules that use logging
 # This prevents their loggers from affecting our log file
@@ -1513,6 +1563,24 @@ class ContinuousHPOPipeline:
             # But we ensure the flag matches HPO for consistency
             logger.info(f"🔧 {symbol} {horizon}d WFV: Set base_seeds={ml_eval.base_seeds}, enable_seed_bagging={ml_eval.enable_seed_bagging} (matching HPO trial {best_trial_number})")
             
+            reference_entry = _get_best_trial_metrics_entry(hpo_result, symbol, horizon)
+            reference_r2_map = _extract_reference_historical_r2(reference_entry)
+            reference_key = f"{symbol}_{horizon}d"
+            if reference_r2_map:
+                try:
+                    ml_eval.reference_historical_r2[reference_key] = reference_r2_map
+                    ml_eval.use_reference_historical_r2 = True
+                    logger.info(
+                        f"📊 {symbol} {horizon}d: Using HPO historical R² reference for ensemble weighting "
+                        f"(models: {', '.join(reference_r2_map.keys())})"
+                    )
+                except Exception as ref_err:
+                    logger.warning(f"⚠️ {symbol} {horizon}d: Failed to inject reference historical R²: {ref_err}")
+                    ml_eval.use_reference_historical_r2 = False
+            else:
+                ml_eval.use_reference_historical_r2 = False
+                ml_eval.reference_historical_r2.pop(reference_key, None)
+            
             # ⚡ NEW: Evaluate on all splits and average DirHit, nRMSE, and Score (same as HPO)
             split_dirhits = []
             split_nrmses = []
@@ -1550,6 +1618,18 @@ class ContinuousHPOPipeline:
                     logger.warning(f"⚠️ {symbol} {horizon}d WFV Split {split_idx}: Model eğitimi başarısız, split atlanıyor")
                     continue
                 
+                if reference_r2_map:
+                    actual_metrics = _extract_model_metrics_from_train_result(train_result, horizon)
+                    if actual_metrics:
+                        for model_name, ref_val in reference_r2_map.items():
+                            actual_val = actual_metrics.get(model_name, {}).get('raw_r2')
+                            if actual_val is None or not math.isfinite(actual_val):
+                                continue
+                            delta = actual_val - ref_val
+                            logger.info(
+                                f"📏 {symbol} {horizon}d WFV Split {split_idx}: {model_name} raw_r2 "
+                                f"HPO={ref_val:.4f}, train={actual_val:.4f}, delta={delta:+.4f}"
+                            )
                 preds = np.full(len(test_df_split), np.nan, dtype=float)
                 valid_predictions = 0
                 for t in range(len(test_df_split) - horizon):
@@ -1896,6 +1976,16 @@ class ContinuousHPOPipeline:
             # Note: base_seeds is already set to single seed, so seed bagging will effectively be disabled
             # But we ensure the flag matches HPO for consistency
             logger.info(f"🔧 {symbol} {horizon}d Online: Set base_seeds={ml_online.base_seeds}, enable_seed_bagging={ml_online.enable_seed_bagging} (matching HPO trial {best_trial_number})")
+            if reference_r2_map:
+                try:
+                    ml_online.reference_historical_r2[reference_key] = reference_r2_map
+                    ml_online.use_reference_historical_r2 = True
+                except Exception as ref_err:
+                    logger.warning(f"⚠️ {symbol} {horizon}d Online: Failed to inject reference historical R²: {ref_err}")
+                    ml_online.use_reference_historical_r2 = False
+            else:
+                ml_online.use_reference_historical_r2 = False
+                ml_online.reference_historical_r2.pop(reference_key, None)
             
             # ✅ CRITICAL FIX: Evaluation mode - skip Phase 2 to match HPO data usage
             # HPO'da tüm train_df kullanılıyor (adaptive OFF)
@@ -1947,6 +2037,18 @@ class ContinuousHPOPipeline:
                     logger.info(f"✅ {symbol} {horizon}d Online: Model eğitimi tamamlandı (adaptive OFF - HPO ile tutarlılık)")
                 
                 preds2 = np.full(len(test_df_split), np.nan, dtype=float)
+                if reference_r2_map:
+                    actual_metrics_online = _extract_model_metrics_from_train_result(train_result2, horizon)
+                    if actual_metrics_online:
+                        for model_name, ref_val in reference_r2_map.items():
+                            actual_val = actual_metrics_online.get(model_name, {}).get('raw_r2')
+                            if actual_val is None or not math.isfinite(actual_val):
+                                continue
+                            delta = actual_val - ref_val
+                            logger.info(
+                                f"📏 {symbol} {horizon}d Online Split {split_idx}: {model_name} raw_r2 "
+                                f"HPO={ref_val:.4f}, train={actual_val:.4f}, delta={delta:+.4f}"
+                            )
                 valid_predictions2 = 0
                 for t in range(len(test_df_split) - horizon):
                     try:
@@ -2299,8 +2401,15 @@ class ContinuousHPOPipeline:
             clear_enhanced_ml_system()
             
             with app.app_context():
-                det = HybridPatternDetector()
-                df = det.get_stock_data(symbol, days=0)
+                # ✅ CRITICAL FIX: Use fetch_prices (cache bypass) instead of get_stock_data
+                # This ensures training uses the same data source as HPO (direct DB, no cache)
+                # HPO uses fetch_prices which bypasses cache, so training should too for consistency
+                from sqlalchemy import create_engine
+                from scripts.optuna_hpo_with_feature_flags import fetch_prices
+                
+                db_url = os.getenv('DATABASE_URL', 'postgresql://bist_user:5ex5chan5GE5*@127.0.0.1:6432/bist_pattern_db').strip()
+                engine = create_engine(db_url, pool_pre_ping=True, pool_recycle=3600)
+                df = fetch_prices(engine, symbol, limit=1200)
                 
                 if df is None or len(df) < 50:
                     logger.warning(f"❌ {symbol}: Insufficient data ({len(df) if df is not None else 0} days)")
