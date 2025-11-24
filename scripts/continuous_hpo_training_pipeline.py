@@ -1298,10 +1298,11 @@ class ContinuousHPOPipeline:
                         os.environ['ENABLE_FINGPT'] = '1' if value else '0'
             else:
                 # Fallback: Align with HPO - disable seed bagging and directional loss during evaluation
-                original_seed_bag = os.environ.get('ENABLE_SEED_BAGGING', '0')
+                # ✅ CRITICAL FIX: Don't use default values - we need to distinguish between "unset" and "set to default"
+                original_seed_bag = os.environ.get('ENABLE_SEED_BAGGING')  # None if not set
                 os.environ['ENABLE_SEED_BAGGING'] = '0'
                 # ✅ CRITICAL FIX: Align with HPO - disable directional loss (use MSE loss)
-                original_directional = os.environ.get('ML_USE_DIRECTIONAL_LOSS', '1')
+                original_directional = os.environ.get('ML_USE_DIRECTIONAL_LOSS')  # None if not set
                 os.environ['ML_USE_DIRECTIONAL_LOSS'] = '0'  # MSE loss (same as HPO)
             # ✅ CRITICAL FIX: Don't use singleton, create new instance (same as HPO)
             # import enhanced_ml_system
@@ -1486,16 +1487,18 @@ class ContinuousHPOPipeline:
         finally:
             if original_adaptive is not None:
                 os.environ['ML_USE_ADAPTIVE_LEARNING'] = original_adaptive
+            # ✅ CRITICAL FIX: Restore seed bagging - remove if it wasn't set before (same logic as smart ensemble params)
             if original_seed_bag is not None:
-                try:
-                    os.environ['ENABLE_SEED_BAGGING'] = original_seed_bag
-                except Exception:
-                    pass
+                os.environ['ENABLE_SEED_BAGGING'] = original_seed_bag
+            elif 'ENABLE_SEED_BAGGING' in os.environ and original_seed_bag is None:
+                # Was not set before, remove it
+                os.environ.pop('ENABLE_SEED_BAGGING', None)
+            # ✅ CRITICAL FIX: Restore directional loss - remove if it wasn't set before (same logic as smart ensemble params)
             if original_directional is not None:
-                try:
-                    os.environ['ML_USE_DIRECTIONAL_LOSS'] = original_directional
-                except Exception:
-                    pass
+                os.environ['ML_USE_DIRECTIONAL_LOSS'] = original_directional
+            elif 'ML_USE_DIRECTIONAL_LOSS' in os.environ and original_directional is None:
+                # Was not set before, remove it
+                os.environ.pop('ML_USE_DIRECTIONAL_LOSS', None)
 
         # 2) Online (adaptive OFF) - HİBRİT YAKLAŞIM: Model'i train_df ile yeniden eğit (adaptive OFF - HPO ile tutarlılık)
         # Initialize for finally safety
@@ -1517,8 +1520,9 @@ class ContinuousHPOPipeline:
             
             # ✅ CRITICAL FIX: Set feature flags from best_params to match HPO best trial exactly
             # This ensures evaluation uses the same feature flags as HPO (including seed bagging and directional loss)
-            original_seed_bag2 = os.environ.get('ENABLE_SEED_BAGGING', '0')
-            original_directional2 = os.environ.get('ML_USE_DIRECTIONAL_LOSS', '1')
+            # ✅ CRITICAL FIX: Don't use default values - we need to distinguish between "unset" and "set to default"
+            original_seed_bag2 = os.environ.get('ENABLE_SEED_BAGGING')  # None if not set
+            original_directional2 = os.environ.get('ML_USE_DIRECTIONAL_LOSS')  # None if not set
             
             if best_params and isinstance(best_params, dict):
                 # Set feature flags from features_enabled dict (HPO best trial)
@@ -1799,16 +1803,18 @@ class ContinuousHPOPipeline:
             # ✅ CRITICAL FIX: Restore all modified environment variables
             if original_adaptive2 is not None:
                 os.environ['ML_USE_ADAPTIVE_LEARNING'] = original_adaptive2
+            # ✅ CRITICAL FIX: Restore seed bagging - remove if it wasn't set before (same logic as smart ensemble params)
             if original_seed_bag2 is not None:
-                try:
-                    os.environ['ENABLE_SEED_BAGGING'] = original_seed_bag2
-                except Exception:
-                    pass
+                os.environ['ENABLE_SEED_BAGGING'] = original_seed_bag2
+            elif 'ENABLE_SEED_BAGGING' in os.environ and original_seed_bag2 is None:
+                # Was not set before, remove it
+                os.environ.pop('ENABLE_SEED_BAGGING', None)
+            # ✅ CRITICAL FIX: Restore directional loss - remove if it wasn't set before (same logic as smart ensemble params)
             if original_directional2 is not None:
-                try:
-                    os.environ['ML_USE_DIRECTIONAL_LOSS'] = original_directional2
-                except Exception:
-                    pass
+                os.environ['ML_USE_DIRECTIONAL_LOSS'] = original_directional2
+            elif 'ML_USE_DIRECTIONAL_LOSS' in os.environ and original_directional2 is None:
+                # Was not set before, remove it
+                os.environ.pop('ML_USE_DIRECTIONAL_LOSS', None)
             # ✅ CRITICAL FIX: Restore smart ensemble parameters
             if original_smart_consensus_weight is not None:
                 os.environ['ML_SMART_CONSENSUS_WEIGHT'] = original_smart_consensus_weight
