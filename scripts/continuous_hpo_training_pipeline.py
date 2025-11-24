@@ -29,7 +29,6 @@ from dataclasses import dataclass, asdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import subprocess
 import fcntl
-import tempfile
 import shutil
 import threading
 import numpy as np
@@ -386,35 +385,51 @@ class ContinuousHPOPipeline:
     
     def save_state(self):
         """Save pipeline state to file (merge-aware for concurrent processes)"""
+        # ✅ CRITICAL FIX: Hold exclusive lock throughout entire read-modify-write cycle
+        # This prevents race conditions where another process modifies state between read and write
+        lock_fd = None
         try:
-            # ⚡ CRITICAL FIX: Use exclusive lock for both read and write to prevent race conditions
-            # This ensures that only one process can read-modify-write at a time
-            merged_state = {}
+            # Open state file for reading/writing and acquire exclusive lock
+            # Lock will be held until the entire read-modify-write cycle completes
+            self.state_file.parent.mkdir(parents=True, exist_ok=True)
+            ensure_directory_permissions(self.state_file.parent)
             
-            # Read existing state from file (if exists) with exclusive lock
-            # ✅ FIX: Use exclusive lock during read to prevent concurrent modifications
+            # Open file in read-write mode to hold lock across read and write operations
             if self.state_file.exists():
-                try:
-                    with open(self.state_file, 'r') as f:
-                        try:
-                            # Use exclusive lock for read to prevent race conditions
-                            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                        except Exception:
-                            pass
-                        existing_data = json.load(f)
-                        # Merge existing tasks
-                        for key, task_data in existing_data.get('state', {}).items():
-                            merged_state[key] = task_data
-                except Exception:
-                    # If read fails, start fresh (but log it)
-                    logger.warning("⚠️ Could not read existing state for merge, using current state only")
+                lock_fd = os.open(self.state_file, os.O_RDWR)
+            else:
+                # File doesn't exist, create it
+                lock_fd = os.open(self.state_file, os.O_CREAT | os.O_RDWR, 0o644)
+            
+            # Acquire exclusive lock - will be held until explicitly released
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            except Exception:
+                pass  # Lock acquisition failed, continue anyway (best effort)
+            
+            # Read existing state (with lock held)
+            merged_state = {}
+            existing_data = {}
+            try:
+                # Seek to beginning and read
+                os.lseek(lock_fd, 0, os.SEEK_SET)
+                content = os.read(lock_fd, 1024 * 1024)  # Read up to 1MB
+                if content:
+                    existing_data = json.loads(content.decode('utf-8'))
+                    # Merge existing tasks
+                    for key, task_data in existing_data.get('state', {}).items():
+                        merged_state[key] = task_data
+            except Exception:
+                # If read fails, start fresh (but log it)
+                logger.warning("⚠️ Could not read existing state for merge, using current state only")
             
             # Merge current process's updates (overwrite only changed tasks)
+            # This happens while lock is still held
             for key, task in self.state.items():
                 merged_state[key] = asdict(task)
             
             # Get version number from existing state (if available) for optimistic locking
-            version = existing_data.get('version', 0) if self.state_file.exists() else 0
+            version = existing_data.get('version', 0) if existing_data else 0
             new_version = version + 1
             
             data = {
@@ -424,31 +439,39 @@ class ContinuousHPOPipeline:
                 'last_updated': datetime.now().isoformat()
             }
             
-            # Atomic write with exclusive lock
-            self.state_file.parent.mkdir(parents=True, exist_ok=True)
-            # ✅ FIX: Ensure directory permissions for shared access
-            ensure_directory_permissions(self.state_file.parent)
-            fd, tmp_path = tempfile.mkstemp(prefix='state_', suffix='.json', dir=str(self.state_file.parent))
+            # Atomic write (lock still held)
+            # Write to temp file first, then atomic rename
+            tmp_path = self.state_file.with_suffix('.json.tmp')
             try:
-                with os.fdopen(fd, 'w') as f:
-                    try:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                    except Exception:
-                        pass
+                with open(tmp_path, 'w') as f:
                     json.dump(data, f, indent=2)
                     f.flush()
                     os.fsync(f.fileno())
+                
+                # Atomic rename (lock still held, preventing concurrent writes)
                 os.replace(tmp_path, self.state_file)
                 # ✅ FIX: Ensure file permissions for shared access
                 ensure_file_permissions(self.state_file)
             finally:
-                if os.path.exists(tmp_path):
+                # Clean up temp file if it still exists
+                if tmp_path.exists():
                     try:
                         os.remove(tmp_path)
                     except Exception:
                         pass
         except Exception as e:
             logger.error(f"❌ Error saving state: {e}")
+        finally:
+            # Release lock and close file descriptor
+            if lock_fd is not None:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                except Exception:
+                    pass
+                try:
+                    os.close(lock_fd)
+                except Exception:
+                    pass
 
     def _reset_stale_in_progress(self):
         """Reset tasks left in 'in_progress' states (resume safety after restart)."""
