@@ -956,13 +956,11 @@ class ContinuousHPOPipeline:
                         if json_mtime < hpo_start_time - 300:
                             logger.debug(f"⚠️ HPO JSON file {json_file.name} is too old (created {time.time() - json_mtime:.0f}s before HPO start), skipping")
                             continue
-                    
-                    # ✅ CRITICAL FIX: Verify JSON file was created within reasonable time after HPO start
-                    # HPO can take up to 72 hours for 1500 trials, so allow up to 96 hours (4 days) after start
-                    # This handles cases where HPO takes longer than expected (e.g., 46 hours for 1500 trials)
-                    if json_mtime > hpo_start_time + 345600:  # 96 hours (4 days) - increased from 18 hours
-                        logger.debug(f"⚠️ HPO JSON file {json_file.name} is too new (created {json_mtime - hpo_start_time:.0f}s after HPO start), skipping")
-                        continue
+                        # For invalid JSON files, also check if too new (strict validation)
+                        # HPO can take up to 72 hours for 1500 trials, so allow up to 96 hours (4 days) after start
+                        if json_mtime > hpo_start_time + 345600:  # 96 hours (4 days) - increased from 18 hours
+                            logger.debug(f"⚠️ HPO JSON file {json_file.name} is too new (created {json_mtime - hpo_start_time:.0f}s after HPO start), skipping")
+                            continue
                     
                     with open(json_file, 'r') as f:
                         hpo_data = json.load(f)
