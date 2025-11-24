@@ -14,7 +14,7 @@ import os
 import math
 import logging
 import threading
-from typing import Optional
+from typing import Optional, Dict
 from bist_pattern.core.config_manager import ConfigManager
 from bist_pattern.utils.error_handler import ErrorHandler
 from sklearn.metrics import mean_squared_error, r2_score
