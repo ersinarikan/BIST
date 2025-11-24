@@ -13,6 +13,8 @@ import pandas as pd
 import os
 import math
 import logging
+import threading
+from typing import Optional
 from bist_pattern.core.config_manager import ConfigManager
 from bist_pattern.utils.error_handler import ErrorHandler
 from sklearn.metrics import mean_squared_error, r2_score
@@ -185,6 +187,143 @@ except ImportError:
     MLPredictionSystem = None  # type: ignore[misc,assignment]
 
 logger = logging.getLogger(__name__)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ATOMIC FILE OPERATIONS HELPERS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _atomic_write_json(file_path: str, data: any, indent: int = 2) -> None:
+    """
+    Atomically write JSON file (temp file + rename to prevent corrupt files).
+    
+    Args:
+        file_path: Target file path
+        data: Data to write (will be serialized as JSON, can be dict, list, etc.)
+        indent: JSON indentation (default: 2)
+    """
+    tmp_path = file_path + '.tmp'
+    try:
+        # Write to temp file
+        with open(tmp_path, 'w') as f:
+            json.dump(data, f, indent=indent)
+            f.flush()
+            try:
+                os.fsync(f.fileno())  # Force write to disk
+            except Exception:
+                pass  # fsync may not be available on all systems
+        
+        # Atomic rename (this is atomic on POSIX systems)
+        os.replace(tmp_path, file_path)
+    except Exception as e:
+        # Clean up temp file if it exists
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+        raise e
+
+
+def _atomic_write_pickle(file_path: str, data: any) -> None:
+    """
+    Atomically write pickle file using joblib (temp file + rename to prevent corrupt files).
+    
+    Args:
+        file_path: Target file path
+        data: Data to write (will be serialized using joblib)
+    """
+    tmp_path = file_path + '.tmp'
+    try:
+        # Write to temp file
+        joblib.dump(data, tmp_path)
+        # Force write to disk (joblib doesn't expose file descriptor, so we can't fsync)
+        # But rename is still atomic
+        
+        # Atomic rename (this is atomic on POSIX systems)
+        os.replace(tmp_path, file_path)
+    except Exception as e:
+        # Clean up temp file if it exists
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+        raise e
+
+
+def _atomic_read_modify_write_json(file_path: str, modify_func, default_data: Optional[dict] = None) -> None:
+    """
+    Atomically read-modify-write JSON file with file locking to prevent race conditions.
+    
+    Args:
+        file_path: Target file path
+        modify_func: Function that takes existing data dict and returns modified data dict
+        default_data: Default data if file doesn't exist (default: {})
+    """
+    import fcntl
+    if default_data is None:
+        default_data = {}
+    
+    lock_fd = None
+    try:
+        # Open file for reading/writing and acquire exclusive lock
+        if os.path.exists(file_path):
+            lock_fd = os.open(file_path, os.O_RDWR)
+        else:
+            # File doesn't exist, create it
+            lock_fd = os.open(file_path, os.O_CREAT | os.O_RDWR, 0o644)
+        
+        # Acquire exclusive lock - will be held until explicitly released
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        except Exception:
+            pass  # Lock acquisition failed, continue anyway (best effort)
+        
+        # Read existing data (with lock held)
+        existing_data = default_data.copy()
+        try:
+            os.lseek(lock_fd, 0, os.SEEK_SET)
+            content = os.read(lock_fd, 1024 * 1024)  # Read up to 1MB
+            if content:
+                existing_data = json.loads(content.decode('utf-8'))
+        except Exception:
+            pass  # File is empty or corrupt, use default_data
+        
+        # Modify data (lock still held)
+        modified_data = modify_func(existing_data)
+        
+        # Atomic write (lock still held)
+        tmp_path = file_path + '.tmp'
+        try:
+            with open(tmp_path, 'w') as f:
+                json.dump(modified_data, f, indent=2)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass
+            
+            # Atomic rename (lock still held, preventing concurrent writes)
+            os.replace(tmp_path, file_path)
+        finally:
+            # Clean up temp file if it still exists
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+    finally:
+        # Release lock and close file descriptor
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                os.close(lock_fd)
+            except Exception:
+                pass
 
 
 class EnhancedMLSystem:
@@ -1258,11 +1397,11 @@ class EnhancedMLSystem:
                 with engine.connect() as conn:
                     rows = conn.execute(sqla_text(query), params).fetchall()
             finally:
-                pass
-            try:
-                engine.dispose()
-            except Exception:
-                pass
+                # ✅ CRITICAL FIX: Dispose engine in finally block to ensure cleanup
+                try:
+                    engine.dispose()
+                except Exception:
+                    pass
             macro_data = pd.DataFrame(rows, columns=['date', 'usdtry', 'cds', 'rate'])
             
             if len(macro_data) > 0:
@@ -5192,7 +5331,8 @@ class EnhancedMLSystem:
                     
                     for model_name, model_info in models.items():
                         filename = f"{self.model_directory}/{model_key}_{model_name}.pkl"
-                        joblib.dump(model_info['model'], filename)
+                        # ✅ CRITICAL FIX: Atomic write to prevent corrupt model files
+                        _atomic_write_pickle(filename, model_info['model'])
             
             # Save per-horizon metrics (score/rmse/mape/raw_r2) to a JSON in model directory
             try:
@@ -5213,35 +5353,38 @@ class EnhancedMLSystem:
                                 continue
                         metrics[f"{h}d"] = entry
                 metrics_file = f"{self.model_directory}/{symbol}_metrics.json"
-                with open(metrics_file, 'w') as wf:
-                    json.dump(metrics, wf)
+                # ✅ CRITICAL FIX: Atomic write to prevent corrupt metrics file
+                _atomic_write_json(metrics_file, metrics)
             except Exception:
                 pass
 
             # Feature importance kaydet
             importance_file = f"{self.model_directory}/{symbol}_feature_importance.pkl"
             symbol_importance = {k: v for k, v in self.feature_importance.items() if k.startswith(symbol)}
-            joblib.dump(symbol_importance, importance_file)
+            # ✅ CRITICAL FIX: Atomic write to prevent corrupt feature importance file
+            _atomic_write_pickle(importance_file, symbol_importance)
             
             # ⚡ META-LEARNERS kaydet
             symbol_meta = {k: v for k, v in self.meta_learners.items() if k.startswith(symbol)}
             if symbol_meta:
                 meta_file = f"{self.model_directory}/{symbol}_meta_learners.pkl"
-                joblib.dump(symbol_meta, meta_file)
+                # ✅ CRITICAL FIX: Atomic write to prevent corrupt meta learners file
+                _atomic_write_pickle(meta_file, symbol_meta)
                 logger.debug(f"Meta-learners saved: {len(symbol_meta)} models")
             
             # ⚡ META-SCALERS kaydet (Ridge için gerekli!)
             symbol_scalers = {k: v for k, v in self.scalers.items() if k.startswith(symbol) and 'meta_scaler' in k}
             if symbol_scalers:
                 scalers_file = f"{self.model_directory}/{symbol}_meta_scalers.pkl"
-                joblib.dump(symbol_scalers, scalers_file)
+                # ✅ CRITICAL FIX: Atomic write to prevent corrupt meta scalers file
+                _atomic_write_pickle(scalers_file, symbol_scalers)
                 logger.debug(f"Meta-scalers saved: {len(symbol_scalers)} scalers")
             
             # Feature columns'ı ayrı JSON olarak kaydet (prediction için gerekli)
             try:
                 cols_file = f"{self.model_directory}/{symbol}_feature_columns.json"
-                with open(cols_file, 'w') as wf:
-                    json.dump(list(self.feature_columns or []), wf)
+                # ✅ CRITICAL FIX: Atomic write to prevent corrupt feature columns file
+                _atomic_write_json(cols_file, list(self.feature_columns or []))
             except Exception:
                 pass
             
@@ -5263,18 +5406,27 @@ class EnhancedMLSystem:
                         logger.debug(f"Could not load existing horizon features: {load_err}")
                         existing_horizon_features = {}
                 
-                # Merge current horizon features with existing ones
-                horizon_features = existing_horizon_features.copy()
-                for h in self.prediction_horizons:
-                    feature_key = f"{symbol}_{h}d_features"
-                    if feature_key in self.models:
-                        horizon_features[f"{h}d"] = list(self.models[feature_key])
-                        logger.debug(f"Adding {h}d horizon features ({len(self.models[feature_key])} features)")
+                # ✅ CRITICAL FIX: Atomic read-modify-write with file locking to prevent race conditions
+                # This ensures concurrent training processes don't overwrite each other's horizon features
+                def merge_horizon_features(existing: dict) -> dict:
+                    """Merge current horizon features with existing ones"""
+                    merged = existing.copy()
+                    for h in self.prediction_horizons:
+                        feature_key = f"{symbol}_{h}d_features"
+                        if feature_key in self.models:
+                            merged[f"{h}d"] = list(self.models[feature_key])
+                            logger.debug(f"Adding {h}d horizon features ({len(self.models[feature_key])} features)")
+                    return merged
                 
-                if horizon_features:
-                    with open(horizon_cols_file, 'w') as wf:
-                        json.dump(horizon_features, wf)
-                    logger.debug(f"Horizon-specific features saved: {len(horizon_features)} horizons ({list(horizon_features.keys())})")
+                if any(f"{symbol}_{h}d_features" in self.models for h in self.prediction_horizons):
+                    _atomic_read_modify_write_json(horizon_cols_file, merge_horizon_features, default_data={})
+                    # Read back to get final state for logging
+                    try:
+                        with open(horizon_cols_file, 'r') as rf:
+                            final_horizon_features = json.load(rf) or {}
+                        logger.debug(f"Horizon-specific features saved: {len(final_horizon_features)} horizons ({list(final_horizon_features.keys())})")
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.warning(f"Failed to save horizon-specific features: {e}")
 
@@ -5282,79 +5434,80 @@ class EnhancedMLSystem:
             try:
                 manifest_path = f"{self.model_directory}/{symbol}_manifest.json"
                 
-                # ✅ MERGE WRITE: Read existing manifest and update only current horizons
-                existing_manifest = {}
-                if os.path.exists(manifest_path):
-                    try:
-                        with open(manifest_path, 'r') as rf:
-                            existing_manifest = json.load(rf) or {}
-                    except Exception as _me:
-                        logger.debug(f"Manifest merge: existing read failed ({_me}), will recreate")
-                        existing_manifest = {}
-                
-                # Existing structures
-                ex_horizons = set(existing_manifest.get('horizons', []))
-                ex_enabled = existing_manifest.get('enabled_models', {}) or {}
-                ex_hfeat = existing_manifest.get('horizon_features', {}) or {}
-                ex_hcaps = existing_manifest.get('horizon_caps', {}) or {}
-                
-                # Compute current horizon entries
-                cur_enabled = {}
-                cur_hfeat = {}
-                cur_hcaps = {}
-                cur_hlist = []
-                for h in self.prediction_horizons:
-                    hk = f"{h}d"
-                    cur_hlist.append(hk)
-                    model_key = f"{symbol}_{h}d"
-                    # Enabled models for this horizon (only if trained in this run)
-                    if model_key in self.models:
-                        cur_enabled[hk] = list(self.models[model_key].keys())
-                    # Horizon features (if available in memory)
-                    cur_hfeat[hk] = list(self.models.get(f"{symbol}_{h}d_features", []))
-                    # Horizon empirical cap (if available)
-                    cap_val = self.models.get(f"{symbol}_{h}d_cap", np.nan)
-                    try:
-                        cur_hcaps[hk] = float(cap_val)
-                    except Exception:
-                        pass
-                
-                # Merge
-                new_enabled = dict(ex_enabled)
-                new_enabled.update({k: v for k, v in cur_enabled.items() if v})
-                new_hfeat = dict(ex_hfeat)
-                for k, v in cur_hfeat.items():
-                    if v:
-                        new_hfeat[k] = v
-                new_hcaps = dict(ex_hcaps)
-                for k, v in cur_hcaps.items():
-                    try:
-                        if np.isfinite(v):  # type: ignore[attr-defined]
-                            new_hcaps[k] = float(v)
-                    except Exception:
-                        # If numpy not available in this code path, accept any float-like value
+                # ✅ CRITICAL FIX: Atomic read-modify-write with file locking to prevent race conditions
+                # This ensures concurrent training processes don't overwrite each other's manifest updates
+                def merge_manifest(existing: dict) -> dict:
+                    """Merge current manifest with existing one"""
+                    # Existing structures
+                    ex_horizons = set(existing.get('horizons', []))
+                    ex_enabled = existing.get('enabled_models', {}) or {}
+                    ex_hfeat = existing.get('horizon_features', {}) or {}
+                    ex_hcaps = existing.get('horizon_caps', {}) or {}
+                    
+                    # Compute current horizon entries
+                    cur_enabled = {}
+                    cur_hfeat = {}
+                    cur_hcaps = {}
+                    cur_hlist = []
+                    for h in self.prediction_horizons:
+                        hk = f"{h}d"
+                        cur_hlist.append(hk)
+                        model_key = f"{symbol}_{h}d"
+                        # Enabled models for this horizon (only if trained in this run)
+                        if model_key in self.models:
+                            cur_enabled[hk] = list(self.models[model_key].keys())
+                        # Horizon features (if available in memory)
+                        cur_hfeat[hk] = list(self.models.get(f"{symbol}_{h}d_features", []))
+                        # Horizon empirical cap (if available)
+                        cap_val = self.models.get(f"{symbol}_{h}d_cap", np.nan)
                         try:
-                            fv = float(v)
-                            new_hcaps[k] = fv
+                            cur_hcaps[hk] = float(cap_val)
                         except Exception:
                             pass
+                    
+                    # Merge
+                    new_enabled = dict(ex_enabled)
+                    new_enabled.update({k: v for k, v in cur_enabled.items() if v})
+                    new_hfeat = dict(ex_hfeat)
+                    for k, v in cur_hfeat.items():
+                        if v:
+                            new_hfeat[k] = v
+                    new_hcaps = dict(ex_hcaps)
+                    for k, v in cur_hcaps.items():
+                        try:
+                            if np.isfinite(v):  # type: ignore[attr-defined]
+                                new_hcaps[k] = float(v)
+                        except Exception:
+                            # If numpy not available in this code path, accept any float-like value
+                            try:
+                                fv = float(v)
+                                new_hcaps[k] = fv
+                            except Exception:
+                                pass
+                    
+                    all_horizons = sorted(set(ex_horizons).union(cur_hlist))
+                    
+                    return {
+                        'symbol': symbol,
+                        'trained_at': datetime.now().isoformat(),
+                        'horizons': all_horizons,
+                        'feature_count': int(len(getattr(self, 'feature_columns', []) or [])),
+                        'has_meta_scalers': bool(any(k.startswith(symbol) and 'meta_scaler' in k for k in (self.scalers or {}).keys())),
+                        'horizon_features': new_hfeat,
+                        'horizon_caps': new_hcaps,
+                        'enabled_models': new_enabled,
+                    }
                 
-                all_horizons = sorted(set(ex_horizons).union(cur_hlist))
-                
-                manifest = {
-                    'symbol': symbol,
-                    'trained_at': datetime.now().isoformat(),
-                    'horizons': all_horizons,
-                    'feature_count': int(len(getattr(self, 'feature_columns', []) or [])),
-                    'has_meta_scalers': bool(any(k.startswith(symbol) and 'meta_scaler' in k for k in (self.scalers or {}).keys())),
-                    'horizon_features': new_hfeat,
-                    'horizon_caps': new_hcaps,
-                    'enabled_models': new_enabled,
-                }
-                
-                with open(manifest_path, 'w') as wf:
-                    json.dump(manifest, wf)
-                logger.debug(f"Model manifest merged & written: {manifest_path} (horizons={all_horizons})")
+                # Atomic read-modify-write with file locking
+                _atomic_read_modify_write_json(manifest_path, merge_manifest, default_data={})
+                # Read back to get final state for logging
+                try:
+                    with open(manifest_path, 'r') as rf:
+                        final_manifest = json.load(rf) or {}
+                    all_horizons = final_manifest.get('horizons', [])
+                    logger.debug(f"Model manifest merged & written: {manifest_path} (horizons={all_horizons})")
+                except Exception:
+                    pass
             except Exception as e:
                 logger.warning(f"Failed to write model manifest for {symbol}: {e}")
 
@@ -5726,13 +5879,22 @@ class EnhancedMLSystem:
 
 # Global singleton instance
 _enhanced_ml_system = None
+_singleton_lock = threading.Lock()
 
 
 def get_enhanced_ml_system():
-    """Enhanced ML System singleton'ını döndür"""
+    """
+    Enhanced ML System singleton'ını döndür (thread-safe).
+    
+    Uses double-checked locking pattern to ensure thread safety while
+    avoiding unnecessary locking after the instance is created.
+    """
     global _enhanced_ml_system
     if _enhanced_ml_system is None:
-        _enhanced_ml_system = EnhancedMLSystem()
+        with _singleton_lock:
+            # Double-check after acquiring lock (another thread may have created it)
+            if _enhanced_ml_system is None:
+                _enhanced_ml_system = EnhancedMLSystem()
     return _enhanced_ml_system
 
 

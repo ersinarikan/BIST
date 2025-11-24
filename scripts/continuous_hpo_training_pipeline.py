@@ -1502,6 +1502,15 @@ class ContinuousHPOPipeline:
         original_adaptive2: Optional[str] = None
         original_seed_bag2: Optional[str] = None
         original_directional2: Optional[str] = None
+        # ✅ CRITICAL FIX: Save original smart ensemble parameters for restoration
+        original_smart_consensus_weight: Optional[str] = None
+        original_smart_performance_weight: Optional[str] = None
+        original_smart_sigma: Optional[str] = None
+        original_smart_weight_xgb: Optional[str] = None
+        original_smart_weight_lgb: Optional[str] = None
+        original_smart_weight_cat: Optional[str] = None
+        # ✅ CRITICAL FIX: Save all dynamically set environment variables from features_enabled
+        original_env_vars: dict = {}
         try:
             original_adaptive2 = os.environ.get('ML_USE_ADAPTIVE_LEARNING', '0')
             os.environ['ML_USE_ADAPTIVE_LEARNING'] = '0'  # ✅ HİBRİT YAKLAŞIM: Adaptive OFF (HPO ile tutarlılık)
@@ -1515,8 +1524,10 @@ class ContinuousHPOPipeline:
                 # Set feature flags from features_enabled dict (HPO best trial)
                 features_enabled = best_params.get('features_enabled', {})
                 if features_enabled:
-                    # Set all feature flags from best_params (including ENABLE_SEED_BAGGING and ML_USE_DIRECTIONAL_LOSS)
+                    # ✅ CRITICAL FIX: Save original values before setting new ones
                     for key, value in features_enabled.items():
+                        if key not in original_env_vars:
+                            original_env_vars[key] = os.environ.get(key)  # Save original value (None if not set)
                         os.environ[key] = str(value)
                     logger.info(f"🔧 {symbol} {horizon}d Online: Feature flags set from best_params: {len(features_enabled)} flags")
                     seed_bag_val = os.environ.get('ENABLE_SEED_BAGGING', 'NOT_SET')
@@ -1554,17 +1565,24 @@ class ContinuousHPOPipeline:
                 try:
                     fp = best_params.get('feature_params', {}) if isinstance(best_params, dict) else {}
                     if isinstance(fp, dict) and fp:
+                        # ✅ CRITICAL FIX: Save original values before setting new ones
                         if 'smart_consensus_weight' in fp:
+                            original_smart_consensus_weight = os.environ.get('ML_SMART_CONSENSUS_WEIGHT')
                             os.environ['ML_SMART_CONSENSUS_WEIGHT'] = str(fp['smart_consensus_weight'])
                         if 'smart_performance_weight' in fp:
+                            original_smart_performance_weight = os.environ.get('ML_SMART_PERFORMANCE_WEIGHT')
                             os.environ['ML_SMART_PERFORMANCE_WEIGHT'] = str(fp['smart_performance_weight'])
                         if 'smart_sigma' in fp:
+                            original_smart_sigma = os.environ.get('ML_SMART_SIGMA')
                             os.environ['ML_SMART_SIGMA'] = str(fp['smart_sigma'])
                         if 'smart_weight_xgb' in fp:
+                            original_smart_weight_xgb = os.environ.get('ML_SMART_WEIGHT_XGB')
                             os.environ['ML_SMART_WEIGHT_XGB'] = str(fp['smart_weight_xgb'])
                         if 'smart_weight_lgbm' in fp or 'smart_weight_lgb' in fp:
+                            original_smart_weight_lgb = os.environ.get('ML_SMART_WEIGHT_LGB')
                             os.environ['ML_SMART_WEIGHT_LGB'] = str(fp.get('smart_weight_lgbm', fp.get('smart_weight_lgb')))
                         if 'smart_weight_cat' in fp:
+                            original_smart_weight_cat = os.environ.get('ML_SMART_WEIGHT_CAT')
                             os.environ['ML_SMART_WEIGHT_CAT'] = str(fp['smart_weight_cat'])
                 except Exception:
                     pass
@@ -1744,6 +1762,7 @@ class ContinuousHPOPipeline:
             import traceback
             logger.error(traceback.format_exc())
         finally:
+            # ✅ CRITICAL FIX: Restore all modified environment variables
             if original_adaptive2 is not None:
                 os.environ['ML_USE_ADAPTIVE_LEARNING'] = original_adaptive2
             if original_seed_bag2 is not None:
@@ -1754,6 +1773,42 @@ class ContinuousHPOPipeline:
             if original_directional2 is not None:
                 try:
                     os.environ['ML_USE_DIRECTIONAL_LOSS'] = original_directional2
+                except Exception:
+                    pass
+            # ✅ CRITICAL FIX: Restore smart ensemble parameters
+            if original_smart_consensus_weight is not None:
+                os.environ['ML_SMART_CONSENSUS_WEIGHT'] = original_smart_consensus_weight
+            elif 'ML_SMART_CONSENSUS_WEIGHT' in os.environ and original_smart_consensus_weight is None:
+                # Was not set before, remove it
+                os.environ.pop('ML_SMART_CONSENSUS_WEIGHT', None)
+            if original_smart_performance_weight is not None:
+                os.environ['ML_SMART_PERFORMANCE_WEIGHT'] = original_smart_performance_weight
+            elif 'ML_SMART_PERFORMANCE_WEIGHT' in os.environ and original_smart_performance_weight is None:
+                os.environ.pop('ML_SMART_PERFORMANCE_WEIGHT', None)
+            if original_smart_sigma is not None:
+                os.environ['ML_SMART_SIGMA'] = original_smart_sigma
+            elif 'ML_SMART_SIGMA' in os.environ and original_smart_sigma is None:
+                os.environ.pop('ML_SMART_SIGMA', None)
+            if original_smart_weight_xgb is not None:
+                os.environ['ML_SMART_WEIGHT_XGB'] = original_smart_weight_xgb
+            elif 'ML_SMART_WEIGHT_XGB' in os.environ and original_smart_weight_xgb is None:
+                os.environ.pop('ML_SMART_WEIGHT_XGB', None)
+            if original_smart_weight_lgb is not None:
+                os.environ['ML_SMART_WEIGHT_LGB'] = original_smart_weight_lgb
+            elif 'ML_SMART_WEIGHT_LGB' in os.environ and original_smart_weight_lgb is None:
+                os.environ.pop('ML_SMART_WEIGHT_LGB', None)
+            if original_smart_weight_cat is not None:
+                os.environ['ML_SMART_WEIGHT_CAT'] = original_smart_weight_cat
+            elif 'ML_SMART_WEIGHT_CAT' in os.environ and original_smart_weight_cat is None:
+                os.environ.pop('ML_SMART_WEIGHT_CAT', None)
+            # ✅ CRITICAL FIX: Restore all dynamically set environment variables from features_enabled
+            for key, original_value in original_env_vars.items():
+                try:
+                    if original_value is not None:
+                        os.environ[key] = original_value
+                    elif key in os.environ:
+                        # Was not set before, remove it
+                        os.environ.pop(key, None)
                 except Exception:
                     pass
             try:
