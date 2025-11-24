@@ -256,6 +256,9 @@ def _atomic_read_modify_write_json(file_path: str, modify_func, default_data: Op
     """
     Atomically read-modify-write JSON file with file locking to prevent race conditions.
     
+    Uses a separate lock file to ensure the lock persists across the atomic rename operation.
+    This prevents race conditions where the lock would be on the old inode after os.replace().
+    
     Args:
         file_path: Target file path
         modify_func: Function that takes existing data dict and returns modified data dict
