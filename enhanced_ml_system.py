@@ -265,14 +265,13 @@ def _atomic_read_modify_write_json(file_path: str, modify_func, default_data: Op
     if default_data is None:
         default_data = {}
     
+    # Use a separate lock file that persists across atomic rename
+    # This prevents the race condition where the lock is on the old inode after os.replace()
+    lock_file_path = file_path + '.lock'
     lock_fd = None
     try:
-        # Open file for reading/writing and acquire exclusive lock
-        if os.path.exists(file_path):
-            lock_fd = os.open(file_path, os.O_RDWR)
-        else:
-            # File doesn't exist, create it
-            lock_fd = os.open(file_path, os.O_CREAT | os.O_RDWR, 0o644)
+        # Open or create the lock file and acquire exclusive lock
+        lock_fd = os.open(lock_file_path, os.O_CREAT | os.O_RDWR, 0o644)
         
         # Acquire exclusive lock - will be held until explicitly released
         try:
@@ -280,15 +279,14 @@ def _atomic_read_modify_write_json(file_path: str, modify_func, default_data: Op
         except Exception:
             pass  # Lock acquisition failed, continue anyway (best effort)
         
-        # Read existing data (with lock held)
+        # Read existing data from the actual data file (with lock held)
         existing_data = default_data.copy()
-        try:
-            os.lseek(lock_fd, 0, os.SEEK_SET)
-            content = os.read(lock_fd, 1024 * 1024)  # Read up to 1MB
-            if content:
-                existing_data = json.loads(content.decode('utf-8'))
-        except Exception:
-            pass  # File is empty or corrupt, use default_data
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, 'r') as f:
+                    existing_data = json.load(f)
+            except Exception:
+                pass  # File is empty or corrupt, use default_data
         
         # Modify data (lock still held)
         modified_data = modify_func(existing_data)
@@ -304,7 +302,8 @@ def _atomic_read_modify_write_json(file_path: str, modify_func, default_data: Op
                 except Exception:
                     pass
             
-            # Atomic rename (lock still held, preventing concurrent writes)
+            # Atomic rename (lock still held on separate lock file, preventing concurrent writes)
+            # The lock file is separate, so it's not affected by the rename operation
             os.replace(tmp_path, file_path)
         finally:
             # Clean up temp file if it still exists
