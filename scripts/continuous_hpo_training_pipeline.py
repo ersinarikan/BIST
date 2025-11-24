@@ -1240,6 +1240,13 @@ class ContinuousHPOPipeline:
         original_adaptive = None
         original_seed_bag = None
         original_directional = None
+        # ✅ CRITICAL FIX: Save original smart ensemble parameters for restoration (same as online evaluation)
+        original_smart_consensus_weight: Optional[str] = None
+        original_smart_performance_weight: Optional[str] = None
+        original_smart_sigma: Optional[str] = None
+        original_smart_weight_xgb: Optional[str] = None
+        original_smart_weight_lgb: Optional[str] = None
+        original_smart_weight_cat: Optional[str] = None
         try:
             original_adaptive = os.environ.get('ML_USE_ADAPTIVE_LEARNING', '0')
             os.environ['ML_USE_ADAPTIVE_LEARNING'] = '0'  # Adaptive OFF
@@ -1257,20 +1264,27 @@ class ContinuousHPOPipeline:
                         os.environ[key] = str(value)
                     logger.info(f"🔧 {symbol} {horizon}d WFV: Feature flags set from best_params: {len(features_enabled)} flags")
                 # Also set smart-ensemble params from feature_params if available (parity with HPO)
+                # ✅ CRITICAL FIX: Save original values before setting new ones (same as online evaluation)
                 try:
                     fp = best_params.get('feature_params', {}) if isinstance(best_params, dict) else {}
                     if isinstance(fp, dict) and fp:
                         if 'smart_consensus_weight' in fp:
+                            original_smart_consensus_weight = os.environ.get('ML_SMART_CONSENSUS_WEIGHT')
                             os.environ['ML_SMART_CONSENSUS_WEIGHT'] = str(fp['smart_consensus_weight'])
                         if 'smart_performance_weight' in fp:
+                            original_smart_performance_weight = os.environ.get('ML_SMART_PERFORMANCE_WEIGHT')
                             os.environ['ML_SMART_PERFORMANCE_WEIGHT'] = str(fp['smart_performance_weight'])
                         if 'smart_sigma' in fp:
+                            original_smart_sigma = os.environ.get('ML_SMART_SIGMA')
                             os.environ['ML_SMART_SIGMA'] = str(fp['smart_sigma'])
                         if 'smart_weight_xgb' in fp:
+                            original_smart_weight_xgb = os.environ.get('ML_SMART_WEIGHT_XGB')
                             os.environ['ML_SMART_WEIGHT_XGB'] = str(fp['smart_weight_xgb'])
                         if 'smart_weight_lgbm' in fp or 'smart_weight_lgb' in fp:
+                            original_smart_weight_lgb = os.environ.get('ML_SMART_WEIGHT_LGB')
                             os.environ['ML_SMART_WEIGHT_LGB'] = str(fp.get('smart_weight_lgbm', fp.get('smart_weight_lgb')))
                         if 'smart_weight_cat' in fp:
+                            original_smart_weight_cat = os.environ.get('ML_SMART_WEIGHT_CAT')
                             os.environ['ML_SMART_WEIGHT_CAT'] = str(fp['smart_weight_cat'])
                 except Exception:
                     pass
@@ -1501,6 +1515,32 @@ class ContinuousHPOPipeline:
             elif 'ML_USE_DIRECTIONAL_LOSS' in os.environ and original_directional is None:
                 # Was not set before, remove it
                 os.environ.pop('ML_USE_DIRECTIONAL_LOSS', None)
+            # ✅ CRITICAL FIX: Restore smart ensemble parameters (same as online evaluation)
+            if original_smart_consensus_weight is not None:
+                os.environ['ML_SMART_CONSENSUS_WEIGHT'] = original_smart_consensus_weight
+            elif 'ML_SMART_CONSENSUS_WEIGHT' in os.environ and original_smart_consensus_weight is None:
+                # Was not set before, remove it
+                os.environ.pop('ML_SMART_CONSENSUS_WEIGHT', None)
+            if original_smart_performance_weight is not None:
+                os.environ['ML_SMART_PERFORMANCE_WEIGHT'] = original_smart_performance_weight
+            elif 'ML_SMART_PERFORMANCE_WEIGHT' in os.environ and original_smart_performance_weight is None:
+                os.environ.pop('ML_SMART_PERFORMANCE_WEIGHT', None)
+            if original_smart_sigma is not None:
+                os.environ['ML_SMART_SIGMA'] = original_smart_sigma
+            elif 'ML_SMART_SIGMA' in os.environ and original_smart_sigma is None:
+                os.environ.pop('ML_SMART_SIGMA', None)
+            if original_smart_weight_xgb is not None:
+                os.environ['ML_SMART_WEIGHT_XGB'] = original_smart_weight_xgb
+            elif 'ML_SMART_WEIGHT_XGB' in os.environ and original_smart_weight_xgb is None:
+                os.environ.pop('ML_SMART_WEIGHT_XGB', None)
+            if original_smart_weight_lgb is not None:
+                os.environ['ML_SMART_WEIGHT_LGB'] = original_smart_weight_lgb
+            elif 'ML_SMART_WEIGHT_LGB' in os.environ and original_smart_weight_lgb is None:
+                os.environ.pop('ML_SMART_WEIGHT_LGB', None)
+            if original_smart_weight_cat is not None:
+                os.environ['ML_SMART_WEIGHT_CAT'] = original_smart_weight_cat
+            elif 'ML_SMART_WEIGHT_CAT' in os.environ and original_smart_weight_cat is None:
+                os.environ.pop('ML_SMART_WEIGHT_CAT', None)
 
         # 2) Online (adaptive OFF) - HİBRİT YAKLAŞIM: Model'i train_df ile yeniden eğit (adaptive OFF - HPO ile tutarlılık)
         # Initialize for finally safety
