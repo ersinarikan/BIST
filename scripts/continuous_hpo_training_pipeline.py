@@ -1243,6 +1243,10 @@ class ContinuousHPOPipeline:
         try:
             original_adaptive = os.environ.get('ML_USE_ADAPTIVE_LEARNING', '0')
             os.environ['ML_USE_ADAPTIVE_LEARNING'] = '0'  # Adaptive OFF
+            # ✅ CRITICAL FIX: Capture original values BEFORE modifying them (needed for both if and else paths)
+            # Don't use default values - we need to distinguish between "unset" and "set to default"
+            original_seed_bag = os.environ.get('ENABLE_SEED_BAGGING')  # None if not set
+            original_directional = os.environ.get('ML_USE_DIRECTIONAL_LOSS')  # None if not set
             # ✅ CRITICAL FIX: Set feature flags from best_params to match HPO best trial exactly
             # This ensures evaluation uses the same feature flags as HPO
             if best_params and isinstance(best_params, dict):
@@ -1298,11 +1302,9 @@ class ContinuousHPOPipeline:
                         os.environ['ENABLE_FINGPT'] = '1' if value else '0'
             else:
                 # Fallback: Align with HPO - disable seed bagging and directional loss during evaluation
-                # ✅ CRITICAL FIX: Don't use default values - we need to distinguish between "unset" and "set to default"
-                original_seed_bag = os.environ.get('ENABLE_SEED_BAGGING')  # None if not set
+                # ✅ CRITICAL FIX: Original values already captured above (before if/else), just set to disabled values
                 os.environ['ENABLE_SEED_BAGGING'] = '0'
                 # ✅ CRITICAL FIX: Align with HPO - disable directional loss (use MSE loss)
-                original_directional = os.environ.get('ML_USE_DIRECTIONAL_LOSS')  # None if not set
                 os.environ['ML_USE_DIRECTIONAL_LOSS'] = '0'  # MSE loss (same as HPO)
             # ✅ CRITICAL FIX: Don't use singleton, create new instance (same as HPO)
             # import enhanced_ml_system
