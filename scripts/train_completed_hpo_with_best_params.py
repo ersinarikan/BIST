@@ -109,6 +109,15 @@ def set_hpo_params_as_env(params: dict, horizon: int):
             'no': 'No',
         }
         return allowed.get(lower, None)
+    # ✅ FIX: First pass - set bootstrap_type first to check for subsample
+    bootstrap_type_value = None
+    for key, val in params.items():
+        if key == 'cat_bootstrap_type':
+            norm = _normalize_cat_bootstrap_type(val)
+            if norm is not None:
+                bootstrap_type_value = norm
+            break
+    
     for key, val in params.items():
         if key.startswith('xgb_'):
             env_key = f"OPTUNA_XGB_{key.replace('xgb_', '').upper()}"
@@ -129,9 +138,20 @@ def set_hpo_params_as_env(params: dict, horizon: int):
                 else:
                     # Skip setting invalid enum; let model defaults apply
                     continue
+            elif key == 'cat_subsample':
+                # ✅ FIX: Only set subsample if bootstrap_type is not 'No'
+                # When bootstrap_type='No', subsample should not be set
+                # Check both from params dict and environment (in case bootstrap_type was set earlier)
+                bt_check = bootstrap_type_value or os.environ.get('OPTUNA_CAT_BOOTSTRAP_TYPE', '').strip()
+                if bt_check.lower() not in ('no', 'false', '0', 'none', ''):
+                    os.environ[env_key] = str(val)
+                    cat_params.append(f"{key}={val:.4f}" if isinstance(val, float) else f"{key}={val}")
+                else:
+                    # Skip subsample when bootstrap is disabled
+                    continue
             else:
-            os.environ[env_key] = str(val)
-            cat_params.append(f"{key}={val:.4f}" if isinstance(val, float) else f"{key}={val}")
+                os.environ[env_key] = str(val)
+                cat_params.append(f"{key}={val:.4f}" if isinstance(val, float) else f"{key}={val}")
         elif key == 'adaptive_k':
             os.environ[f'ML_ADAPTIVE_K_{horizon}D'] = str(val)
         elif key == 'pattern_weight':

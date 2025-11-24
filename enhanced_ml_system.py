@@ -3149,7 +3149,9 @@ class EnhancedMLSystem:
                                     'od_type': 'Iter',
                                     'od_wait': self.early_stop_rounds,
                                 }
-                                if bootstrap_type_norm != 'Bayesian':
+                                # ✅ FIX: Only include subsample when bootstrap_type is not Bayesian (unsupported) and not 'No' (bootstrap disabled)
+                                # When bootstrap_type='No', subsample should not be set
+                                if bootstrap_type_norm not in ('Bayesian', 'No', None):
                                     seed_params['subsample'] = sub_override_cat if sub_override_cat is not None else 0.8
                                 if bootstrap_type_norm:
                                     seed_params['bootstrap_type'] = bootstrap_type_norm

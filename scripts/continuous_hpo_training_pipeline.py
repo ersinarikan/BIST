@@ -79,6 +79,12 @@ def _extract_reference_historical_r2(metrics_entry: Optional[Dict[str, Any]]) ->
 
 
 def _extract_model_metrics_from_train_result(train_result: Any, horizon: int) -> Dict[str, Dict[str, float]]:
+    """Extract model metrics (raw_r2, rmse, mape) from training result.
+    
+    Used in:
+    - _evaluate_training_dirhits (WFV section, line ~1640)
+    - _evaluate_training_dirhits (Online section, line ~2059)
+    """
     metrics: Dict[str, Dict[str, float]] = {}
     if not isinstance(train_result, dict):
         return metrics
@@ -939,9 +945,9 @@ class ContinuousHPOPipeline:
             for pattern in json_patterns:
                 found_files = sorted(
                     Path('/opt/bist-pattern/results').glob(pattern),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True
-            )
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True
+                )
                 json_files.extend(found_files)
                 # If we found files with cycle number, don't use legacy format
                 if pattern.startswith(f'optuna_pilot_features_on_h{horizon}_c{self.cycle}_'):
