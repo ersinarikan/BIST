@@ -1181,7 +1181,7 @@ class ContinuousHPOPipeline:
             return 0.0
         return float(np.mean(yt[m] == yp[m]) * 100.0)
 
-    def _evaluate_training_dirhits(self, symbol: str, horizon: int, df: pd.DataFrame, best_params: Optional[Dict] = None) -> Dict[str, Optional[float]]:
+    def _evaluate_training_dirhits(self, symbol: str, horizon: int, df: pd.DataFrame, best_params: Optional[Dict] = None, hpo_result: Optional[Dict] = None) -> Dict[str, Optional[float]]:
         """Evaluate DirHit after training using two modes:
         - wfv: adaptive OFF (no leakage)
         - online: adaptive OFF (HPO ile tutarlılık - hibrit yaklaşım)
@@ -1191,6 +1191,7 @@ class ContinuousHPOPipeline:
             horizon: Prediction horizon
             df: Full dataframe
             best_params: Best HPO parameters (must be provided to ensure correct evaluation)
+            hpo_result: Full HPO result dict (includes best_trial_number, features_enabled, etc.)
         """
         # ✅ FIX: Import os at function level to avoid scope issues
         import os
@@ -1454,7 +1455,10 @@ class ContinuousHPOPipeline:
             # ✅ CRITICAL FIX: Set base_seeds to match HPO best trial
             # HPO uses: ml.base_seeds = [42 + trial.number]
             # Evaluation should use: ml_eval.base_seeds = [42 + best_trial_number]
-            ml_eval.base_seeds = [42 + eval_seed]  # eval_seed = best_trial_number
+            # ✅ FIX: If best_trial_number is None, use fallback seed (42) but log warning
+            if best_trial_number is None:
+                logger.warning(f"⚠️ {symbol} {horizon}d WFV: best_trial_number not found, using fallback seed=42 (may cause alignment issues)")
+            ml_eval.base_seeds = [42 + eval_seed]  # eval_seed = best_trial_number or 42
             # ✅ FIX: Ensure enable_seed_bagging matches HPO best trial (from environment variable)
             # Note: base_seeds is already set to single seed, so seed bagging will effectively be disabled
             # But we ensure the flag matches HPO for consistency
@@ -1547,6 +1551,18 @@ class ContinuousHPOPipeline:
                     thr = 0.005
                     mask_count = ((np.abs(y_true_valid) > thr) & (np.abs(preds_valid) > thr)).sum()
                     mask_pct = (mask_count / valid_count) * 100 if valid_count > 0 else 0
+                    
+                    # ✅ FIX: Log prediction magnitude statistics for mask_count=0 debugging
+                    if mask_count == 0 and valid_count > 0:
+                        pred_abs_max = float(np.abs(preds_valid).max()) if len(preds_valid) > 0 else 0.0
+                        pred_abs_mean = float(np.abs(preds_valid).mean()) if len(preds_valid) > 0 else 0.0
+                        y_true_abs_max = float(np.abs(y_true_valid).max()) if len(y_true_valid) > 0 else 0.0
+                        y_true_abs_mean = float(np.abs(y_true_valid).mean()) if len(y_true_valid) > 0 else 0.0
+                        logger.warning(
+                            f"⚠️ {symbol} {horizon}d WFV Split {split_idx}: mask_count=0 (threshold={thr}) - "
+                            f"pred_abs_max={pred_abs_max:.6f}, pred_abs_mean={pred_abs_mean:.6f}, "
+                            f"y_true_abs_max={y_true_abs_max:.6f}, y_true_abs_mean={y_true_abs_mean:.6f}"
+                        )
                     
                     # Direction statistics
                     direction_matches = (np.sign(y_true_valid) == np.sign(preds_valid)).sum()
@@ -1793,7 +1809,12 @@ class ContinuousHPOPipeline:
             # ✅ CRITICAL FIX: Use best trial's seed for evaluation (match HPO best trial)
             # This ensures evaluation uses the same random seed as the best HPO trial
             # If best_trial_number is not available, fallback to 42
-            best_trial_number = best_params.get('best_trial_number') if isinstance(best_params, dict) else None
+            # ✅ FIX: Try to get best_trial_number from best_params first, then from hpo_result
+            best_trial_number = None
+            if isinstance(best_params, dict):
+                best_trial_number = best_params.get('best_trial_number')
+            if best_trial_number is None and hpo_result:
+                best_trial_number = hpo_result.get('best_trial_number')
             eval_seed = best_trial_number if best_trial_number is not None else 42
             try:
                 import random
@@ -1818,7 +1839,10 @@ class ContinuousHPOPipeline:
             # ✅ CRITICAL FIX: Set base_seeds to match HPO best trial
             # HPO uses: ml.base_seeds = [42 + trial.number]
             # Evaluation should use: ml_online.base_seeds = [42 + best_trial_number]
-            ml_online.base_seeds = [42 + eval_seed]  # eval_seed = best_trial_number
+            # ✅ FIX: If best_trial_number is None, use fallback seed (42) but log warning
+            if best_trial_number is None:
+                logger.warning(f"⚠️ {symbol} {horizon}d Online: best_trial_number not found, using fallback seed=42 (may cause alignment issues)")
+            ml_online.base_seeds = [42 + eval_seed]  # eval_seed = best_trial_number or 42
             # ✅ FIX: Ensure enable_seed_bagging matches HPO best trial (from environment variable)
             # Note: base_seeds is already set to single seed, so seed bagging will effectively be disabled
             # But we ensure the flag matches HPO for consistency
@@ -1910,6 +1934,18 @@ class ContinuousHPOPipeline:
                     thr2 = 0.005
                     mask_count2 = ((np.abs(y_true_valid2) > thr2) & (np.abs(preds_valid2) > thr2)).sum()
                     mask_pct2 = (mask_count2 / valid_count2) * 100 if valid_count2 > 0 else 0
+                    
+                    # ✅ FIX: Log prediction magnitude statistics for mask_count=0 debugging
+                    if mask_count2 == 0 and valid_count2 > 0:
+                        pred_abs_max2 = float(np.abs(preds_valid2).max()) if len(preds_valid2) > 0 else 0.0
+                        pred_abs_mean2 = float(np.abs(preds_valid2).mean()) if len(preds_valid2) > 0 else 0.0
+                        y_true_abs_max2 = float(np.abs(y_true_valid2).max()) if len(y_true_valid2) > 0 else 0.0
+                        y_true_abs_mean2 = float(np.abs(y_true_valid2).mean()) if len(y_true_valid2) > 0 else 0.0
+                        logger.warning(
+                            f"⚠️ {symbol} {horizon}d Online Split {split_idx}: mask_count=0 (threshold={thr2}) - "
+                            f"pred_abs_max={pred_abs_max2:.6f}, pred_abs_mean={pred_abs_mean2:.6f}, "
+                            f"y_true_abs_max={y_true_abs_max2:.6f}, y_true_abs_mean={y_true_abs_mean2:.6f}"
+                        )
                     
                     # Direction statistics
                     direction_matches2 = (np.sign(y_true_valid2) == np.sign(preds_valid2)).sum()
@@ -2247,7 +2283,8 @@ class ContinuousHPOPipeline:
                     # ✅ HİBRİT YAKLAŞIM: Evaluate both WFV (adaptive OFF) and Online (adaptive OFF) DirHit
                     # Best params must be passed to ensure evaluation uses same params as HPO
                     # best_params already contains features_enabled from process_task
-                    ev = self._evaluate_training_dirhits(symbol, horizon, df, best_params=best_params)
+                    # ✅ FIX: Pass hpo_result to _evaluate_training_dirhits for best_trial_number
+                    ev = self._evaluate_training_dirhits(symbol, horizon, df, best_params=best_params, hpo_result=hpo_result)
                     
                     # Return both WFV (adaptive OFF) and online (adaptive OFF) DirHit for comparison
                     wfv_dirhit = ev.get('wfv')
