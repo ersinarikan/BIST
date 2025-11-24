@@ -1247,6 +1247,8 @@ class ContinuousHPOPipeline:
         original_smart_weight_xgb: Optional[str] = None
         original_smart_weight_lgb: Optional[str] = None
         original_smart_weight_cat: Optional[str] = None
+        # ✅ CRITICAL FIX: Save all dynamically set environment variables from features_enabled and enable_* keys (same as online evaluation)
+        original_env_vars: dict = {}
         try:
             original_adaptive = os.environ.get('ML_USE_ADAPTIVE_LEARNING', '0')
             os.environ['ML_USE_ADAPTIVE_LEARNING'] = '0'  # Adaptive OFF
@@ -1259,8 +1261,10 @@ class ContinuousHPOPipeline:
             if best_params and isinstance(best_params, dict):
                 features_enabled = best_params.get('features_enabled', {})
                 if features_enabled:
-                    # Set all feature flags from best_params
+                    # ✅ CRITICAL FIX: Save original values before setting new ones (same as online evaluation)
                     for key, value in features_enabled.items():
+                        if key not in original_env_vars:
+                            original_env_vars[key] = os.environ.get(key)  # Save original value (None if not set)
                         os.environ[key] = str(value)
                     logger.info(f"🔧 {symbol} {horizon}d WFV: Feature flags set from best_params: {len(features_enabled)} flags")
                 # Also set smart-ensemble params from feature_params if available (parity with HPO)
@@ -1289,31 +1293,65 @@ class ContinuousHPOPipeline:
                 except Exception:
                     pass
                 # Also check enable_* keys in best_params
+                # ✅ CRITICAL FIX: Save original values before setting new ones (fallback path, same as online evaluation)
                 feature_flag_keys = [k for k in best_params.keys() if k.startswith('enable_')]
                 for key in feature_flag_keys:
                     value = best_params[key]
                     if key == 'enable_external_features':
-                        os.environ['ENABLE_EXTERNAL_FEATURES'] = '1' if value else '0'
+                        env_key = 'ENABLE_EXTERNAL_FEATURES'
+                        if env_key not in original_env_vars:
+                            original_env_vars[env_key] = os.environ.get(env_key)
+                        os.environ[env_key] = '1' if value else '0'
                     elif key == 'enable_fingpt_features':
-                        os.environ['ENABLE_FINGPT_FEATURES'] = '1' if value else '0'
+                        env_key = 'ENABLE_FINGPT_FEATURES'
+                        if env_key not in original_env_vars:
+                            original_env_vars[env_key] = os.environ.get(env_key)
+                        os.environ[env_key] = '1' if value else '0'
                     elif key == 'enable_yolo_features':
-                        os.environ['ENABLE_YOLO_FEATURES'] = '1' if value else '0'
+                        env_key = 'ENABLE_YOLO_FEATURES'
+                        if env_key not in original_env_vars:
+                            original_env_vars[env_key] = os.environ.get(env_key)
+                        os.environ[env_key] = '1' if value else '0'
                     elif key == 'enable_directional_loss':
-                        os.environ['ML_USE_DIRECTIONAL_LOSS'] = '1' if value else '0'
+                        env_key = 'ML_USE_DIRECTIONAL_LOSS'
+                        if env_key not in original_env_vars:
+                            original_env_vars[env_key] = os.environ.get(env_key)
+                        os.environ[env_key] = '1' if value else '0'
                     elif key == 'enable_seed_bagging':
-                        os.environ['ENABLE_SEED_BAGGING'] = '1' if value else '0'
+                        env_key = 'ENABLE_SEED_BAGGING'
+                        if env_key not in original_env_vars:
+                            original_env_vars[env_key] = os.environ.get(env_key)
+                        os.environ[env_key] = '1' if value else '0'
                     elif key == 'enable_talib_patterns':
-                        os.environ['ENABLE_TALIB_PATTERNS'] = '1' if value else '0'
+                        env_key = 'ENABLE_TALIB_PATTERNS'
+                        if env_key not in original_env_vars:
+                            original_env_vars[env_key] = os.environ.get(env_key)
+                        os.environ[env_key] = '1' if value else '0'
                     elif key == 'enable_smart_ensemble':
-                        os.environ['ML_USE_SMART_ENSEMBLE'] = '1' if value else '0'
+                        env_key = 'ML_USE_SMART_ENSEMBLE'
+                        if env_key not in original_env_vars:
+                            original_env_vars[env_key] = os.environ.get(env_key)
+                        os.environ[env_key] = '1' if value else '0'
                     elif key == 'enable_stacked_short':
-                        os.environ['ML_USE_STACKED_SHORT'] = '1' if value else '0'
+                        env_key = 'ML_USE_STACKED_SHORT'
+                        if env_key not in original_env_vars:
+                            original_env_vars[env_key] = os.environ.get(env_key)
+                        os.environ[env_key] = '1' if value else '0'
                     elif key == 'enable_meta_stacking':
-                        os.environ['ENABLE_META_STACKING'] = '1' if value else '0'
+                        env_key = 'ENABLE_META_STACKING'
+                        if env_key not in original_env_vars:
+                            original_env_vars[env_key] = os.environ.get(env_key)
+                        os.environ[env_key] = '1' if value else '0'
                     elif key == 'enable_regime_detection':
-                        os.environ['ML_USE_REGIME_DETECTION'] = '1' if value else '0'
+                        env_key = 'ML_USE_REGIME_DETECTION'
+                        if env_key not in original_env_vars:
+                            original_env_vars[env_key] = os.environ.get(env_key)
+                        os.environ[env_key] = '1' if value else '0'
                     elif key == 'enable_fingpt':
-                        os.environ['ENABLE_FINGPT'] = '1' if value else '0'
+                        env_key = 'ENABLE_FINGPT'
+                        if env_key not in original_env_vars:
+                            original_env_vars[env_key] = os.environ.get(env_key)
+                        os.environ[env_key] = '1' if value else '0'
             else:
                 # Fallback: Align with HPO - disable seed bagging and directional loss during evaluation
                 # ✅ CRITICAL FIX: Original values already captured above (before if/else), just set to disabled values
@@ -1541,6 +1579,13 @@ class ContinuousHPOPipeline:
                 os.environ['ML_SMART_WEIGHT_CAT'] = original_smart_weight_cat
             elif 'ML_SMART_WEIGHT_CAT' in os.environ and original_smart_weight_cat is None:
                 os.environ.pop('ML_SMART_WEIGHT_CAT', None)
+            # ✅ CRITICAL FIX: Restore all dynamically set environment variables from features_enabled and enable_* keys (same as online evaluation)
+            for key, original_value in original_env_vars.items():
+                if original_value is not None:
+                    os.environ[key] = original_value
+                elif key in os.environ:
+                    # Was not set before, remove it
+                    os.environ.pop(key, None)
 
         # 2) Online (adaptive OFF) - HİBRİT YAKLAŞIM: Model'i train_df ile yeniden eğit (adaptive OFF - HPO ile tutarlılık)
         # Initialize for finally safety
