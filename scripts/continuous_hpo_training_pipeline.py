@@ -274,14 +274,58 @@ def _normalize_feature_flag_key(key: str) -> str:
     return mapping.get(key.lower(), key.upper())
 
 
+class HPOSlotContext:
+    """
+    Context manager for HPO slot acquisition.
+    
+    Ensures the file descriptor is always closed, even if an exception occurs.
+    Use with 'with' statement:
+    
+        with HPOSlotContext() as slot:
+            slot_idx, slot_fd, slot_path = slot
+            # ... use slot ...
+            # slot_fd is automatically closed when exiting the 'with' block
+    """
+    def __init__(self, timeout_seconds: float = 300.0):
+        self.timeout_seconds = timeout_seconds
+        self.slot_idx = None
+        self.slot_fd = None
+        self.slot_path = None
+    
+    def __enter__(self):
+        idx, f, path = acquire_hpo_slot(self.timeout_seconds)
+        self.slot_idx = idx
+        self.slot_fd = f
+        self.slot_path = path
+        return (idx, f, path)
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.slot_fd is not None:
+            release_hpo_slot(self.slot_fd)
+            self.slot_fd = None
+        return False  # Don't suppress exceptions
+
+
 def acquire_hpo_slot(timeout_seconds: float = 300.0):
     """
     Acquire one of N slot locks (blocks until a slot becomes available).
+    
+    ⚠️ WARNING: Returns an open file descriptor that MUST be closed by calling release_hpo_slot().
+    For automatic resource management, use HPOSlotContext instead:
+    
+        with HPOSlotContext() as slot:
+            slot_idx, slot_fd, slot_path = slot
+            # ... use slot ...
+    
     Returns (slot_index, file_object, lock_path).
     
     Args:
         timeout_seconds: Maximum time to wait for a slot (default: 5 minutes).
                         If timeout is reached, raises TimeoutError.
+    
+    Returns:
+        Tuple of (slot_index, file_object, lock_path). The file_object must be closed
+        by calling release_hpo_slot(file_object) in a finally block to prevent file descriptor leaks.
     """
     slots_dir = _get_hpo_slots_dir()
     max_slots = _get_hpo_max_slots()
