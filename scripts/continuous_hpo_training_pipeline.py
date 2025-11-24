@@ -1473,7 +1473,12 @@ class ContinuousHPOPipeline:
             # ✅ CRITICAL FIX: Use best trial's seed for evaluation (match HPO best trial)
             # This ensures evaluation uses the same random seed as the best HPO trial
             # If best_trial_number is not available, fallback to 42
-            best_trial_number = best_params.get('best_trial_number') if isinstance(best_params, dict) else None
+            # ✅ FIX: Try to get best_trial_number from best_params first, then from hpo_result
+            best_trial_number = None
+            if isinstance(best_params, dict):
+                best_trial_number = best_params.get('best_trial_number')
+            if best_trial_number is None and hpo_result:
+                best_trial_number = hpo_result.get('best_trial_number')
             eval_seed = best_trial_number if best_trial_number is not None else 42
             try:
                 import random
