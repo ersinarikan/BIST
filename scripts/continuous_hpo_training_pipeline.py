@@ -259,6 +259,7 @@ def acquire_hpo_slot(timeout_seconds: float = 300.0):
         
         for idx in range(max_slots):
             lock_path = slots_dir / f'hpo_slot_{idx}.lock'
+            f = None
             try:
                 f = open(lock_path, 'a+')
                 try:
@@ -273,9 +274,25 @@ def acquire_hpo_slot(timeout_seconds: float = 300.0):
                         pass
                     return idx, f, lock_path
                 except BlockingIOError:
-                    f.close()
+                    # Slot is locked by another process, close file and try next slot
+                    if f is not None:
+                        try:
+                            f.close()
+                        except Exception:
+                            pass
+                    continue
+                except Exception:
+                    # Other exception during flock (e.g., OSError, PermissionError)
+                    # ✅ CRITICAL FIX: Close file handle to prevent file descriptor leak
+                    if f is not None:
+                        try:
+                            f.close()
+                        except Exception:
+                            pass
                     continue
             except Exception:
+                # Exception during file open (e.g., PermissionError, FileNotFoundError)
+                # File was not opened, so nothing to close
                 continue
         
         # Check for deadlock: if all slots are held for too long, log warning
