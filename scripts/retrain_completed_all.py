@@ -59,6 +59,16 @@ def _load_best_params(path: Path) -> Tuple[Optional[Dict], Optional[Dict]]:
         for k in ("features_enabled", "feature_params", "feature_flags", "hyperparameters"):
             if k in data:
                 best_params[k] = data[k]
+        # ✅ FIX: Add best_trial_number to best_params and hpo_result for seed alignment
+        if "best_trial_number" in data:
+            best_params["best_trial_number"] = data["best_trial_number"]
+        elif "best_trial" in data and isinstance(data["best_trial"], dict):
+            best_trial_number = data["best_trial"].get("number")
+            if best_trial_number is not None:
+                best_params["best_trial_number"] = best_trial_number
+        # Ensure hpo_result has best_trial_number
+        if "best_trial_number" not in data and "best_trial_number" in best_params:
+            data["best_trial_number"] = best_params["best_trial_number"]
         return best_params, data
     except Exception as exc:
         print("Failed to load best_params:", path, exc)
