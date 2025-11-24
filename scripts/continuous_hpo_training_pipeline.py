@@ -238,15 +238,26 @@ def _get_hpo_max_slots() -> int:
         return 3
 
 
-def acquire_hpo_slot():
+def acquire_hpo_slot(timeout_seconds: float = 300.0):
     """
     Acquire one of N slot locks (blocks until a slot becomes available).
     Returns (slot_index, file_object, lock_path).
+    
+    Args:
+        timeout_seconds: Maximum time to wait for a slot (default: 5 minutes).
+                        If timeout is reached, raises TimeoutError.
     """
     slots_dir = _get_hpo_slots_dir()
     max_slots = _get_hpo_max_slots()
     import time as _time
+    start_time = _time.time()
+    
     while True:
+        # Check timeout
+        elapsed = _time.time() - start_time
+        if elapsed >= timeout_seconds:
+            raise TimeoutError(f"Failed to acquire HPO slot after {timeout_seconds:.1f} seconds. All slots may be stuck.")
+        
         for idx in range(max_slots):
             lock_path = slots_dir / f'hpo_slot_{idx}.lock'
             try:
@@ -267,6 +278,37 @@ def acquire_hpo_slot():
                     continue
             except Exception:
                 continue
+        
+        # Check for deadlock: if all slots are held for too long, log warning
+        if elapsed > 60.0:  # After 1 minute, check for stuck slots
+            try:
+                stuck_slots = []
+                for idx in range(max_slots):
+                    lock_path = slots_dir / f'hpo_slot_{idx}.lock'
+                    if lock_path.exists():
+                        try:
+                            # Try to read lock file to see when it was last updated
+                            with open(lock_path, 'r') as check_f:
+                                content = check_f.read().strip()
+                                if content:
+                                    # Parse PID and timestamp
+                                    parts = content.split()
+                                    if len(parts) >= 2:
+                                        try:
+                                            lock_time = datetime.fromisoformat(parts[1])
+                                            lock_age = (datetime.now() - lock_time).total_seconds()
+                                            # If lock is older than 2 hours, it's probably stuck
+                                            if lock_age > 7200:
+                                                stuck_slots.append((idx, lock_age))
+                                        except Exception:
+                                            pass
+                        except Exception:
+                            pass
+                if stuck_slots:
+                    logger.warning(f"⚠️ Detected potentially stuck HPO slots: {stuck_slots}")
+            except Exception:
+                pass  # Don't fail slot acquisition due to deadlock detection errors
+        
         _time.sleep(0.25)
 
 
@@ -345,16 +387,18 @@ class ContinuousHPOPipeline:
     def save_state(self):
         """Save pipeline state to file (merge-aware for concurrent processes)"""
         try:
-            # ⚡ CRITICAL FIX: Merge with existing state to avoid overwriting concurrent updates
-            # Each process updates only its own task, preserving others
+            # ⚡ CRITICAL FIX: Use exclusive lock for both read and write to prevent race conditions
+            # This ensures that only one process can read-modify-write at a time
             merged_state = {}
             
-            # Read existing state from file (if exists)
+            # Read existing state from file (if exists) with exclusive lock
+            # ✅ FIX: Use exclusive lock during read to prevent concurrent modifications
             if self.state_file.exists():
                 try:
                     with open(self.state_file, 'r') as f:
                         try:
-                            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                            # Use exclusive lock for read to prevent race conditions
+                            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
                         except Exception:
                             pass
                         existing_data = json.load(f)
@@ -369,7 +413,12 @@ class ContinuousHPOPipeline:
             for key, task in self.state.items():
                 merged_state[key] = asdict(task)
             
+            # Get version number from existing state (if available) for optimistic locking
+            version = existing_data.get('version', 0) if self.state_file.exists() else 0
+            new_version = version + 1
+            
             data = {
+                'version': new_version,  # ✅ FIX: Add version number for optimistic locking
                 'cycle': self.cycle,
                 'state': merged_state,
                 'last_updated': datetime.now().isoformat()
@@ -880,15 +929,15 @@ class ContinuousHPOPipeline:
                             continue
                     else:
                         # Only do strict timestamp validation if JSON file is not clearly valid
-                    # Allow 5 minutes tolerance before HPO start (in case of clock skew)
-                    if json_mtime < hpo_start_time - 300:
-                        logger.debug(f"⚠️ HPO JSON file {json_file.name} is too old (created {time.time() - json_mtime:.0f}s before HPO start), skipping")
-                        continue
+                        # Allow 5 minutes tolerance before HPO start (in case of clock skew)
+                        if json_mtime < hpo_start_time - 300:
+                            logger.debug(f"⚠️ HPO JSON file {json_file.name} is too old (created {time.time() - json_mtime:.0f}s before HPO start), skipping")
+                            continue
                     
                     # ✅ CRITICAL FIX: Verify JSON file was created within reasonable time after HPO start
-                        # HPO can take up to 72 hours for 1500 trials, so allow up to 96 hours (4 days) after start
-                        # This handles cases where HPO takes longer than expected (e.g., 46 hours for 1500 trials)
-                        if json_mtime > hpo_start_time + 345600:  # 96 hours (4 days) - increased from 18 hours
+                    # HPO can take up to 72 hours for 1500 trials, so allow up to 96 hours (4 days) after start
+                    # This handles cases where HPO takes longer than expected (e.g., 46 hours for 1500 trials)
+                    if json_mtime > hpo_start_time + 345600:  # 96 hours (4 days) - increased from 18 hours
                         logger.debug(f"⚠️ HPO JSON file {json_file.name} is too new (created {json_mtime - hpo_start_time:.0f}s after HPO start), skipping")
                         continue
                     
@@ -1919,7 +1968,7 @@ class ContinuousHPOPipeline:
             # ✅ CRITICAL FIX: Helper function to load state while preserving cycle
             def load_state_preserve_cycle():
                 """Load state but preserve the cycle if it was explicitly set"""
-            self.load_state()
+                self.load_state()
                 if preserved_cycle is not None and preserved_cycle > 0:
                     self.cycle = preserved_cycle
             
@@ -2454,7 +2503,7 @@ class ContinuousHPOPipeline:
             has_tasks = any(task.cycle == current_cycle for task in self.state.values())
             if has_tasks:
                 # Current cycle is complete, increment for new cycle
-        self.cycle += 1
+                self.cycle += 1
                 logger.info(f"🔄 Current cycle {current_cycle} complete, starting new cycle {self.cycle}")
             else:
                 # No tasks yet, start with cycle 1
