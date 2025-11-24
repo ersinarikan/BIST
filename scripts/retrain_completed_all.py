@@ -95,7 +95,13 @@ def main() -> int:
     skipped = 0
 
     for key, t in completed:
-        bp = Path(t.best_params_file)
+        # ✅ FIX: Type guard - best_params_file is guaranteed to be non-None by filter above
+        best_params_file = getattr(t, "best_params_file", None)
+        if not best_params_file:
+            print("Skip (missing best_params_file):", key)
+            skipped += 1
+            continue
+        bp = Path(best_params_file)
         if not bp.exists():
             print("Skip (missing best_params):", key)
             skipped += 1
@@ -137,5 +143,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
