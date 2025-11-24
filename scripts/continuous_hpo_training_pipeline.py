@@ -1654,14 +1654,14 @@ class ContinuousHPOPipeline:
         original_seed_bag2: Optional[str] = None
         original_directional2: Optional[str] = None
         # ✅ CRITICAL FIX: Save original smart ensemble parameters for restoration
-        original_smart_consensus_weight: Optional[str] = None
-        original_smart_performance_weight: Optional[str] = None
-        original_smart_sigma: Optional[str] = None
-        original_smart_weight_xgb: Optional[str] = None
-        original_smart_weight_lgb: Optional[str] = None
-        original_smart_weight_cat: Optional[str] = None
+        original_smart_consensus_weight2: Optional[str] = None
+        original_smart_performance_weight2: Optional[str] = None
+        original_smart_sigma2: Optional[str] = None
+        original_smart_weight_xgb2: Optional[str] = None
+        original_smart_weight_lgb2: Optional[str] = None
+        original_smart_weight_cat2: Optional[str] = None
         # ✅ CRITICAL FIX: Save all dynamically set environment variables from features_enabled
-        original_env_vars: dict = {}
+        original_env_vars2: dict = {}
         try:
             # ✅ CRITICAL FIX: Don't use default value - we need to distinguish between "unset" and "set to '0'"
             original_adaptive2 = os.environ.get('ML_USE_ADAPTIVE_LEARNING')  # None if not set
@@ -1681,8 +1681,8 @@ class ContinuousHPOPipeline:
                     # ✅ CRITICAL FIX: Normalize feature flag keys to uppercase environment variable names
                     for key, value in features_enabled.items():
                         env_key = _normalize_feature_flag_key(key)  # Map lowercase to uppercase if needed
-                        if env_key not in original_env_vars:
-                            original_env_vars[env_key] = os.environ.get(env_key)  # Save original value (None if not set)
+                        if env_key not in original_env_vars2:
+                            original_env_vars2[env_key] = os.environ.get(env_key)  # Save original value (None if not set)
                         os.environ[env_key] = str(value)
                     logger.info(f"🔧 {symbol} {horizon}d Online: Feature flags set from best_params: {len(features_enabled)} flags")
                     seed_bag_val = os.environ.get('ENABLE_SEED_BAGGING', 'NOT_SET')
@@ -1696,58 +1696,58 @@ class ContinuousHPOPipeline:
                         # ✅ CRITICAL FIX: Save original values before setting new ones (fallback path)
                         if key == 'enable_external_features':
                             env_key = 'ENABLE_EXTERNAL_FEATURES'
-                            if env_key not in original_env_vars:
-                                original_env_vars[env_key] = os.environ.get(env_key)
+                            if env_key not in original_env_vars2:
+                                original_env_vars2[env_key] = os.environ.get(env_key)
                             os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_fingpt_features':
                             env_key = 'ENABLE_FINGPT_FEATURES'
-                            if env_key not in original_env_vars:
-                                original_env_vars[env_key] = os.environ.get(env_key)
+                            if env_key not in original_env_vars2:
+                                original_env_vars2[env_key] = os.environ.get(env_key)
                             os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_yolo_features':
                             env_key = 'ENABLE_YOLO_FEATURES'
-                            if env_key not in original_env_vars:
-                                original_env_vars[env_key] = os.environ.get(env_key)
+                            if env_key not in original_env_vars2:
+                                original_env_vars2[env_key] = os.environ.get(env_key)
                             os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_directional_loss':
                             env_key = 'ML_USE_DIRECTIONAL_LOSS'
-                            if env_key not in original_env_vars:
-                                original_env_vars[env_key] = os.environ.get(env_key)
+                            if env_key not in original_env_vars2:
+                                original_env_vars2[env_key] = os.environ.get(env_key)
                             os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_seed_bagging':
                             env_key = 'ENABLE_SEED_BAGGING'
-                            if env_key not in original_env_vars:
-                                original_env_vars[env_key] = os.environ.get(env_key)
+                            if env_key not in original_env_vars2:
+                                original_env_vars2[env_key] = os.environ.get(env_key)
                             os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_talib_patterns':
                             env_key = 'ENABLE_TALIB_PATTERNS'
-                            if env_key not in original_env_vars:
-                                original_env_vars[env_key] = os.environ.get(env_key)
+                            if env_key not in original_env_vars2:
+                                original_env_vars2[env_key] = os.environ.get(env_key)
                             os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_smart_ensemble':
                             env_key = 'ML_USE_SMART_ENSEMBLE'
-                            if env_key not in original_env_vars:
-                                original_env_vars[env_key] = os.environ.get(env_key)
+                            if env_key not in original_env_vars2:
+                                original_env_vars2[env_key] = os.environ.get(env_key)
                             os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_stacked_short':
                             env_key = 'ML_USE_STACKED_SHORT'
-                            if env_key not in original_env_vars:
-                                original_env_vars[env_key] = os.environ.get(env_key)
+                            if env_key not in original_env_vars2:
+                                original_env_vars2[env_key] = os.environ.get(env_key)
                             os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_meta_stacking':
                             env_key = 'ENABLE_META_STACKING'
-                            if env_key not in original_env_vars:
-                                original_env_vars[env_key] = os.environ.get(env_key)
+                            if env_key not in original_env_vars2:
+                                original_env_vars2[env_key] = os.environ.get(env_key)
                             os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_regime_detection':
                             env_key = 'ML_USE_REGIME_DETECTION'
-                            if env_key not in original_env_vars:
-                                original_env_vars[env_key] = os.environ.get(env_key)
+                            if env_key not in original_env_vars2:
+                                original_env_vars2[env_key] = os.environ.get(env_key)
                             os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_fingpt':
                             env_key = 'ENABLE_FINGPT'
-                            if env_key not in original_env_vars:
-                                original_env_vars[env_key] = os.environ.get(env_key)
+                            if env_key not in original_env_vars2:
+                                original_env_vars2[env_key] = os.environ.get(env_key)
                             os.environ[env_key] = '1' if value else '0'
                     logger.info(f"🔧 {symbol} {horizon}d Online: Feature flags set from enable_* keys: {len(feature_flag_keys)} flags")
                 # Also set smart-ensemble params from feature_params if available (parity with HPO)
@@ -1756,22 +1756,22 @@ class ContinuousHPOPipeline:
                     if isinstance(fp, dict) and fp:
                         # ✅ CRITICAL FIX: Save original values before setting new ones
                         if 'smart_consensus_weight' in fp:
-                            original_smart_consensus_weight = os.environ.get('ML_SMART_CONSENSUS_WEIGHT')
+                            original_smart_consensus_weight2 = os.environ.get('ML_SMART_CONSENSUS_WEIGHT')
                             os.environ['ML_SMART_CONSENSUS_WEIGHT'] = str(fp['smart_consensus_weight'])
                         if 'smart_performance_weight' in fp:
-                            original_smart_performance_weight = os.environ.get('ML_SMART_PERFORMANCE_WEIGHT')
+                            original_smart_performance_weight2 = os.environ.get('ML_SMART_PERFORMANCE_WEIGHT')
                             os.environ['ML_SMART_PERFORMANCE_WEIGHT'] = str(fp['smart_performance_weight'])
                         if 'smart_sigma' in fp:
-                            original_smart_sigma = os.environ.get('ML_SMART_SIGMA')
+                            original_smart_sigma2 = os.environ.get('ML_SMART_SIGMA')
                             os.environ['ML_SMART_SIGMA'] = str(fp['smart_sigma'])
                         if 'smart_weight_xgb' in fp:
-                            original_smart_weight_xgb = os.environ.get('ML_SMART_WEIGHT_XGB')
+                            original_smart_weight_xgb2 = os.environ.get('ML_SMART_WEIGHT_XGB')
                             os.environ['ML_SMART_WEIGHT_XGB'] = str(fp['smart_weight_xgb'])
                         if 'smart_weight_lgbm' in fp or 'smart_weight_lgb' in fp:
-                            original_smart_weight_lgb = os.environ.get('ML_SMART_WEIGHT_LGB')
+                            original_smart_weight_lgb2 = os.environ.get('ML_SMART_WEIGHT_LGB')
                             os.environ['ML_SMART_WEIGHT_LGB'] = str(fp.get('smart_weight_lgbm', fp.get('smart_weight_lgb')))
                         if 'smart_weight_cat' in fp:
-                            original_smart_weight_cat = os.environ.get('ML_SMART_WEIGHT_CAT')
+                            original_smart_weight_cat2 = os.environ.get('ML_SMART_WEIGHT_CAT')
                             os.environ['ML_SMART_WEIGHT_CAT'] = str(fp['smart_weight_cat'])
                 except Exception:
                     pass
@@ -1971,33 +1971,33 @@ class ContinuousHPOPipeline:
                 # Was not set before, remove it
                 os.environ.pop('ML_USE_DIRECTIONAL_LOSS', None)
             # ✅ CRITICAL FIX: Restore smart ensemble parameters
-            if original_smart_consensus_weight is not None:
-                os.environ['ML_SMART_CONSENSUS_WEIGHT'] = original_smart_consensus_weight
-            elif 'ML_SMART_CONSENSUS_WEIGHT' in os.environ and original_smart_consensus_weight is None:
+            if original_smart_consensus_weight2 is not None:
+                os.environ['ML_SMART_CONSENSUS_WEIGHT'] = original_smart_consensus_weight2
+            elif 'ML_SMART_CONSENSUS_WEIGHT' in os.environ and original_smart_consensus_weight2 is None:
                 # Was not set before, remove it
                 os.environ.pop('ML_SMART_CONSENSUS_WEIGHT', None)
-            if original_smart_performance_weight is not None:
-                os.environ['ML_SMART_PERFORMANCE_WEIGHT'] = original_smart_performance_weight
-            elif 'ML_SMART_PERFORMANCE_WEIGHT' in os.environ and original_smart_performance_weight is None:
+            if original_smart_performance_weight2 is not None:
+                os.environ['ML_SMART_PERFORMANCE_WEIGHT'] = original_smart_performance_weight2
+            elif 'ML_SMART_PERFORMANCE_WEIGHT' in os.environ and original_smart_performance_weight2 is None:
                 os.environ.pop('ML_SMART_PERFORMANCE_WEIGHT', None)
-            if original_smart_sigma is not None:
-                os.environ['ML_SMART_SIGMA'] = original_smart_sigma
-            elif 'ML_SMART_SIGMA' in os.environ and original_smart_sigma is None:
+            if original_smart_sigma2 is not None:
+                os.environ['ML_SMART_SIGMA'] = original_smart_sigma2
+            elif 'ML_SMART_SIGMA' in os.environ and original_smart_sigma2 is None:
                 os.environ.pop('ML_SMART_SIGMA', None)
-            if original_smart_weight_xgb is not None:
-                os.environ['ML_SMART_WEIGHT_XGB'] = original_smart_weight_xgb
-            elif 'ML_SMART_WEIGHT_XGB' in os.environ and original_smart_weight_xgb is None:
+            if original_smart_weight_xgb2 is not None:
+                os.environ['ML_SMART_WEIGHT_XGB'] = original_smart_weight_xgb2
+            elif 'ML_SMART_WEIGHT_XGB' in os.environ and original_smart_weight_xgb2 is None:
                 os.environ.pop('ML_SMART_WEIGHT_XGB', None)
-            if original_smart_weight_lgb is not None:
-                os.environ['ML_SMART_WEIGHT_LGB'] = original_smart_weight_lgb
-            elif 'ML_SMART_WEIGHT_LGB' in os.environ and original_smart_weight_lgb is None:
+            if original_smart_weight_lgb2 is not None:
+                os.environ['ML_SMART_WEIGHT_LGB'] = original_smart_weight_lgb2
+            elif 'ML_SMART_WEIGHT_LGB' in os.environ and original_smart_weight_lgb2 is None:
                 os.environ.pop('ML_SMART_WEIGHT_LGB', None)
-            if original_smart_weight_cat is not None:
-                os.environ['ML_SMART_WEIGHT_CAT'] = original_smart_weight_cat
-            elif 'ML_SMART_WEIGHT_CAT' in os.environ and original_smart_weight_cat is None:
+            if original_smart_weight_cat2 is not None:
+                os.environ['ML_SMART_WEIGHT_CAT'] = original_smart_weight_cat2
+            elif 'ML_SMART_WEIGHT_CAT' in os.environ and original_smart_weight_cat2 is None:
                 os.environ.pop('ML_SMART_WEIGHT_CAT', None)
             # ✅ CRITICAL FIX: Restore all dynamically set environment variables from features_enabled
-            for key, original_value in original_env_vars.items():
+            for key, original_value in original_env_vars2.items():
                 try:
                     if original_value is not None:
                         os.environ[key] = original_value
