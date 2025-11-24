@@ -139,6 +139,18 @@ def create_app(config_name='default'):
     except Exception:
         pass
 
+    # Real-time log broadcasting function (defined early to avoid race condition with log tailer threads)
+    def broadcast_log(level, message, category='system'):
+        socketio.emit('log_update', {
+            'level': level,
+            'message': message,
+            'category': category,
+            'timestamp': datetime.now().isoformat()
+        }, room='admin')  # type: ignore[call-arg]
+    
+    # Store broadcast_log on app early to avoid race condition with log tailer threads
+    app.broadcast_log = broadcast_log
+
     # Optional: tail gunicorn logs and broadcast to Live System Logs (read-only)
     def _start_log_tailer():
         try:
@@ -165,7 +177,9 @@ def create_app(config_name='default'):
                                 time.sleep(1)
                                 continue
                             try:
-                                app.broadcast_log('INFO', line.strip(), category)
+                                # ✅ FIX: Check if broadcast_log exists before calling (defensive)
+                                if hasattr(app, 'broadcast_log'):
+                                    app.broadcast_log('INFO', line.strip(), category)
                             except Exception:
                                 pass
                 except Exception:
@@ -276,9 +290,8 @@ def create_app(config_name='default'):
     
     _auto_start_automation()
     
-    # Login Manager already initialized on line 96 - no need to re-initialize
-    # ✅ FIX: Removed duplicate login_manager.init_app(app) call
-    # login_view can be set after initialization without re-initializing
+    # Login Manager (use the globally initialized instance)
+    login_manager.init_app(app)
     login_manager.login_view = 'auth.login'  # Updated for blueprint routing
 
     # RBAC helpers
@@ -488,18 +501,12 @@ def create_app(config_name='default'):
                 emit('error', {'message': f'Pattern analysis failed for {symbol}: {str(e)}'})
                 logger.error(f"Pattern analysis error for {symbol}: {e}")
     
-    # Real-time log broadcasting function
-    def broadcast_log(level, message, category='system'):
-        socketio.emit('log_update', {
-            'level': level,
-            'message': message,
-            'category': category,
-            'timestamp': datetime.now().isoformat()
-        }, room='admin')  # type: ignore[call-arg]
+    # Real-time log broadcasting function (already defined earlier to avoid race condition)
+    # broadcast_log function and app.broadcast_log assignment moved earlier (before log tailer)
     
     # Store socketio instance globally for background tasks
     app.socketio = socketio
-    app.broadcast_log = broadcast_log
+    # app.broadcast_log already assigned earlier (line ~143) to avoid race condition with log tailer threads
     
     # ==========================================
     # CALIBRATION DEFAULT STATE (BYPASS=TRUE)
