@@ -5898,6 +5898,18 @@ def get_enhanced_ml_system():
     return _enhanced_ml_system
 
 
+def clear_enhanced_ml_system():
+    """
+    Thread-safe singleton temizleme fonksiyonu.
+    
+    Singleton instance'ı thread-safe bir şekilde temizler.
+    Test veya reset durumlarında kullanılır.
+    """
+    global _enhanced_ml_system
+    with _singleton_lock:
+        _enhanced_ml_system = None
+
+
 if __name__ == "__main__":
     # Test
     enhanced_ml = get_enhanced_ml_system()

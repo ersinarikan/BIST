@@ -243,9 +243,9 @@ def train_symbol_with_all_horizons_best_params(symbol: str, all_horizon_params: 
                 
                 # ⚡ CRITICAL: Reset singleton instance to read new ML_HORIZONS
                 # Singleton instance's prediction_horizons is set in __init__ based on ML_HORIZONS
-                # We need to clear the singleton and create a new instance for each horizon
-                import enhanced_ml_system
-                enhanced_ml_system._enhanced_ml_system = None  # Clear singleton
+                # ✅ CRITICAL FIX: Clear singleton using thread-safe function
+                from enhanced_ml_system import clear_enhanced_ml_system
+                clear_enhanced_ml_system()
                 
                 ml = get_enhanced_ml_system()  # Get fresh instance to read new env vars
                 # Verify prediction_horizons is correct
@@ -284,8 +284,9 @@ def train_symbol_with_all_horizons_best_params(symbol: str, all_horizon_params: 
             except Exception:
                 pass
             
-            import enhanced_ml_system
-            enhanced_ml_system._enhanced_ml_system = None  # Clear singleton
+            # ✅ CRITICAL FIX: Clear singleton using thread-safe function
+            from enhanced_ml_system import clear_enhanced_ml_system
+            clear_enhanced_ml_system()
             
             # Create final instance with all horizons for prediction
             ml_final = get_enhanced_ml_system()

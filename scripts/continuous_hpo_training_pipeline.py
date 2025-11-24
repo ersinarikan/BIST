@@ -2048,9 +2048,9 @@ class ContinuousHPOPipeline:
             except Exception:
                 pass
             
-            # Clear singleton
-            import enhanced_ml_system
-            enhanced_ml_system._enhanced_ml_system = None
+            # ✅ CRITICAL FIX: Clear singleton using thread-safe function
+            from enhanced_ml_system import clear_enhanced_ml_system
+            clear_enhanced_ml_system()
             
             with app.app_context():
                 det = HybridPatternDetector()
