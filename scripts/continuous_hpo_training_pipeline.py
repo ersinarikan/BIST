@@ -1267,7 +1267,8 @@ class ContinuousHPOPipeline:
         # ✅ CRITICAL FIX: Save all dynamically set environment variables from features_enabled and enable_* keys (same as online evaluation)
         original_env_vars: dict = {}
         try:
-            original_adaptive = os.environ.get('ML_USE_ADAPTIVE_LEARNING', '0')
+            # ✅ CRITICAL FIX: Don't use default value - we need to distinguish between "unset" and "set to '0'"
+            original_adaptive = os.environ.get('ML_USE_ADAPTIVE_LEARNING')  # None if not set
             os.environ['ML_USE_ADAPTIVE_LEARNING'] = '0'  # Adaptive OFF
             # ✅ CRITICAL FIX: Capture original values BEFORE modifying them (needed for both if and else paths)
             # Don't use default values - we need to distinguish between "unset" and "set to default"
@@ -1556,8 +1557,12 @@ class ContinuousHPOPipeline:
             import traceback
             logger.error(traceback.format_exc())
         finally:
+            # ✅ CRITICAL FIX: Restore adaptive learning - remove if it wasn't set before (same logic as smart ensemble params)
             if original_adaptive is not None:
                 os.environ['ML_USE_ADAPTIVE_LEARNING'] = original_adaptive
+            elif 'ML_USE_ADAPTIVE_LEARNING' in os.environ and original_adaptive is None:
+                # Was not set before, remove it
+                os.environ.pop('ML_USE_ADAPTIVE_LEARNING', None)
             # ✅ CRITICAL FIX: Restore seed bagging - remove if it wasn't set before (same logic as smart ensemble params)
             if original_seed_bag is not None:
                 os.environ['ENABLE_SEED_BAGGING'] = original_seed_bag
@@ -1619,7 +1624,8 @@ class ContinuousHPOPipeline:
         # ✅ CRITICAL FIX: Save all dynamically set environment variables from features_enabled
         original_env_vars: dict = {}
         try:
-            original_adaptive2 = os.environ.get('ML_USE_ADAPTIVE_LEARNING', '0')
+            # ✅ CRITICAL FIX: Don't use default value - we need to distinguish between "unset" and "set to '0'"
+            original_adaptive2 = os.environ.get('ML_USE_ADAPTIVE_LEARNING')  # None if not set
             os.environ['ML_USE_ADAPTIVE_LEARNING'] = '0'  # ✅ HİBRİT YAKLAŞIM: Adaptive OFF (HPO ile tutarlılık)
             
             # ✅ CRITICAL FIX: Set feature flags from best_params to match HPO best trial exactly
@@ -1905,8 +1911,12 @@ class ContinuousHPOPipeline:
             logger.error(traceback.format_exc())
         finally:
             # ✅ CRITICAL FIX: Restore all modified environment variables
+            # ✅ CRITICAL FIX: Restore adaptive learning - remove if it wasn't set before (same logic as smart ensemble params)
             if original_adaptive2 is not None:
                 os.environ['ML_USE_ADAPTIVE_LEARNING'] = original_adaptive2
+            elif 'ML_USE_ADAPTIVE_LEARNING' in os.environ and original_adaptive2 is None:
+                # Was not set before, remove it
+                os.environ.pop('ML_USE_ADAPTIVE_LEARNING', None)
             # ✅ CRITICAL FIX: Restore seed bagging - remove if it wasn't set before (same logic as smart ensemble params)
             if original_seed_bag2 is not None:
                 os.environ['ENABLE_SEED_BAGGING'] = original_seed_bag2
