@@ -88,6 +88,8 @@ def main() -> int:
         for key, t in items
         if getattr(t, "status", "") == "completed" and getattr(t, "best_params_file", None)
     ]
+    # ✅ FIX: Sort alphabetically by key (symbol_horizon) for consistent processing order
+    completed = sorted(completed, key=lambda x: x[0])
     print(f"Completed tasks found: {len(completed)}")
 
     updated = 0
