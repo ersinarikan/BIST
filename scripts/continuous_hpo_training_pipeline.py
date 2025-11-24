@@ -343,11 +343,15 @@ class HPOSlotContext:
         self.slot_path = None
     
     def __enter__(self):
-        idx, f, path = acquire_hpo_slot(self.timeout_seconds)
-        self.slot_idx = idx
-        self.slot_fd = f
-        self.slot_path = path
-        return (idx, f, path)
+        try:
+            idx, f, path = acquire_hpo_slot(self.timeout_seconds)
+            self.slot_idx = idx
+            self.slot_fd = f
+            self.slot_path = path
+            return (idx, f, path)
+        except TimeoutError:
+            # Re-raise TimeoutError so caller can handle it
+            raise
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.slot_fd is not None:
@@ -832,6 +836,9 @@ class ContinuousHPOPipeline:
             try:
                 _slot_idx, slot_fd, _slot_path = acquire_hpo_slot()
                 logger.info(f"🔒 HPO slot acquired for {symbol} {horizon}d")
+            except TimeoutError as te:
+                logger.error(f"⏱️ Failed to acquire HPO slot for {symbol} {horizon}d: {te}")
+                return None
                 
                 # ✅ CPU affinity optimization: bind to specific CPU range (round-robin)
                 # Simplified: Only CPU affinity, no NUMA binding (Python/ML not NUMA-aware)

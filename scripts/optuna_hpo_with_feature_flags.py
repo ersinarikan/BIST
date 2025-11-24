@@ -872,6 +872,9 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
         trial.set_user_attr('avg_dirhit', avg_dirhit)
         trial.set_user_attr('avg_nrmse', avg_nrmse)
         trial.set_user_attr('model_choice', model_choice)
+        # ✅ FIX: Store symbol_metrics in trial user_attrs so it can be retrieved later for best_trial_metrics
+        if trial_symbol_metrics:
+            trial.set_user_attr('symbol_metrics', trial_symbol_metrics)
     except Exception:
         pass
     
