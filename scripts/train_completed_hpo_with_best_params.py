@@ -139,15 +139,17 @@ def set_hpo_params_as_env(params: dict, horizon: int):
                     # Skip setting invalid enum; let model defaults apply
                     continue
             elif key == 'cat_subsample':
-                # ✅ FIX: Only set subsample if bootstrap_type is not 'No'
-                # When bootstrap_type='No', subsample should not be set
+                # ✅ FIX: Only set subsample if bootstrap_type is not 'Bayesian' (unsupported) and not 'No' (bootstrap disabled)
+                # When bootstrap_type='No' or 'Bayesian', subsample should not be set
                 # Check both from params dict and environment (in case bootstrap_type was set earlier)
                 bt_check = bootstrap_type_value or os.environ.get('OPTUNA_CAT_BOOTSTRAP_TYPE', '').strip()
-                if bt_check.lower() not in ('no', 'false', '0', 'none', ''):
+                bt_check_lower = bt_check.lower() if bt_check else ''
+                # Exclude both 'Bayesian' (doesn't support subsample) and 'No' (bootstrap disabled)
+                if bt_check_lower not in ('bayesian', 'no', 'false', '0', 'none', ''):
                     os.environ[env_key] = str(val)
                     cat_params.append(f"{key}={val:.4f}" if isinstance(val, float) else f"{key}={val}")
                 else:
-                    # Skip subsample when bootstrap is disabled
+                    # Skip subsample when bootstrap is disabled or Bayesian (unsupported)
                     continue
             else:
                 os.environ[env_key] = str(val)

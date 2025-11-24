@@ -3097,6 +3097,17 @@ class EnhancedMLSystem:
                                 }
                                 norm = mapping.get(raw.lower(), None)
                                 if norm:
+                                    # ✅ FIX: If bootstrap_type is 'No' or 'Bayesian', ensure subsample is not set
+                                    # CatBoost error: "you shoudn't provide bootstrap options if bootstrap is disabled"
+                                    if norm in ('No', 'Bayesian'):
+                                        # Remove subsample if it exists (model might have been created with subsample)
+                                        try:
+                                            # Check if subsample is in model params
+                                            model_params = cat_model.get_params()
+                                            if 'subsample' in model_params and model_params['subsample'] is not None:
+                                                cat_model.set_params(subsample=None)
+                                        except Exception:
+                                            pass
                                     cat_model.set_params(bootstrap_type=norm)
                                 elif norm is None and raw.lower() == 'none':
                                     # Explicitly skip when None-like provided
