@@ -1538,28 +1538,62 @@ class ContinuousHPOPipeline:
                     feature_flag_keys = [k for k in best_params.keys() if k.startswith('enable_')]
                     for key in feature_flag_keys:
                         value = best_params[key]
+                        # ✅ CRITICAL FIX: Save original values before setting new ones (fallback path)
                         if key == 'enable_external_features':
-                            os.environ['ENABLE_EXTERNAL_FEATURES'] = '1' if value else '0'
+                            env_key = 'ENABLE_EXTERNAL_FEATURES'
+                            if env_key not in original_env_vars:
+                                original_env_vars[env_key] = os.environ.get(env_key)
+                            os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_fingpt_features':
-                            os.environ['ENABLE_FINGPT_FEATURES'] = '1' if value else '0'
+                            env_key = 'ENABLE_FINGPT_FEATURES'
+                            if env_key not in original_env_vars:
+                                original_env_vars[env_key] = os.environ.get(env_key)
+                            os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_yolo_features':
-                            os.environ['ENABLE_YOLO_FEATURES'] = '1' if value else '0'
+                            env_key = 'ENABLE_YOLO_FEATURES'
+                            if env_key not in original_env_vars:
+                                original_env_vars[env_key] = os.environ.get(env_key)
+                            os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_directional_loss':
-                            os.environ['ML_USE_DIRECTIONAL_LOSS'] = '1' if value else '0'
+                            env_key = 'ML_USE_DIRECTIONAL_LOSS'
+                            if env_key not in original_env_vars:
+                                original_env_vars[env_key] = os.environ.get(env_key)
+                            os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_seed_bagging':
-                            os.environ['ENABLE_SEED_BAGGING'] = '1' if value else '0'
+                            env_key = 'ENABLE_SEED_BAGGING'
+                            if env_key not in original_env_vars:
+                                original_env_vars[env_key] = os.environ.get(env_key)
+                            os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_talib_patterns':
-                            os.environ['ENABLE_TALIB_PATTERNS'] = '1' if value else '0'
+                            env_key = 'ENABLE_TALIB_PATTERNS'
+                            if env_key not in original_env_vars:
+                                original_env_vars[env_key] = os.environ.get(env_key)
+                            os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_smart_ensemble':
-                            os.environ['ML_USE_SMART_ENSEMBLE'] = '1' if value else '0'
+                            env_key = 'ML_USE_SMART_ENSEMBLE'
+                            if env_key not in original_env_vars:
+                                original_env_vars[env_key] = os.environ.get(env_key)
+                            os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_stacked_short':
-                            os.environ['ML_USE_STACKED_SHORT'] = '1' if value else '0'
+                            env_key = 'ML_USE_STACKED_SHORT'
+                            if env_key not in original_env_vars:
+                                original_env_vars[env_key] = os.environ.get(env_key)
+                            os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_meta_stacking':
-                            os.environ['ENABLE_META_STACKING'] = '1' if value else '0'
+                            env_key = 'ENABLE_META_STACKING'
+                            if env_key not in original_env_vars:
+                                original_env_vars[env_key] = os.environ.get(env_key)
+                            os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_regime_detection':
-                            os.environ['ML_USE_REGIME_DETECTION'] = '1' if value else '0'
+                            env_key = 'ML_USE_REGIME_DETECTION'
+                            if env_key not in original_env_vars:
+                                original_env_vars[env_key] = os.environ.get(env_key)
+                            os.environ[env_key] = '1' if value else '0'
                         elif key == 'enable_fingpt':
-                            os.environ['ENABLE_FINGPT'] = '1' if value else '0'
+                            env_key = 'ENABLE_FINGPT'
+                            if env_key not in original_env_vars:
+                                original_env_vars[env_key] = os.environ.get(env_key)
+                            os.environ[env_key] = '1' if value else '0'
                     logger.info(f"🔧 {symbol} {horizon}d Online: Feature flags set from enable_* keys: {len(feature_flag_keys)} flags")
                 # Also set smart-ensemble params from feature_params if available (parity with HPO)
                 try:
