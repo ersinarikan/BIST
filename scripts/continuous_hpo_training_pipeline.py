@@ -1333,6 +1333,50 @@ class ContinuousHPOPipeline:
         
         wfv_splits = generate_walkforward_splits(total_days, horizon, n_splits=4)
         
+        # ✅ NEW: If evaluation_spec present in HPO JSON, override splits and thresholds to ensure parity
+        eval_spec = None
+        try:
+            if isinstance(hpo_result, dict):
+                eval_spec = hpo_result.get('evaluation_spec')
+        except Exception:
+            eval_spec = None
+        if isinstance(eval_spec, dict):
+            # Set DirHit threshold from spec (fallback to default)
+            try:
+                dirhit_thr = float(eval_spec.get('dirhit_threshold', 0.005))
+                os.environ['DIRHIT_THRESHOLD'] = str(dirhit_thr)
+            except Exception:
+                pass
+            # Optionally mirror mask thresholds for any gating logic downstream
+            try:
+                if 'min_mask_count' in eval_spec:
+                    os.environ['HPO_MIN_MASK_COUNT'] = str(int(eval_spec['min_mask_count']))
+                if 'min_mask_pct' in eval_spec:
+                    os.environ['HPO_MIN_MASK_PCT'] = str(float(eval_spec['min_mask_pct']))
+            except Exception:
+                pass
+            # Override WFV splits using indices if provided
+            try:
+                symbol_key = f"{symbol}_{horizon}d"
+                sym_specs = eval_spec.get('symbol_specs', {})
+                sym_spec = sym_specs.get(symbol_key)
+                if isinstance(sym_spec, dict):
+                    splits_spec = sym_spec.get('splits', [])
+                    splits_idx: list[tuple[int, int]] = []
+                    for s in splits_spec:
+                        tei = s.get('train_end_idx')
+                        pei = s.get('test_end_idx')
+                        if tei is not None and pei is not None:
+                            try:
+                                splits_idx.append((int(tei), int(pei)))
+                            except Exception:
+                                continue
+                    if splits_idx:
+                        wfv_splits = splits_idx
+                        logger.info(f"🔁 Using evaluation_spec splits for {symbol} {horizon}d: {len(wfv_splits)} splits")
+            except Exception:
+                pass
+        
         if not wfv_splits:
             # Fallback to single split if multiple splits not possible
             split_idx = calculate_dynamic_split(total_days, horizon)
@@ -1553,7 +1597,11 @@ class ContinuousHPOPipeline:
                 best_trial_number = best_params.get('best_trial_number')
             if best_trial_number is None and hpo_result:
                 best_trial_number = hpo_result.get('best_trial_number')
-            eval_seed = best_trial_number if best_trial_number is not None else 42
+            # HPO uses seed = 42 + trial.number
+            try:
+                eval_seed = 42 + int(best_trial_number) if best_trial_number is not None else 42
+            except Exception:
+                eval_seed = 42
             try:
                 import random
                 random.seed(eval_seed)
@@ -1581,7 +1629,8 @@ class ContinuousHPOPipeline:
             # ✅ FIX: If best_trial_number is None, use fallback seed (42) but log warning
             if best_trial_number is None:
                 logger.warning(f"⚠️ {symbol} {horizon}d WFV: best_trial_number not found, using fallback seed=42 (may cause alignment issues)")
-            ml_eval.base_seeds = [42 + eval_seed]  # eval_seed = best_trial_number or 42
+            # eval_seed already equals 42 + best_trial_number (or 42 fallback)
+            ml_eval.base_seeds = [eval_seed]
             # ✅ FIX: Ensure enable_seed_bagging matches HPO best trial (from environment variable)
             # Note: base_seeds is already set to single seed, so seed bagging will effectively be disabled
             # But we ensure the flag matches HPO for consistency
@@ -1678,8 +1727,16 @@ class ContinuousHPOPipeline:
                 valid_count = valid_mask.sum()
                 
                 if valid_count > 0:
+                    # DirHit threshold (from evaluation_spec if provided)
+                    thr_env_val = 0.005
+                    try:
+                        _thr_env = os.getenv('DIRHIT_THRESHOLD')
+                        if _thr_env is not None:
+                            thr_env_val = float(_thr_env)
+                    except Exception:
+                        pass
                     # DirHit
-                    dh = self._dirhit(y_true_split, preds)
+                    dh = self._dirhit(y_true_split, preds, thr=thr_env_val)
                     
                     # RMSE and MAPE
                     y_true_valid = y_true_split[valid_mask]
@@ -1701,7 +1758,14 @@ class ContinuousHPOPipeline:
                     score_val = EnhancedMLSystem._calculate_score(dh, nrmse_val, horizon)
                     
                     # Threshold mask statistics
+                    # Use threshold from env if provided (set from evaluation_spec), else default 0.005
                     thr = 0.005
+                    try:
+                        _thr_env2 = os.getenv('DIRHIT_THRESHOLD')
+                        if _thr_env2 is not None:
+                            thr = float(_thr_env2)
+                    except Exception:
+                        pass
                     mask_count = ((np.abs(y_true_valid) > thr) & (np.abs(preds_valid) > thr)).sum()
                     mask_pct = (mask_count / valid_count) * 100 if valid_count > 0 else 0
                     
@@ -1733,7 +1797,26 @@ class ContinuousHPOPipeline:
                         logger.info(f"🔍 [eval-debug]   Score: {score_val:.2f}")
                         logger.info(f"🔍 [eval-debug]   Seed = {eval_seed} (best_trial={best_trial_number})")
                     
-                    if not np.isnan(dh):
+                    # Low-support gating (same as HPO)
+                    low_support = False
+                    _min_mc = 0
+                    _min_mp = 0.0
+                    try:
+                        _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))
+                    except Exception:
+                        _min_mc = 0
+                    try:
+                        _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '0'))
+                    except Exception:
+                        _min_mp = 0.0
+                    if (_min_mc > 0 and mask_count < _min_mc) or (_min_mp > 0.0 and mask_pct < _min_mp):
+                        low_support = True
+                        logger.info(
+                            f"⚠️ {symbol} {horizon}d WFV Split {split_idx}: LOW_SUPPORT → exclude from avg "
+                            f"(DirHit={dh:.2f}%, mask_count={mask_count}, mask_pct={mask_pct:.1f}%, "
+                            f"min_mc={_min_mc}, min_mp={_min_mp}%)"
+                        )
+                    if not np.isnan(dh) and not low_support:
                         split_dirhits.append(dh)
                         split_nrmses.append(nrmse_val)
                         split_scores.append(score_val)
@@ -1968,7 +2051,11 @@ class ContinuousHPOPipeline:
                 best_trial_number = best_params.get('best_trial_number')
             if best_trial_number is None and hpo_result:
                 best_trial_number = hpo_result.get('best_trial_number')
-            eval_seed = best_trial_number if best_trial_number is not None else 42
+            # Use the same logic as WFV: seed = 42 + best_trial_number (or 42 fallback)
+            try:
+                eval_seed = 42 + int(best_trial_number) if best_trial_number is not None else 42
+            except Exception:
+                eval_seed = 42
             try:
                 import random
                 random.seed(eval_seed)
@@ -1995,7 +2082,8 @@ class ContinuousHPOPipeline:
             # ✅ FIX: If best_trial_number is None, use fallback seed (42) but log warning
             if best_trial_number is None:
                 logger.warning(f"⚠️ {symbol} {horizon}d Online: best_trial_number not found, using fallback seed=42 (may cause alignment issues)")
-            ml_online.base_seeds = [42 + eval_seed]  # eval_seed = best_trial_number or 42
+            # Align base_seeds with eval_seed (already 42 + best_trial_number)
+            ml_online.base_seeds = [eval_seed]
             # ✅ FIX: Ensure enable_seed_bagging matches HPO best trial (from environment variable)
             # Note: base_seeds is already set to single seed, so seed bagging will effectively be disabled
             # But we ensure the flag matches HPO for consistency
@@ -2096,8 +2184,16 @@ class ContinuousHPOPipeline:
                 valid_count2 = valid_mask2.sum()
                 
                 if valid_count2 > 0:
+                    # DirHit threshold (from evaluation_spec if provided)
+                    thr2 = 0.005
+                    try:
+                        _thr_env_online = os.getenv('DIRHIT_THRESHOLD')
+                        if _thr_env_online is not None:
+                            thr2 = float(_thr_env_online)
+                    except Exception:
+                        pass
                     # DirHit
-                    dh2 = self._dirhit(y_true_split, preds2)
+                    dh2 = self._dirhit(y_true_split, preds2, thr=thr2)
                     
                     # RMSE and MAPE
                     y_true_valid2 = y_true_split[valid_mask2]
@@ -2106,7 +2202,6 @@ class ContinuousHPOPipeline:
                     mape2 = np.mean(np.abs((y_true_valid2 - preds_valid2) / (y_true_valid2 + 1e-8))) * 100
                     
                     # Threshold mask statistics
-                    thr2 = 0.005
                     mask_count2 = ((np.abs(y_true_valid2) > thr2) & (np.abs(preds_valid2) > thr2)).sum()
                     mask_pct2 = (mask_count2 / valid_count2) * 100 if valid_count2 > 0 else 0
                     
@@ -2137,7 +2232,26 @@ class ContinuousHPOPipeline:
                         logger.info(f"🔍 [eval-debug]   Seed = {eval_seed} (best_trial={best_trial_number})")
                         logger.info("🔍 [eval-debug]   Adaptive Learning: OFF (skip_phase2=1, using full train_df - HPO ile tutarlılık)")
                     
-                    if not np.isnan(dh2):
+                    # Low-support gating (same as HPO)
+                    low_support2 = False
+                    _min_mc2 = 0
+                    _min_mp2 = 0.0
+                    try:
+                        _min_mc2 = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))
+                    except Exception:
+                        _min_mc2 = 0
+                    try:
+                        _min_mp2 = float(os.getenv('HPO_MIN_MASK_PCT', '0'))
+                    except Exception:
+                        _min_mp2 = 0.0
+                    if (_min_mc2 > 0 and mask_count2 < _min_mc2) or (_min_mp2 > 0.0 and mask_pct2 < _min_mp2):
+                        low_support2 = True
+                        logger.info(
+                            f"⚠️ {symbol} {horizon}d Online Split {split_idx}: LOW_SUPPORT → exclude from avg "
+                            f"(DirHit={dh2:.2f}%, mask_count={mask_count2}, mask_pct={mask_pct2:.1f}%, "
+                            f"min_mc={_min_mc2}, min_mp={_min_mp2}%)"
+                        )
+                    if not np.isnan(dh2) and not low_support2:
                         split_dirhits_online.append(dh2)
                         logger.info(
                             f"✅ {symbol} {horizon}d Online Split {split_idx}: "
@@ -2225,6 +2339,7 @@ class ContinuousHPOPipeline:
         # Mini-CV bloğu kaldırıldı (bakım ve lint sadeleştirme)
 
         # ✅ DEBUG DUMP: Save evaluation summary for deep analysis (HPO parity checks)
+        # Note: Overwrites previous results - historical results are preserved in state.json
         try:
             from pathlib import Path as _Path
             dbg_dir = _Path('/opt/bist-pattern/results/eval_debug')
@@ -3326,6 +3441,20 @@ def main():
                 # ✅ Ensure features_enabled is present in best_params for gating parity
                 if 'features_enabled' not in best_params and 'features_enabled' in hpo_data:
                     best_params['features_enabled'] = hpo_data['features_enabled']
+                # ✅ Ensure best_trial_number is present (fallback to best_trial.number)
+                try:
+                    if 'best_trial_number' not in hpo_data:
+                        _btn = None
+                        if isinstance(hpo_data.get('best_trial'), dict):
+                            _btn = hpo_data['best_trial'].get('number')
+                        if _btn is not None:
+                            hpo_data['best_trial_number'] = _btn
+                            if isinstance(best_params, dict):
+                                best_params['best_trial_number'] = _btn
+                    elif isinstance(best_params, dict) and 'best_trial_number' not in best_params:
+                        best_params['best_trial_number'] = hpo_data.get('best_trial_number')
+                except Exception:
+                    pass
                 # Run training only (pass full hpo_result so ENABLE_* flags are set from features_enabled)
                 result = pipeline.run_training(args.symbol, args.horizon, best_params, hpo_result=hpo_data)
                 if result is not None:

@@ -793,12 +793,38 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
                         split_nrmses_local.append(nrmse_val)
                 except Exception:
                     pass
-                split_dirhits.append(dirhit_val)
-                print(
-                    f"[hpo] {sym} {horizon}d Split {split_idx}: DirHit={dirhit_val:.2f}% "
-                    f"(valid={valid_count}/{len(preds)}, mask={mask_count}, RMSE={rmse:.6f}, MAPE={mape:.2f}%)",
-                    file=sys.stderr, flush=True
-                )
+                # ✅ NEW: Low-support guard to prevent spurious 100% DirHit on tiny masks
+                # Configure via environment:
+                #  - HPO_MIN_MASK_COUNT (int, default 0 → disabled)
+                #  - HPO_MIN_MASK_PCT (float percent, default 0 → disabled)
+                low_support = False
+                _min_mc = 0
+                _min_mp = 0.0
+                try:
+                    _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))
+                except Exception:
+                    _min_mc = 0
+                try:
+                    _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '0'))
+                except Exception:
+                    _min_mp = 0.0
+                if (_min_mc > 0 and mask_count < _min_mc) or (_min_mp > 0.0 and mask_pct < _min_mp):
+                    low_support = True
+                    # Informative log (only first split to reduce noise)
+                    if split_idx == 1:
+                        print(
+                            f"[hpo] {sym} {horizon}d Split {split_idx}: LOW_SUPPORT → exclude from avg "
+                            f"(DirHit={dirhit_val:.2f}%, mask_count={mask_count}, mask_pct={mask_pct:.1f}% "
+                            f"min_mc={_min_mc}, min_mp={_min_mp}%)",
+                            file=sys.stderr, flush=True
+                        )
+                else:
+                    split_dirhits.append(dirhit_val)
+                    print(
+                        f"[hpo] {sym} {horizon}d Split {split_idx}: DirHit={dirhit_val:.2f}% "
+                        f"(valid={valid_count}/{len(preds)}, mask={mask_count}, RMSE={rmse:.6f}, MAPE={mape:.2f}%)",
+                        file=sys.stderr, flush=True
+                    )
             else:
                 preds_valid = np.sum(~np.isnan(preds))
                 y_true_valid = np.sum(~np.isnan(y_true.values))
@@ -813,15 +839,31 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
                 'split_index': int(split_idx),
                 'train_days': int(len(train_df)),
                 'test_days': int(len(test_df)),
+                # Index boundaries (to reproduce splits exactly)
+                'train_end_idx': int(train_end_idx),
+                'test_end_idx': int(test_end_idx),
+                # Date boundaries (human-readable)
+                'train_start': train_df.index.min().isoformat() if len(train_df) > 0 else None,
+                'train_end': train_df.index.max().isoformat() if len(train_df) > 0 else None,
+                'test_start': test_df.index.min().isoformat() if len(test_df) > 0 else None,
+                'test_end': test_df.index.max().isoformat() if len(test_df) > 0 else None,
                 'valid_predictions': int(valid_count),
                 'model_metrics': split_model_metrics,
-                'dirhit': float(dirhit_val) if dirhit_val is not None else None,
+                # If low support, mark dirhit as None to signal exclusion from averages
+                'dirhit': float(dirhit_val) if (dirhit_val is not None and not low_support) else None,
                 'rmse': float(rmse) if isinstance(rmse, (int, float)) and math.isfinite(rmse) else None,
                 'mape': float(mape) if isinstance(mape, (int, float)) and math.isfinite(mape) else None,
                 'nrmse': float(nrmse_val) if isinstance(nrmse_val, (int, float)) and math.isfinite(nrmse_val) else None,
                 'mask_count': int(mask_count),
                 'mask_pct': float(mask_pct),
             }
+            # Persist support gating info for analysis
+            try:
+                split_entry['low_support'] = bool(low_support)
+                split_entry['min_mask_count'] = int(_min_mc)
+                split_entry['min_mask_pct'] = float(_min_mp)
+            except Exception:
+                pass
             if split_ensemble_debug:
                 split_entry['ensemble_debug'] = split_ensemble_debug
             symbol_metric_entry['split_metrics'].append(split_entry)
@@ -874,9 +916,27 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
         trial.set_user_attr('model_choice', model_choice)
         # ✅ FIX: Store symbol_metrics in trial user_attrs so it can be retrieved later for best_trial_metrics
         if trial_symbol_metrics:
-            trial.set_user_attr('symbol_metrics', trial_symbol_metrics)
-    except Exception:
-        pass
+            # ✅ DEBUG: Log symbol_metrics info before saving
+            metrics_keys = list(trial_symbol_metrics.keys())
+            metrics_size = len(str(trial_symbol_metrics).encode('utf-8'))
+            print(f"[hpo-debug] Trial {trial.number}: Attempting to save symbol_metrics: {len(metrics_keys)} symbols, size={metrics_size:,} bytes", file=sys.stderr, flush=True)
+            try:
+                trial.set_user_attr('symbol_metrics', trial_symbol_metrics)
+                print(f"[hpo-debug] Trial {trial.number}: ✅ symbol_metrics saved successfully", file=sys.stderr, flush=True)
+            except Exception as sym_metrics_err:
+                # ✅ FIX: Log the specific exception for symbol_metrics
+                print(f"[hpo-error] Trial {trial.number}: ❌ Failed to save symbol_metrics: {type(sym_metrics_err).__name__}: {sym_metrics_err}", file=sys.stderr, flush=True)
+                import traceback
+                print(f"[hpo-error] Trial {trial.number}: Traceback:", file=sys.stderr, flush=True)
+                print(traceback.format_exc(), file=sys.stderr, flush=True)
+                # Re-raise to be caught by outer except
+                raise
+    except Exception as e:
+        # ✅ FIX: Log all exceptions (not just symbol_metrics)
+        print(f"[hpo-error] Trial {trial.number}: ❌ Failed to save user_attrs: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        import traceback
+        print(f"[hpo-error] Trial {trial.number}: Traceback:", file=sys.stderr, flush=True)
+        print(traceback.format_exc(), file=sys.stderr, flush=True)
     
     # ⚡ MEMORY LEAK FIX: Clean up models after each trial to prevent memory leak
     # Models accumulate in ml.models dictionary during training, causing RAM usage to grow over time
@@ -1023,16 +1083,16 @@ def main():
         if os.getenv('FORCE_MODEL_CHOICE'):
             print("⏭️ Skipping warm-start enqueue (FORCE_MODEL_CHOICE is set)", flush=True)
         else:
-        import glob
-        prev_jsons = sorted(
-            glob.glob(f"/opt/bist-pattern/results/optuna_pilot_features_on_h{horizon}_*.json"),
-            key=lambda p: os.path.getmtime(p),
-            reverse=True
-        )
-        enqueued = 0
-        for jf in prev_jsons:
-            if enqueued >= 3:
-                break
+            import glob
+            prev_jsons = sorted(
+                glob.glob(f"/opt/bist-pattern/results/optuna_pilot_features_on_h{horizon}_*.json"),
+                key=lambda p: os.path.getmtime(p),
+                reverse=True
+            )
+            enqueued = 0
+            for jf in prev_jsons:
+                if enqueued >= 3:
+                    break
                 with open(jf, 'r') as rf:
                     data_prev = json.load(rf)
                 prev_syms = data_prev.get('symbols', [])
@@ -1154,6 +1214,9 @@ def main():
             'value': float(best_trial.value) if best_trial.value is not None else 0.0,
             'state': str(best_trial.state),
         },
+        # Helpful metadata for downstream parity
+        'best_trial_number': int(getattr(best_trial, 'number', 0)),
+        'best_trial_seed': int(42 + getattr(best_trial, 'number', 0)),
         'n_trials': len(study.trials),
         'pruned_count': int(pruned_count),
         'avg_trial_time': float(avg_trial_time),
@@ -1188,6 +1251,65 @@ def main():
     if isinstance(symbol_metrics_best, dict):
         result['best_trial_metrics'] = symbol_metrics_best
     
+    # ✅ NEW: Write evaluation_spec for exact reproducibility in training
+    try:
+        # Threshold and support config
+        try:
+            _thr = 0.005
+        except Exception:
+            _thr = 0.005
+        try:
+            _min_mc_spec = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))
+        except Exception:
+            _min_mc_spec = 0
+        try:
+            _min_mp_spec = float(os.getenv('HPO_MIN_MASK_PCT', '0'))
+        except Exception:
+            _min_mp_spec = 0.0
+        # Scoring config
+        try:
+            _k = 6.0 if horizon in (1, 3, 7) else 4.0
+        except Exception:
+            _k = 6.0
+        # Build symbol_specs with splits
+        symbol_specs = {}
+        if isinstance(symbol_metrics_best, dict):
+            for sym_key, metrics in symbol_metrics_best.items():
+                splits_out = []
+                for s in metrics.get('split_metrics', []):
+                    splits_out.append({
+                        'split_index': int(s.get('split_index')) if 'split_index' in s else None,
+                        'train_end_idx': int(s.get('train_end_idx')) if s.get('train_end_idx') is not None else None,
+                        'test_end_idx': int(s.get('test_end_idx')) if s.get('test_end_idx') is not None else None,
+                        'train_start': s.get('train_start'),
+                        'train_end': s.get('train_end'),
+                        'test_start': s.get('test_start'),
+                        'test_end': s.get('test_end'),
+                    })
+                symbol_specs[sym_key] = {
+                    'splits': splits_out
+                }
+        result['evaluation_spec'] = {
+            'horizon': int(horizon),
+            'dirhit_threshold': float(_thr),
+            'min_mask_count': int(_min_mc_spec),
+            'min_mask_pct': float(_min_mp_spec),
+            'best_trial_number': int(getattr(best_trial, 'number', 0)),
+            'best_trial_seed': int(42 + getattr(best_trial, 'number', 0)),
+            'scoring': {
+                'formula': 'score = 0.7*avg_dirhit - k*avg_nrmse',
+                'k': float(_k),
+            },
+            'split_generation': {
+                'type': 'generate_walkforward_splits',
+                'n_splits': 4
+            },
+            'symbol_specs': symbol_specs
+        }
+    except Exception:
+        # Do not fail HPO save if evaluation_spec construction has issues
+        pass
+    
     # ✅ CRITICAL FIX: Atomic JSON file write (prevents corrupt files)
     # Write to temp file first, then atomic rename to prevent partial writes
     json_saved = False
@@ -1197,7 +1319,7 @@ def main():
         try:
             # Write to temp file
             with open(tmp_file, 'w') as f:
-        json.dump(result, f, indent=2)
+                json.dump(result, f, indent=2)
                 f.flush()
                 try:
                     os.fsync(f.fileno())  # Force write to disk
@@ -1206,8 +1328,8 @@ def main():
             
             # Atomic rename (this is atomic on POSIX systems)
             os.replace(tmp_file, output_file)
-        print(f"✅ Results saved to: {output_file}", flush=True)
-        json_saved = True
+            print(f"✅ Results saved to: {output_file}", flush=True)
+            json_saved = True
         except Exception as tmp_err:
             # Clean up temp file if it exists
             try:
@@ -1234,16 +1356,16 @@ def main():
             try:
                 # Atomic write for recovered file too
                 with open(tmp_file_recovered, 'w') as f:
-                json.dump(result_recovered, f, indent=2)
+                    json.dump(result_recovered, f, indent=2)
                     f.flush()
                     try:
                         os.fsync(f.fileno())
                     except Exception:
                         pass
                 os.replace(tmp_file_recovered, output_file_recovered)
-            print(f"✅ Recovered JSON file saved to: {output_file_recovered}", flush=True)
-            output_file = output_file_recovered
-            json_saved = True
+                print(f"✅ Recovered JSON file saved to: {output_file_recovered}", flush=True)
+                output_file = output_file_recovered
+                json_saved = True
             except Exception as recover_write_err:
                 # Clean up temp file
                 try:
@@ -1261,11 +1383,11 @@ def main():
     
     # Ensure file permissions (only if file was created successfully)
     if output_file and json_saved:
-    try:
-        from bist_pattern.utils.file_utils import ensure_file_permissions
-        ensure_file_permissions(Path(output_file))
-    except ImportError:
-        pass
+        try:
+            from bist_pattern.utils.file_utils import ensure_file_permissions
+            ensure_file_permissions(Path(output_file))
+        except ImportError:
+            pass
         except Exception as perm_err:
             print(f"⚠️ WARNING: Failed to set file permissions for {output_file}: {perm_err}", file=sys.stderr, flush=True)
     
@@ -1291,7 +1413,7 @@ def main():
         print(f"  {key}: {value}")
     print()
     if output_file and json_saved:
-    print(f"✅ Results saved to: {output_file}")
+        print(f"✅ Results saved to: {output_file}")
     else:
         print(f"⚠️ WARNING: Results NOT saved to JSON file (study file exists at {study_path})")
         print("⚠️ WARNING: Best params can be recovered from study file later")
