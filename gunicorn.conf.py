@@ -47,20 +47,19 @@ if pidfile and os.path.exists(pidfile):
             # Check if this PID is actually a gunicorn process
             try:
                 import psutil  # type: ignore
-            proc = psutil.Process(old_pid)
-            if 'gunicorn' not in ' '.join(proc.cmdline()).lower():
-                # PID file is stale (not a gunicorn process)
-                    os.remove(pidfile)
             except ImportError:
                 # psutil yoksa temizlik yapmak güvenli
                 os.remove(pidfile)
-            except Exception:
-                # Her durumda güvenli tarafta kal: PID dosyasını temizle
-            os.remove(pidfile)
+            else:
+                proc = psutil.Process(old_pid)
+                if 'gunicorn' not in ' '.join(proc.cmdline()).lower():
+                    # PID file is stale (not a gunicorn process)
+                    os.remove(pidfile)
         except Exception:
-            # PID dosyasını okuyamadıysak sessiz geç
-            pass
+            # Her durumda güvenli tarafta kal: PID dosyasını temizle
+            os.remove(pidfile)
     except Exception:
+        # PID dosyasını okuyamadıysak sessiz geç
         pass
 
 # User and group (env ile özelleştirilebilir)
