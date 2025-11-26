@@ -5584,6 +5584,7 @@ class EnhancedMLSystem:
                     cur_enabled = {}
                     cur_hfeat = {}
                     cur_hcaps = {}
+                    cur_meta_order = {}  # ✅ FIX: Store meta-learner model order in manifest
                     cur_hlist = []
                     for h in self.prediction_horizons:
                         hk = f"{h}d"
@@ -5592,6 +5593,11 @@ class EnhancedMLSystem:
                         # Enabled models for this horizon (only if trained in this run)
                         if model_key in self.models:
                             cur_enabled[hk] = list(self.models[model_key].keys())
+                        # ✅ FIX: Get meta-learner model order if available
+                        if hasattr(self, 'meta_model_orders'):
+                            meta_order_key = f"{symbol}_{h}d_meta_model_order"
+                            if meta_order_key in self.meta_model_orders:
+                                cur_meta_order[hk] = self.meta_model_orders[meta_order_key]
                         # Horizon features (if available in memory)
                         cur_hfeat[hk] = list(self.models.get(f"{symbol}_{h}d_features", []))
                         # Horizon empirical cap (if available)
@@ -5621,6 +5627,11 @@ class EnhancedMLSystem:
                             except Exception:
                                 pass
                     
+                    # ✅ FIX: Merge meta-learner model orders
+                    ex_meta_order = existing.get('meta_model_orders', {}) or {}
+                    new_meta_order = dict(ex_meta_order)
+                    new_meta_order.update({k: v for k, v in cur_meta_order.items() if v})
+                    
                     all_horizons = sorted(set(ex_horizons).union(cur_hlist))
                     
                     return {
@@ -5632,6 +5643,7 @@ class EnhancedMLSystem:
                         'horizon_features': new_hfeat,
                         'horizon_caps': new_hcaps,
                         'enabled_models': new_enabled,
+                        'meta_model_orders': new_meta_order,  # ✅ FIX: Store meta-learner model order in manifest
                     }
                 
                 # Atomic read-modify-write with file locking
@@ -5950,6 +5962,25 @@ class EnhancedMLSystem:
                 logger.debug(f"Meta-scaler load failed: {e}")
             
             # ✅ FIX: Load meta model orders (ensures prediction uses same order as training)
+            # Try loading from manifest first (newer format), then fallback to pkl file
+            try:
+                manifest_path = f"{self.model_directory}/{symbol}_manifest.json"
+                if os.path.exists(manifest_path):
+                    with open(manifest_path, 'r') as mf:
+                        manifest_obj = json.load(mf) or {}
+                    manifest_meta_orders = manifest_obj.get('meta_model_orders', {})
+                    if manifest_meta_orders:
+                        if not hasattr(self, 'meta_model_orders'):
+                            self.meta_model_orders = {}
+                        # Convert manifest format to internal format
+                        for hk, order_list in manifest_meta_orders.items():
+                            order_key = f"{symbol}_{hk}_meta_model_order"
+                            self.meta_model_orders[order_key] = order_list
+                        logger.debug(f"Meta model orders loaded from manifest: {len(manifest_meta_orders)} orders")
+            except Exception as e:
+                logger.debug(f"Meta model orders load from manifest failed: {e}")
+            
+            # Fallback: Load from pkl file (older format)
             try:
                 orders_file = f"{self.model_directory}/{symbol}_meta_model_orders.pkl"
                 if os.path.exists(orders_file):
@@ -5957,7 +5988,7 @@ class EnhancedMLSystem:
                     if not hasattr(self, 'meta_model_orders'):
                         self.meta_model_orders = {}
                     self.meta_model_orders.update(symbol_meta_orders)
-                    logger.debug(f"Meta model orders loaded: {len(symbol_meta_orders)} orders")
+                    logger.debug(f"Meta model orders loaded from pkl: {len(symbol_meta_orders)} orders")
             except Exception as e:
                 logger.debug(f"Meta-scaler load failed: {e}")
             
