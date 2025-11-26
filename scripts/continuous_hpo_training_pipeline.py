@@ -536,6 +536,8 @@ class ContinuousHPOPipeline:
         self.results_dir.mkdir(exist_ok=True, parents=True)
         # ✅ FIX: Ensure directory permissions for shared access
         ensure_directory_permissions(self.results_dir)
+        # ✅ FIX: Clean up old temp state files on startup
+        self._cleanup_temp_state_files()
         self.state: Dict[str, TaskState] = {}
         self.cycle = 0
         self.load_state()
@@ -564,6 +566,51 @@ class ContinuousHPOPipeline:
                 self.state = {}
         else:
             logger.info("📝 No existing state file, starting fresh")
+    
+    def _cleanup_temp_state_files(self):
+        """Clean up old temporary state files (from crashed processes)"""
+        try:
+            # Find all temp state files matching pattern: continuous_hpo_state.json.tmp.*
+            temp_pattern = self.state_file.with_suffix('.json.tmp.*')
+            temp_files = list(self.state_file.parent.glob(temp_pattern.name))
+            
+            if temp_files:
+                cleaned_count = 0
+                for temp_file in temp_files:
+                    try:
+                        # Check if file is old (older than 1 hour) or if process is dead
+                        file_age = time.time() - temp_file.stat().st_mtime
+                        if file_age > 3600:  # Older than 1 hour
+                            temp_file.unlink()
+                            cleaned_count += 1
+                            logger.debug(f"🧹 Cleaned up old temp state file: {temp_file.name} (age: {file_age/3600:.1f}h)")
+                        else:
+                            # Check if process is still alive
+                            try:
+                                # Extract PID from filename: .tmp.{pid}
+                                pid_str = temp_file.suffixes[-1] if len(temp_file.suffixes) > 1 else None
+                                if pid_str and pid_str.startswith('.'):
+                                    pid = int(pid_str[1:])
+                                    # Check if process exists
+                                    os.kill(pid, 0)  # Signal 0 just checks if process exists
+                                    # Process is alive, keep file
+                                else:
+                                    # Can't determine PID, delete if old
+                                    if file_age > 300:  # Older than 5 minutes
+                                        temp_file.unlink()
+                                        cleaned_count += 1
+                            except (ValueError, ProcessLookupError, OSError):
+                                # Process doesn't exist, safe to delete
+                                temp_file.unlink()
+                                cleaned_count += 1
+                                logger.debug(f"🧹 Cleaned up temp state file from dead process: {temp_file.name}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Could not clean up temp file {temp_file}: {e}")
+                
+                if cleaned_count > 0:
+                    logger.info(f"🧹 Cleaned up {cleaned_count} old temporary state files")
+        except Exception as e:
+            logger.warning(f"⚠️ Error during temp state file cleanup: {e}")
     
     def save_state(self):
         """Save pipeline state to file (merge-aware for concurrent processes)"""
@@ -630,7 +677,10 @@ class ContinuousHPOPipeline:
             
             # Atomic write (lock still held)
             # Write to temp file first, then atomic rename
-            tmp_path = self.state_file.with_suffix('.json.tmp')
+            # ✅ FIX: Use unique temp file name per process to avoid race conditions
+            import os as os_module
+            process_id = os_module.getpid()
+            tmp_path = self.state_file.with_suffix(f'.json.tmp.{process_id}')
             try:
                 # ✅ FIX: Ensure temp file directory exists and has proper permissions
                 tmp_path.parent.mkdir(parents=True, exist_ok=True)
@@ -638,22 +688,77 @@ class ContinuousHPOPipeline:
                 
                 # ✅ FIX: Write to temp file with explicit error handling
                 try:
-                    with open(tmp_path, 'w') as f:
-                        json.dump(data, f, indent=2)
-                        f.flush()
-                        os.fsync(f.fileno())
+                    # ✅ DEBUG: Log before attempting to write (use INFO level so it's visible)
+                    logger.info(f"📝 Attempting to write temp file: {tmp_path}")
+                    logger.info(f"📝 Parent dir exists: {tmp_path.parent.exists()}, writable: {os.access(tmp_path.parent, os.W_OK)}")
+                    
+                    # ✅ FIX: Test JSON serialization before writing
+                    try:
+                        test_json_str = json.dumps(data)
+                        logger.info(f"📝 JSON serialization test: {len(test_json_str)} bytes")
+                    except Exception as json_err:
+                        logger.error(f"❌ JSON serialization failed: {json_err}")
+                        raise
+                    
+                    # ✅ FIX: Write file step by step with verification
+                    file_handle = None
+                    try:
+                        file_handle = open(tmp_path, 'w')
+                        logger.info(f"📝 File handle opened: {tmp_path}")
+                        json.dump(data, file_handle, indent=2)
+                        logger.info("📝 JSON dumped to file")
+                        file_handle.flush()
+                        logger.info("📝 File flushed")
+                        os.fsync(file_handle.fileno())
+                        logger.info("📝 File synced to disk")
+                        file_handle.close()
+                        file_handle = None
+                        logger.info("📝 File handle closed")
+                    except Exception as write_err:
+                        if file_handle:
+                            try:
+                                file_handle.close()
+                            except Exception:
+                                pass
+                        logger.error(f"❌ Error during file write: {write_err}")
+                        import traceback
+                        logger.error(f"❌ Write error traceback: {''.join(traceback.format_exc())}")
+                        raise
+                    
+                    # ✅ DEBUG: Verify file exists immediately after write
+                    if tmp_path.exists():
+                        file_size = tmp_path.stat().st_size
+                        logger.info(f"✅ Temp file exists after write: {tmp_path}, size: {file_size}")
+                    else:
+                        logger.error(f"❌ Temp file does NOT exist after write: {tmp_path}")
                 except Exception as write_file_err:
                     logger.error(f"❌ Error writing temp file {tmp_path}: {write_file_err}")
+                    import traceback
+                    logger.error(f"❌ Write error traceback: {''.join(traceback.format_exc())}")
                     raise
                 
                 # ✅ FIX: Verify temp file was created and has content before renaming
+                # Note: File existence was already checked above, but check again in case of race condition
                 if not tmp_path.exists():
+                    logger.error(f"❌ Temp file does not exist after write attempt: {tmp_path}")
+                    logger.error(f"❌ Parent dir: {tmp_path.parent}, exists: {tmp_path.parent.exists()}")
                     raise IOError(f"Temp file was not created: {tmp_path}")
                 if tmp_path.stat().st_size == 0:
+                    logger.error(f"❌ Temp file is empty: {tmp_path}")
                     raise IOError(f"Temp file is empty: {tmp_path}")
                 
-                # Atomic rename (lock still held, preventing concurrent writes)
-                os.replace(tmp_path, self.state_file)
+                # ✅ FIX: Atomic rename with error handling
+                logger.info(f"📝 Attempting atomic rename: {tmp_path} -> {self.state_file}")
+                try:
+                    # Atomic rename (lock still held, preventing concurrent writes)
+                    os.replace(tmp_path, self.state_file)
+                    logger.info("✅ Atomic rename successful")
+                except Exception as rename_err:
+                    logger.error(f"❌ Atomic rename failed: {rename_err}")
+                    logger.error(f"❌ Temp file exists: {tmp_path.exists()}, State file exists: {self.state_file.exists()}")
+                    import traceback
+                    logger.error(f"❌ Rename error traceback: {''.join(traceback.format_exc())}")
+                    raise
                 # ✅ FIX: Ensure file permissions for shared access
                 ensure_file_permissions(self.state_file)
             except Exception as write_err:
@@ -2810,7 +2915,7 @@ class ContinuousHPOPipeline:
                                     best_params_with_trial['feature_flags'] = hpo_result.get('feature_flags', {})
                                     best_params_with_trial['hyperparameters'] = hpo_result.get('hyperparameters', {})
                                     
-                                    training_result = self.run_training(symbol, horizon, best_params_with_trial)
+                                    training_result = self.run_training(symbol, horizon, best_params_with_trial, hpo_result=hpo_result)
                                     
                                     if training_result is None:
                                         load_state_preserve_cycle()
@@ -2972,7 +3077,7 @@ class ContinuousHPOPipeline:
             best_params_with_trial['feature_params'] = hpo_result.get('feature_params', {})
             best_params_with_trial['feature_flags'] = hpo_result.get('feature_flags', {})
             best_params_with_trial['hyperparameters'] = hpo_result.get('hyperparameters', {})
-            training_result = self.run_training(symbol, horizon, best_params_with_trial)
+            training_result = self.run_training(symbol, horizon, best_params_with_trial, hpo_result=hpo_result)
             
             if training_result is None:
                 load_state_preserve_cycle()
