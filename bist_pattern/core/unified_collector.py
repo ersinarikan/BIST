@@ -131,7 +131,8 @@ def _broadcast(level: str, message: str, category: str = 'collector') -> None:
         from flask import current_app
         app_obj = current_app._get_current_object()  # type: ignore[attr-defined]
         if hasattr(app_obj, 'broadcast_log'):
-            app_obj.broadcast_log(level, message, category)
+            # ✅ FIX: Add service identifier to distinguish from HPO logs
+            app_obj.broadcast_log(level, message, category='working_automation', service='working_automation')
     except Exception:
         # Silently ignore if no app context/socket available
         pass

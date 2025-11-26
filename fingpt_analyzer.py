@@ -301,14 +301,16 @@ class FinGPTAnalyzer:
             from flask import current_app
             app_obj = current_app._get_current_object()
             if hasattr(app_obj, 'broadcast_log'):
-                app_obj.broadcast_log(level, message, category)
+                # ✅ FIX: Add service identifier to distinguish from HPO logs
+                app_obj.broadcast_log(level, message, category='working_automation', service='working_automation')
             else:
                 sock = getattr(app_obj, 'socketio', None)
                 if sock is not None:
                     sock.emit('log_update', {
                         'level': level,
                         'message': message,
-                        'category': category,
+                        'category': 'working_automation',
+                        'service': 'working_automation',
                         'timestamp': datetime.now().isoformat(),
                     })
         except Exception:

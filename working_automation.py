@@ -130,33 +130,8 @@ class WorkingAutomationPipeline:
                             continue
 
                         with flask_app.app_context():
-                            # Helpers
-                            def _append_history(phase: str, state: str, details: Dict[str, Any] | None = None) -> None:
-                                try:
-                                    log_dir = ConfigManager.get('BIST_LOG_PATH', '/opt/bist-pattern/logs')
-                                    os.makedirs(log_dir, exist_ok=True)
-                                    status_file = os.path.join(log_dir, 'pipeline_status.json')
-                                    payload = {'history': []}
-                                    if os.path.exists(status_file):
-                                        try:
-                                            with open(status_file, 'r') as rf:
-                                                payload = json.load(rf) or {'history': []}
-                                        except Exception:
-                                            payload = {'history': []}
-                                    payload.setdefault('history', []).append({
-                                        'phase': phase,
-                                        'state': state,
-                                        'timestamp': datetime.now().isoformat(),
-                                        'details': details or {}
-                                    })
-                                    payload['history'] = payload['history'][-200:]
-                                    with open(status_file, 'w') as wf:
-                                        json.dump(payload, wf)
-                                except Exception as e:
-                                    # ✅ FIX: Log exception instead of silent pass
-                                    logger.debug(f"_append_history failed: {e}")
-
-                            def _broadcast(level: str, message: str, category: str = 'pipeline') -> None:
+                            # Helpers - Define _broadcast first so it can be used in handler
+                            def _broadcast(level: str, message: str, category: str = 'working_automation') -> None:
                                 try:
                                     # ✅ FIX: Validate flask_app is not None
                                     if flask_app is None:
@@ -164,7 +139,8 @@ class WorkingAutomationPipeline:
                                         return
                                     
                                     if hasattr(flask_app, 'broadcast_log'):
-                                        flask_app.broadcast_log(level, message, category)  # type: ignore[attr-defined]
+                                        # ✅ FIX: Add service identifier to distinguish from HPO logs
+                                        flask_app.broadcast_log(level, message, category='working_automation', service='working_automation')  # type: ignore[attr-defined]
                                     else:
                                         # Fallback emit if broadcast helper is absent
                                         sock = getattr(flask_app, 'socketio', None)
@@ -176,8 +152,92 @@ class WorkingAutomationPipeline:
                                                 log_data = {
                                                     'level': level,
                                                     'message': str(message)[:1000],  # Limit message length
-                                                    'category': category,
+                                                    'category': 'working_automation',  # ✅ FIX: Use specific category to distinguish from HPO
                                                     'timestamp': datetime.now().isoformat(),
+                                                    'service': 'working_automation'  # ✅ FIX: Add service identifier
+                                                }
+                                                sanitized_data = _sanitize_json_value(log_data)
+                                                json.dumps(sanitized_data)  # Test serialization
+                                                # ✅ FIX: Only send to admin room - user clients don't need log updates
+                                                sock.emit('log_update', sanitized_data, room='admin')
+                                            except Exception as sanitize_err:
+                                                logger.debug(f"Log broadcast sanitization failed: {sanitize_err}")
+                                except Exception as e:
+                                    logger.debug(f"_broadcast failed: {e}")
+                            
+                            def _append_history(phase: str, state: str, details: Dict[str, Any] | None = None) -> None:
+                                try:
+                                    log_dir = ConfigManager.get('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+                                    os.makedirs(log_dir, exist_ok=True)
+                                    status_file = os.path.join(log_dir, 'pipeline_status.json')
+                                    payload = {'history': []}
+                                    if os.path.exists(status_file):
+                                        try:
+                                            # ✅ FIX: Check if file is empty before reading
+                                            if os.path.getsize(status_file) > 0:
+                                                with open(status_file, 'r') as rf:
+                                                    content = rf.read().strip()
+                                                    if content:
+                                                        payload = json.loads(content) or {'history': []}
+                                            else:
+                                                payload = {'history': []}
+                                        except (json.JSONDecodeError, ValueError) as json_err:
+                                            # File exists but is corrupted or empty, reset it
+                                            logger.debug(f"pipeline_status.json parse error, resetting: {json_err}")
+                                            payload = {'history': []}
+                                        except Exception as read_err:
+                                            logger.debug(f"pipeline_status.json read error: {read_err}")
+                                            payload = {'history': []}
+                                    payload.setdefault('history', []).append({
+                                        'phase': phase,
+                                        'state': state,
+                                        'timestamp': datetime.now().isoformat(),
+                                        'details': details or {}
+                                    })
+                                    payload['history'] = payload['history'][-200:]
+                                    # ✅ FIX: Use atomic write to prevent corruption
+                                    import tempfile
+                                    temp_file = status_file + '.tmp'
+                                    try:
+                                        with open(temp_file, 'w') as wf:
+                                            json.dump(payload, wf, indent=2)
+                                        os.replace(temp_file, status_file)
+                                    except Exception as write_err:
+                                        logger.debug(f"pipeline_status.json write error: {write_err}")
+                                        # Clean up temp file if exists
+                                        try:
+                                            if os.path.exists(temp_file):
+                                                os.remove(temp_file)
+                                        except Exception:
+                                            pass
+                                except Exception as e:
+                                    # ✅ FIX: Log exception instead of silent pass
+                                    logger.warning(f"_append_history failed: {e}")
+
+                            def _broadcast(level: str, message: str, category: str = 'working_automation') -> None:
+                                try:
+                                    # ✅ FIX: Validate flask_app is not None
+                                    if flask_app is None:
+                                        logger.debug("flask_app is None, cannot broadcast")
+                                        return
+                                    
+                                    if hasattr(flask_app, 'broadcast_log'):
+                                        # ✅ FIX: Add service identifier to distinguish from HPO logs
+                                        flask_app.broadcast_log(level, message, category='working_automation', service='working_automation')  # type: ignore[attr-defined]
+                                    else:
+                                        # Fallback emit if broadcast helper is absent
+                                        sock = getattr(flask_app, 'socketio', None)
+                                        if sock is not None:
+                                            # ✅ FIX: Sanitize log_update data to prevent parse errors
+                                            try:
+                                                from bist_pattern.core.broadcaster import _sanitize_json_value
+                                                import json
+                                                log_data = {
+                                                    'level': level,
+                                                    'message': str(message)[:1000],  # Limit message length
+                                                    'category': 'working_automation',  # ✅ FIX: Use specific category to distinguish from HPO
+                                                    'timestamp': datetime.now().isoformat(),
+                                                    'service': 'working_automation'  # ✅ FIX: Add service identifier
                                                 }
                                                 sanitized_data = _sanitize_json_value(log_data)
                                                 json.dumps(sanitized_data)  # Test serialization
@@ -188,6 +248,44 @@ class WorkingAutomationPipeline:
                                 except Exception as e:
                                     # ✅ FIX: Log exception instead of silent pass
                                     logger.debug(f"_broadcast failed: {e}")
+                            
+                            # ✅ FIX: Setup enhanced_ml_system logger handler to broadcast logs with service identifier
+                            # This ensures logs from enhanced_ml_system are visible in admin dashboard
+                            enhanced_ml_logger = logging.getLogger('enhanced_ml_system')
+                            # Remove any existing handlers to avoid duplicates
+                            for handler in list(enhanced_ml_logger.handlers):
+                                if hasattr(handler, '_is_working_automation_handler'):
+                                    enhanced_ml_logger.removeHandler(handler)
+                            
+                            class WorkingAutomationLogHandler(logging.Handler):
+                                """Custom handler to broadcast enhanced_ml_system logs with service identifier"""
+                                def __init__(self, broadcast_func):
+                                    super().__init__()
+                                    self.broadcast_func = broadcast_func
+                                    self._is_working_automation_handler = True
+                                
+                                def emit(self, record):
+                                    try:
+                                        level_map = {
+                                            logging.DEBUG: 'DEBUG',
+                                            logging.INFO: 'INFO',
+                                            logging.WARNING: 'WARNING',
+                                            logging.ERROR: 'ERROR',
+                                            logging.CRITICAL: 'ERROR'
+                                        }
+                                        level = level_map.get(record.levelno, 'INFO')
+                                        message = self.format(record)
+                                        # Only broadcast INFO and above to avoid spam
+                                        if record.levelno >= logging.INFO:
+                                            self.broadcast_func(level, message, 'working_automation')
+                                    except Exception:
+                                        pass  # Silently fail to avoid recursion
+                            
+                            # Add handler to enhanced_ml_system logger
+                            enhanced_ml_handler = WorkingAutomationLogHandler(_broadcast)
+                            enhanced_ml_handler.setLevel(logging.INFO)  # Only INFO and above
+                            enhanced_ml_logger.addHandler(enhanced_ml_handler)
+                            enhanced_ml_logger.setLevel(logging.INFO)  # Ensure logger level allows INFO
 
                             def _rss_health_check() -> Dict[str, Any]:
                                 """
@@ -339,11 +437,13 @@ class WorkingAutomationPipeline:
                                             logger.debug(f"Backoff check failed for {symbol}: {backoff_err}")
                                         # Collect minimal recent data for symbol
                                         try:
+                                            _broadcast('INFO', f'📥 {symbol}: Yahoo Finance\'tan veri çekiliyor...', 'collector')
                                             res = collector.collect_single_stock(symbol, period='auto')
                                             
                                             # ✅ FIX: Validate res is not None
                                             if res is None:
                                                 logger.debug(f"collect_single_stock returned None for {symbol}")
+                                                _broadcast('WARNING', f'⚠️ {symbol}: Veri çekme sonucu None döndü', 'collector')
                                                 # Continue to next symbol
                                                 time.sleep(symbol_sleep_seconds)
                                                 continue
@@ -355,6 +455,7 @@ class WorkingAutomationPipeline:
                                                 if success:
                                                     collected_records += recs
                                                     updated_records += upd
+                                                    _broadcast('SUCCESS', f'✅ {symbol}: {recs} yeni kayıt, {upd} güncellenmiş kayıt çekildi', 'collector')
                                                     # Clear backoff if data arrived
                                                     try:
                                                         if symbol in self.no_data_backoff:

@@ -706,7 +706,8 @@ def register(app):
             def _broadcast(level, message, category='pipeline'):
                 try:
                     if hasattr(app, 'broadcast_log'):
-                        app.broadcast_log(level, message, category)
+                        # ✅ FIX: Use specific category to distinguish from HPO logs
+                        app.broadcast_log(level, message, category='working_automation')
                 except Exception:
                     pass
 

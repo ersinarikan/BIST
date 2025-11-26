@@ -1256,13 +1256,22 @@ class HybridPatternDetector:
                         news_count = int(sent_res.get('news_count', 0) or 0)
                         if sig in ('BULLISH', 'BEARISH') and conf > 0:
                             logger.info(f"✅ FinGPT sentiment {symbol}: {sig} (conf={conf:.2f}, news={news_count})")
+                            # ✅ FIX: Include news texts for tooltip display (limit to 200 chars each)
+                            news_items_preview = []
+                            for news_text in news_texts[:5]:  # Max 5 news items
+                                preview = str(news_text)[:200]  # Limit to 200 chars
+                                if len(str(news_text)) > 200:
+                                    preview += "..."
+                                news_items_preview.append(preview)
+                            
                             patterns.append({
                                 'pattern': 'FINGPT_SENTIMENT',
                                 'signal': sig,
                                 'confidence': max(0.3, min(0.9, conf)),
                                 'strength': int(max(0.3, min(0.9, conf)) * 100),
                                 'source': 'FINGPT',
-                                'news_count': news_count
+                                'news_count': news_count,
+                                'news_items': news_items_preview  # ✅ FIX: Add news items for tooltip
                             })
                         else:
                             logger.debug(f"📰 FinGPT sentiment {symbol}: {sig} (conf={conf:.2f}, news={news_count}) - below threshold")
@@ -2240,8 +2249,8 @@ class HybridPatternDetector:
                     json.dump(snap, wf)
             except Exception:
                 pass
+
             try:
-                # Progress broadcast: analysis end (best-effort)
                 from flask import current_app
                 try:
                     flask_app = current_app

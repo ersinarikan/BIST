@@ -193,7 +193,22 @@
             });
             
             socket.on('log_update', function(data) {
-                addLog(data.level.toUpperCase(), data.message, data.category);
+                // ✅ FIX: Only show working automation logs (filter out HPO and other logs)
+                const category = (data.category || '').toLowerCase();
+                const service = (data.service || '').toLowerCase();
+                
+                // ✅ CRITICAL: Only show logs explicitly marked as 'working_automation'
+                // Working automation now uses category='working_automation' and service='working_automation'
+                // This distinguishes it from HPO logs which use different categories
+                const isWorkingAutomationLog = 
+                    category === 'working_automation' || 
+                    service === 'working_automation';
+                
+                // Only show working automation logs - no other filtering needed
+                if (isWorkingAutomationLog) {
+                    addLog(data.level.toUpperCase(), data.message, data.category);
+                }
+                // All other logs (HPO, gunicorn, system, etc.) are filtered out
             });
             
             socket.on('pattern_analysis', function(data) {
@@ -439,9 +454,13 @@
                 <span class="navbar-text me-3">
                     <i class="fas fa-circle pulse status-healthy"></i> Live Monitoring
                 </span>
-                <span class="navbar-text" id="last-update">
+                <span class="navbar-text me-3" id="last-update">
                     Last update: <span id="timestamp">--:--:--</span>
                 </span>
+                <button class="btn btn-outline-light btn-sm" data-bs-toggle="modal" data-bs-target="#simulationHelpModal" 
+                        title="Simülasyon Kullanım Kılavuzu">
+                    <i class="fas fa-question-circle me-1"></i>Simülasyon Yardımı
+                </button>
             </div>
         </div>
     </nav>
@@ -712,6 +731,28 @@
                                         <span class="input-group-text" style="font-size:0.75rem;">%</span>
                                     </div>
                                     <div class="form-text" style="font-size:0.65rem;">En yüksek güven skorundan düşüş eşiği</div>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label mb-0" style="font-size:0.7rem;">Simülasyon Modu</label>
+                                    <select class="form-select form-select-sm" id="sim-mode" style="font-size:0.8rem;">
+                                        <option value="hybrid" selected>Hibrit (Model + Risk Yönetimi)</option>
+                                        <option value="model_test">Model Testi (Sadece Model Performansı)</option>
+                                        <option value="risk_management">Risk Yönetimi (Stop-loss + Confidence Drop)</option>
+                                    </select>
+                                    <div class="form-text" style="font-size:0.65rem;" id="sim-mode-desc">Model önerilerini ve risk yönetimini birlikte test eder</div>
+                                    <script>
+                                    document.getElementById('sim-mode')?.addEventListener('change', function() {
+                                        const desc = document.getElementById('sim-mode-desc');
+                                        if (!desc) return;
+                                        const mode = this.value;
+                                        const descriptions = {
+                                            'hybrid': 'Model önerilerini ve risk yönetimini birlikte test eder',
+                                            'model_test': 'Sadece model performansını ölçer (stop-loss kapalı, horizon\'a kadar tut)',
+                                            'risk_management': 'Sadece risk yönetimi performansını ölçer (stop-loss ve confidence drop aktif)'
+                                        };
+                                        desc.textContent = descriptions[mode] || descriptions['hybrid'];
+                                    });
+                                    </script>
                                 </div>
                             </div>
                         </div>
@@ -1075,6 +1116,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const commission = parseFloat(document.getElementById('sim-commission')?.value || '0.0005');
                 const stopPctUi = parseFloat(document.getElementById('sim-stoploss')?.value || '3');
                 const relDropPctUi = parseFloat(document.getElementById('sim-rel-drop')?.value || '20');
+                const simMode = (document.getElementById('sim-mode')?.value || 'hybrid');
                 
                 const body = {
                     initial_capital: isFinite(capital) ? capital : 10000,
@@ -1082,7 +1124,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     topN: (isFinite(topN) ? Math.max(1, Math.min(10, topN)) : 10),
                     commission: (isFinite(commission) ? commission : 0.0005),
                     stop_loss_pct: isFinite(stopPctUi) ? (stopPctUi / 100.0) : 0.03,
-                    relative_drop_threshold: isFinite(relDropPctUi) ? (relDropPctUi / 100.0) : 0.20
+                    relative_drop_threshold: isFinite(relDropPctUi) ? (relDropPctUi / 100.0) : 0.20,
+                    simulation_mode: simMode
                 };
                 
                 const res = await fetch('/api/internal/simulation/forward-start', {
@@ -1249,17 +1292,30 @@ document.addEventListener('DOMContentLoaded', function() {
             }).length;
             const hitRate = sellTrades.length > 0 ? (profitableSells / sellTrades.length * 100) : 0;
             
+            // ✅ NEW: Separate metrics for model performance vs risk management
+            const summary = content.summary || {};
+            const modelPerf = summary.model_performance || {};
+            const riskMgmt = summary.risk_management || {};
+            const simMode = summary.simulation_mode || content.params?.simulation_mode || 'hybrid';
+            
             // Simulation progress
             const elapsedDays = content.elapsed_days || 0;
             const durationDays = content.duration_days || 0;
             const horizon = content.horizon || '';
             const startTime = content.start_time ? new Date(content.start_time).toLocaleString('tr-TR') : 'N/A';
             
+            const modeLabels = {
+                'hybrid': 'Hibrit (Model + Risk Yönetimi)',
+                'model_test': 'Model Testi (Sadece Model Performansı)',
+                'risk_management': 'Risk Yönetimi (Stop-loss + Confidence Drop)'
+            };
+            
             body.innerHTML = `
               <div class="alert alert-info mb-3">
                 <strong>📊 Simulasyon Durumu:</strong> ${horizon} | 
                 Gün ${elapsedDays}/${durationDays} | 
-                Başlangıç: ${startTime}
+                Başlangıç: ${startTime}<br>
+                <strong>Mod:</strong> ${modeLabels[simMode] || simMode}
               </div>
               <div class="row g-3 mb-3">
                 <div class="col-md-3">
@@ -1273,7 +1329,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 <div class="col-md-3">
                   <div class="card ${pnl >= 0 ? 'bg-success' : 'bg-danger'} text-white">
                     <div class="card-body p-2">
-                      <small>P&L</small>
+                      <small>Toplam P&L</small>
                       <div class="h5 mb-0">₺${pnl.toFixed(2)}</div>
                       <small>${ret.toFixed(2)}%</small>
                     </div>
@@ -1297,6 +1353,64 @@ document.addEventListener('DOMContentLoaded', function() {
                   </div>
                 </div>
               </div>
+              ${simMode === 'hybrid' && (modelPerf.trades > 0 || riskMgmt.trades > 0) ? `
+              <div class="row g-3 mb-3">
+                <div class="col-md-6">
+                  <div class="card ${modelPerf.pnl >= 0 ? 'border-success' : 'border-danger'}">
+                    <div class="card-header bg-light">
+                      <strong>🎯 Model Performansı</strong>
+                    </div>
+                    <div class="card-body p-2">
+                      <div class="row">
+                        <div class="col-6">
+                          <small class="text-muted">İşlem</small>
+                          <div class="h6 mb-0">${modelPerf.trades || 0}</div>
+                        </div>
+                        <div class="col-6">
+                          <small class="text-muted">P&L</small>
+                          <div class="h6 mb-0 ${modelPerf.pnl >= 0 ? 'text-success' : 'text-danger'}">₺${(modelPerf.pnl || 0).toFixed(2)}</div>
+                        </div>
+                        <div class="col-6">
+                          <small class="text-muted">Kârlı</small>
+                          <div class="h6 mb-0">${modelPerf.profitable_trades || 0}</div>
+                        </div>
+                        <div class="col-6">
+                          <small class="text-muted">Hit Rate</small>
+                          <div class="h6 mb-0">${((modelPerf.hit_rate || 0) * 100).toFixed(1)}%</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-md-6">
+                  <div class="card ${riskMgmt.pnl >= 0 ? 'border-success' : 'border-danger'}">
+                    <div class="card-header bg-light">
+                      <strong>🛡️ Risk Yönetimi</strong>
+                    </div>
+                    <div class="card-body p-2">
+                      <div class="row">
+                        <div class="col-6">
+                          <small class="text-muted">İşlem</small>
+                          <div class="h6 mb-0">${riskMgmt.trades || 0}</div>
+                        </div>
+                        <div class="col-6">
+                          <small class="text-muted">P&L</small>
+                          <div class="h6 mb-0 ${riskMgmt.pnl >= 0 ? 'text-success' : 'text-danger'}">₺${(riskMgmt.pnl || 0).toFixed(2)}</div>
+                        </div>
+                        <div class="col-6">
+                          <small class="text-muted">Kârlı</small>
+                          <div class="h6 mb-0">${riskMgmt.profitable_trades || 0}</div>
+                        </div>
+                        <div class="col-6">
+                          <small class="text-muted">Hit Rate</small>
+                          <div class="h6 mb-0">${((riskMgmt.hit_rate || 0) * 100).toFixed(1)}%</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              ` : ''}
               <div class="row g-3 mb-3">
                 <div class="col-md-8"><canvas id="simEquityChart" height="140"></canvas></div>
                 <div class="col-md-4"><canvas id="simDrawdownChart" height="140"></canvas></div>
@@ -1333,6 +1447,7 @@ document.addEventListener('DOMContentLoaded', function() {
                           <th>Adet</th>
                           <th>Fiyat ₺</th>
                           <th>Sebep</th>
+                          ${simMode === 'hybrid' ? '<th>Kategori</th>' : ''}
                         </tr>
                       </thead>
                       <tbody id="sim-trades-tbody"></tbody>
@@ -1376,12 +1491,17 @@ document.addEventListener('DOMContentLoaded', function() {
                         '<span class="badge bg-danger">SAT</span>';
                     const reasonMap = {
                         'initial_buy': '🚀 İlk',
+                        'rotation_buy': '🔄 Rot.',
                         'stop_loss': '🛑 Stop',
                         'sell_signal': '📉 Sinyal',
                         'confidence_drop': '⚠️ Güven↓',
-                        'rotation': '🔄 Rot.'
+                        'horizon_reached': '⏰ Ufuk'
                     };
                     const reasonText = reasonMap[t.reason] || t.reason || 'N/A';
+                    const categoryBadge = t.category === 'model_performance' ? 
+                        '<span class="badge bg-primary" style="font-size:0.65rem;">Model</span>' : 
+                        t.category === 'risk_management' ? 
+                        '<span class="badge bg-warning" style="font-size:0.65rem;">Risk</span>' : '';
                     return `
                         <tr>
                             <td style="font-size:0.7rem;">${time}</td>
@@ -1390,6 +1510,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             <td class="text-end">${t.shares || 0}</td>
                             <td class="text-end">${(t.price||0).toFixed(2)}</td>
                             <td style="font-size:0.75rem;">${reasonText}</td>
+                            ${simMode === 'hybrid' ? `<td>${categoryBadge}</td>` : ''}
                         </tr>
                     `;
                 }).join('');
@@ -1725,14 +1846,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (isRunning && hist.length > 0) {
                         // Find most recent 'start' entry to decide the phase reliably
                         let lastStart = null;
+                        let lastEntry = hist[hist.length - 1]; // Most recent entry
                         for (let i = hist.length - 1; i >= 0; i--) {
                             if (hist[i].state === 'start' && (hist[i].phase === 'data_collection' || hist[i].phase === 'ai_analysis' || hist[i].phase === 'incremental_cycle' || hist[i].phase === 'symbol_flow')) {
                                 lastStart = hist[i];
                                 break;
                             }
                         }
-                        const phase = lastStart ? (lastStart.phase || '') : '';
-                        const state = lastStart ? 'start' : '';
+                        const phase = lastStart ? (lastStart.phase || '') : (lastEntry ? (lastEntry.phase || '') : '');
+                        const state = lastStart ? 'start' : (lastEntry ? (lastEntry.state || '') : '');
                         if (state === 'start') {
                             if (phase === 'data_collection') { label = 'Collecting'; cls = 'bg-info'; }
                             else if (phase === 'ai_analysis') { label = 'Analyzing'; cls = 'bg-primary'; }
@@ -1740,9 +1862,14 @@ document.addEventListener('DOMContentLoaded', function() {
                             else if (phase === 'symbol_flow') { label = 'Symbol Flow'; cls = 'bg-warning'; }
                             else { label = 'Running'; cls = 'bg-primary'; }
                         } else if (state === 'end') {
-                            label = 'Idle'; cls = 'bg-success';
+                            // ✅ FIX: If automation is running but last entry is 'end', show 'Running' instead of 'Idle'
+                            // This handles the case where a cycle just finished but automation is still active
+                            label = 'Running'; cls = 'bg-primary';
                         } else if (state === 'error') {
                             label = 'Error'; cls = 'bg-danger';
+                        } else {
+                            // No valid state found, but automation is running
+                            label = 'Running'; cls = 'bg-primary';
                         }
                     } else if (!isRunning) {
                         label = 'Idle';
@@ -2328,8 +2455,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // Add log entry
-        function addLog(level, message) {
+        function addLog(level, message, category) {
             const logContainer = document.getElementById('live-logs');
+            if (!logContainer) return;
+            
             const timestamp = new Date().toLocaleTimeString();
             const colors = {
                 'INFO': '#00ff00',
@@ -2340,7 +2469,9 @@ document.addEventListener('DOMContentLoaded', function() {
             
             const logEntry = document.createElement('div');
             logEntry.style.color = colors[level] || '#00ff00';
-            logEntry.innerHTML = `[${timestamp}] [${level}] ${message}`;
+            // Show category if provided and not 'system'
+            const categoryLabel = (category && category !== 'system') ? `[${category}]` : '';
+            logEntry.innerHTML = `[${timestamp}] [${level}] ${categoryLabel} ${message}`;
             
             logContainer.appendChild(logEntry);
             logContainer.scrollTop = logContainer.scrollHeight;
@@ -2766,5 +2897,200 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
 </script>
+
+    <!-- ✅ SIMÜLASYON YARDIM MODAL -->
+    <div class="modal fade" id="simulationHelpModal" tabindex="-1" aria-labelledby="simulationHelpModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title" id="simulationHelpModalLabel">
+                        <i class="fas fa-question-circle me-2"></i>Simülasyon Paneli Kullanım Kılavuzu
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" style="font-size: 0.95rem;">
+                    <!-- Genel Bakış -->
+                    <div class="mb-4">
+                        <h5 class="text-primary mb-3">
+                            <i class="fas fa-info-circle me-2"></i>Genel Bakış
+                        </h5>
+                        <div class="card border-primary">
+                            <div class="card-body">
+                                <p>Simülasyon paneli, geliştirdiğiniz AI modelinin önerilerine göre işlem yapıldığında ne kadar kazançlı çıkılacağını test etmenizi sağlar. Bu, <strong>modelin gerçekten işe yarayıp yaramadığını doğrulamak</strong> için kritik bir araçtır.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Parametreler -->
+                    <div class="mb-4">
+                        <h5 class="text-primary mb-3">
+                            <i class="fas fa-sliders-h me-2"></i>Parametreler ve Açıklamaları
+                        </h5>
+                        
+                        <!-- Sermaye -->
+                        <div class="card mb-3">
+                            <div class="card-header bg-light">
+                                <strong>1. Sermaye (Trade Amount)</strong>
+                            </div>
+                            <div class="card-body">
+                                <p><strong>Ne İşe Yarar:</strong> Simülasyonda kullanılacak başlangıç sermayesi</p>
+                                <p><strong>Önerilen Değer:</strong></p>
+                                <ul>
+                                    <li>Test için: 10,000 - 50,000 TL</li>
+                                    <li>Gerçekçi test için: 100,000 TL</li>
+                                </ul>
+                                <p><strong>Örnek:</strong> 100,000 TL → 10 pozisyon için ortalama 10,000 TL/pozisyon</p>
+                            </div>
+                        </div>
+
+                        <!-- Horizon -->
+                        <div class="card mb-3">
+                            <div class="card-header bg-light">
+                                <strong>2. Horizon (Ufuk)</strong>
+                            </div>
+                            <div class="card-body">
+                                <p><strong>Ne İşe Yarar:</strong> Modelin öngördüğü zaman dilimi</p>
+                                <p><strong>Seçenekler:</strong> 1d, 3d, 7d, 14d, 30d</p>
+                                <p><strong>Önemli:</strong> Model bu horizon'a göre pozisyon tutma süresini belirler. Örneğin 14d seçerseniz, model "14 gün tut" der.</p>
+                            </div>
+                        </div>
+
+                        <!-- Top N -->
+                        <div class="card mb-3">
+                            <div class="card-header bg-light">
+                                <strong>3. Top N</strong>
+                            </div>
+                            <div class="card-body">
+                                <p><strong>Ne İşe Yarar:</strong> Portföyde tutulacak maksimum pozisyon sayısı (1-10)</p>
+                                <ul>
+                                    <li><strong>Düşük (1-3):</strong> Konsantre portföy, yüksek risk</li>
+                                    <li><strong>Orta (4-7):</strong> Dengeli portföy</li>
+                                    <li><strong>Yüksek (8-10):</strong> Çeşitlendirilmiş portföy, düşük risk</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <!-- Commission -->
+                        <div class="card mb-3">
+                            <div class="card-header bg-light">
+                                <strong>4. Commission (Komisyon)</strong>
+                            </div>
+                            <div class="card-body">
+                                <p><strong>Ne İşe Yarar:</strong> Her alım-satım işleminde kesilen komisyon oranı</p>
+                                <p><strong>Önerilen Değer:</strong> 0.0005 (0.05% = BIST standardı)</p>
+                            </div>
+                        </div>
+
+                        <!-- Stop-loss -->
+                        <div class="card mb-3">
+                            <div class="card-header bg-light">
+                                <strong>5. Stop-loss %</strong>
+                            </div>
+                            <div class="card-body">
+                                <p><strong>Ne İşe Yarar:</strong> Zararı sınırlamak için pozisyonun otomatik satılacağı düşüş yüzdesi</p>
+                                <ul>
+                                    <li><strong>Sıkı (1-3%):</strong> Küçük zararları önler</li>
+                                    <li><strong>Orta (3-5%):</strong> Dengeli, normal volatilite için uygun</li>
+                                    <li><strong>Gevşek (5-10%):</strong> Büyük zararlara izin verir</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <!-- Relatif Düşüş -->
+                        <div class="card mb-3">
+                            <div class="card-header bg-light">
+                                <strong>6. Relatif Düşüş %</strong>
+                            </div>
+                            <div class="card-body">
+                                <p><strong>Ne İşe Yarar:</strong> Modelin güven skorunun (confidence) ne kadar düşmesine izin verileceği</p>
+                                <p><strong>Örnek:</strong> Entry confidence: 80%, Relative drop: 20% → 64%'e düşerse satış</p>
+                            </div>
+                        </div>
+
+                        <!-- Simülasyon Modu -->
+                        <div class="card mb-3 border-warning">
+                            <div class="card-header bg-warning">
+                                <strong>7. Simülasyon Modu ⭐ YENİ</strong>
+                            </div>
+                            <div class="card-body">
+                                <p><strong>Ne İşe Yarar:</strong> Simülasyonun neyi ölçeceğini belirler</p>
+                                
+                                <div class="card mb-2 border-success">
+                                    <div class="card-header bg-success text-white">
+                                        <strong>A. Hibrit (Model + Risk Yönetimi) - Önerilen</strong>
+                                    </div>
+                                    <div class="card-body">
+                                        <p>Model önerilerini ve risk yönetimi mekanizmalarını birlikte test eder. Her iki performansı ayrı ayrı ölçer.</p>
+                                    </div>
+                                </div>
+
+                                <div class="card mb-2 border-info">
+                                    <div class="card-header bg-info text-white">
+                                        <strong>B. Model Testi (Sadece Model Performansı)</strong>
+                                    </div>
+                                    <div class="card-body">
+                                        <p>Sadece model önerilerini takip eder. Stop-loss ve confidence drop <strong>devre dışı</strong>. Modelin önerdiği süre (horizon) dolana kadar pozisyon tutar.</p>
+                                    </div>
+                                </div>
+
+                                <div class="card mb-2 border-danger">
+                                    <div class="card-header bg-danger text-white">
+                                        <strong>C. Risk Yönetimi (Stop-loss + Confidence Drop)</strong>
+                                    </div>
+                                    <div class="card-body">
+                                        <p>Sadece risk yönetimi mekanizmalarını test eder. Stop-loss ve confidence drop aktif.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Hızlı Başlangıç -->
+                    <div class="mb-4">
+                        <h5 class="text-primary mb-3">
+                            <i class="fas fa-rocket me-2"></i>Hızlı Başlangıç
+                        </h5>
+                        <div class="card border-success">
+                            <div class="card-header bg-success text-white">
+                                <strong>İlk Test İçin Önerilen Ayarlar</strong>
+                            </div>
+                            <div class="card-body">
+                                <ul>
+                                    <li><strong>Sermaye:</strong> 50,000 TL</li>
+                                    <li><strong>Horizon:</strong> 7d</li>
+                                    <li><strong>Top N:</strong> 5</li>
+                                    <li><strong>Commission:</strong> 0.0005</li>
+                                    <li><strong>Stop-loss:</strong> 3%</li>
+                                    <li><strong>Relatif Düşüş:</strong> 20%</li>
+                                    <li><strong>Mod:</strong> Hibrit</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Önemli Notlar -->
+                    <div class="mb-4">
+                        <h5 class="text-primary mb-3">
+                            <i class="fas fa-exclamation-triangle me-2"></i>Önemli Notlar
+                        </h5>
+                        <div class="card border-warning">
+                            <div class="card-body">
+                                <ul>
+                                    <li><strong>Horizon = Pozisyon Tutma Süresi:</strong> Model "14d" dedi → 14 gün tutulur (model_test modunda)</li>
+                                    <li><strong>Commission Etkisi:</strong> Sık işlem yapan stratejiler commission'dan olumsuz etkilenir</li>
+                                    <li><strong>Confidence Ağırlıklandırması:</strong> Yüksek confidence → daha fazla sermaye</li>
+                                    <li><strong>Simülasyon Süresi:</strong> Seçilen horizon kadar sürer (örn: 14d → 14 gün)</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Kapat</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
 </body>
 </html>

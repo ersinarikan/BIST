@@ -1855,6 +1855,16 @@ class UserDashboard {
     patt.innerHTML = html;
   }
 
+  /**
+   * ✅ Helper: Escape HTML to prevent XSS
+   */
+  _escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
   _renderDetailMLSummary(analysis) {
     const mlBox = document.getElementById('detailMlUnified');
     if (!mlBox) return;
@@ -1975,12 +1985,63 @@ class UserDashboard {
         const fgSignal = fgTop.signal || 'NEUTRAL';
         const fgNewsCount = fgTop.news_count || 0;
         const fgIcon = fgSignal === 'BULLISH' ? '📈' : fgSignal === 'BEARISH' ? '📉' : '📊';
+        const fgNewsItems = fgTop.news_items || [];
+        
+        // ✅ DEBUG: Log to check if news_items is present
+        logDebug('FinGPT pattern data:', {
+          news_count: fgNewsCount,
+          news_items: fgNewsItems,
+          news_items_length: fgNewsItems.length,
+          full_pattern: fgTop
+        });
+        
+        // Build tooltip content with news items
+        let tooltipContent = `<strong>Sezgisel Analiz</strong><br>`;
+        tooltipContent += `<small>${fgSignal} (%${fgConf}) • ${fgNewsCount} haber</small><br><br>`;
+        if (fgNewsItems.length > 0) {
+          tooltipContent += `<strong>İlgili Haberler:</strong><br>`;
+          fgNewsItems.forEach((news, idx) => {
+            const escapedNews = this._escapeHtml(news);
+            tooltipContent += `<small>${idx + 1}. ${escapedNews}</small><br>`;
+          });
+        } else {
+          tooltipContent += `<small>Haber detayları mevcut değil</small>`;
+        }
+        
+        // Generate unique ID for tooltip
+        const tooltipId = `fingpt-tooltip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
         additionalBadges.push(`
           <div class="mb-1">
-            <span class="badge bg-warning text-dark me-1">💡 Sezgisel</span>
+            <span class="badge bg-warning text-dark me-1 fingpt-badge" 
+                  id="${tooltipId}" 
+                  data-bs-toggle="tooltip" 
+                  data-bs-html="true" 
+                  data-bs-placement="top"
+                  data-tooltip-content="${this._escapeHtml(tooltipContent)}"
+                  style="cursor: help;">💡 Sezgisel</span>
             <span class="text-muted small">${fgIcon} ${fgSignal} (%${fgConf}) • ${fgNewsCount} haber</span>
           </div>
         `);
+        
+        // Initialize Bootstrap tooltip after DOM update
+        setTimeout(() => {
+          const tooltipElement = document.getElementById(tooltipId);
+          if (tooltipElement) {
+            const tooltipContentAttr = tooltipElement.getAttribute('data-tooltip-content');
+            if (tooltipContentAttr) {
+              tooltipElement.setAttribute('title', tooltipContentAttr);
+              if (typeof bootstrap !== 'undefined') {
+                new bootstrap.Tooltip(tooltipElement, {
+                  html: true,
+                  placement: 'top',
+                  trigger: 'hover',
+                  container: 'body'
+                });
+              }
+            }
+          }
+        }, 100);
       }
 
       mlBox.innerHTML = rows + (additionalBadges.length > 0 ? '<hr class="my-2">' + additionalBadges.join('') : '');

@@ -393,7 +393,7 @@ class AsyncRSSNewsProvider:
             return []
     
     def _is_relevant_news(self, text: str, symbol: str) -> bool:
-        """Check if news text is STRICTLY relevant to the symbol"""
+        """Check if news text is relevant to the symbol (symbol name or company name)"""
         if not text:
             return False
         
@@ -412,11 +412,95 @@ class AsyncRSSNewsProvider:
         # If symbol is ambiguous, require company-specific keywords
         if symbol_upper in AMBIGUOUS_SYMBOLS:
             required_keywords = AMBIGUOUS_SYMBOLS[symbol_upper]
-            return any(keyword in text_upper for keyword in required_keywords)
+            if any(keyword in text_upper for keyword in required_keywords):
+                return True
         
-        # For other symbols, simple match is OK
-        if symbol_upper in text_upper:
+        # Check symbol name with word boundaries (more precise)
+        symbol_patterns = [
+            f" {symbol_upper} ", f"({symbol_upper})", f"[{symbol_upper}]",
+            f"{symbol_upper}:", f"{symbol_upper}-", f"{symbol_upper}.",
+            f" {symbol_upper} HISSE", f" {symbol_upper} HISSESI",
+            f" {symbol_upper} IS", f" {symbol_upper}.IS",
+        ]
+        if any(pattern in text_upper for pattern in symbol_patterns):
             return True
+        
+        # ✅ FIX: Also check company name from database with flexible matching
+        try:
+            from flask import current_app
+            try:
+                app_obj = current_app._get_current_object()
+                with app_obj.app_context():
+                    from models import Stock
+                    stock = Stock.query.filter_by(symbol=symbol_upper).first()
+                    if stock and stock.name:
+                        company_name = stock.name.upper()
+                        
+                        # Create multiple variants of company name for flexible matching
+                        name_variants = []
+                        
+                        # Full company name
+                        name_variants.append(company_name)
+                        
+                        # Remove common suffixes
+                        base_name = company_name
+                        for suffix in [' A.Ş.', ' A.S.', ' T.A.Ş.', ' T.A.S.', ' A.O.', ' A.O.', 
+                                      ' ŞİRKETİ', ' ŞIRKETI', ' HOLDİNG', ' HOLDING', 
+                                      ' SANAYİ', ' SANAYI', ' VE TİCARET', ' VE TICARET']:
+                            base_name = base_name.replace(suffix, '').strip()
+                        name_variants.append(base_name)
+                        
+                        # Extract key words (first 2-3 words, usually company name)
+                        words = base_name.split()
+                        if len(words) >= 2:
+                            # First 2 words (e.g., "ASELSAN ELEKTRONİK" from "ASELSAN ELEKTRONİK SANAYİ VE TİCARET")
+                            name_variants.append(' '.join(words[:2]))
+                        if len(words) >= 1:
+                            # First word (e.g., "ASELSAN")
+                            name_variants.append(words[0])
+                        
+                        # Special cases for well-known companies
+                        special_cases = {
+                            'THYAO': ['THY', 'TÜRK HAVA YOLLARI', 'TURK HAVA YOLLARI'],
+                            'GARAN': ['GARANTİ', 'GARANTI BANKASI', 'GARANTI BANK'],
+                            'AKBNK': ['AKBANK'],
+                            'ASELS': ['ASELSAN'],
+                            'BIMAS': ['BİM', 'BIM'],
+                            'TUPRS': ['TÜPRAŞ', 'TUPRAS'],
+                            'PETKM': ['PETKİM', 'PETKIM'],
+                        }
+                        if symbol_upper in special_cases:
+                            name_variants.extend(special_cases[symbol_upper])
+                        
+                        # Check all variants with flexible word boundaries
+                        for variant in name_variants:
+                            if variant and len(variant) > 2:
+                                # Flexible matching: word boundaries, punctuation, etc.
+                                variant_patterns = [
+                                    f" {variant} ",  # Space before and after
+                                    f" {variant},",  # Space before, comma after
+                                    f" {variant}.",  # Space before, period after
+                                    f" {variant}:",  # Space before, colon after
+                                    f" {variant}-",  # Space before, dash after
+                                    f"({variant})",  # In parentheses
+                                    f"[{variant}]",  # In brackets
+                                ]
+                                
+                                # Check patterns
+                                if any(pattern in text_upper for pattern in variant_patterns):
+                                    return True
+                                
+                                # Check at start/end
+                                if text_upper.startswith(variant + " ") or text_upper.endswith(" " + variant):
+                                    return True
+                                
+                                # Also check if variant is a substring (for compound words, minimum 4 chars)
+                                if len(variant) > 4 and variant in text_upper:
+                                    return True
+            except Exception:
+                pass
+        except Exception:
+            pass
         
         return False
     

@@ -144,11 +144,15 @@ def create_app(config_name='default'):
         pass
 
     # ✅ ENABLED LOG BROADCAST (Sanitized)
-    def broadcast_log(level, message, category='system'):
+    def broadcast_log(level, message, category='system', service=None):
         """Broadcast log message via WebSocket safely"""
         try:
             from bist_pattern.core.broadcaster import _sanitize_json_value
             import json
+            
+            # ✅ FIX: Use provided service or infer from category
+            if service is None:
+                service = 'working_automation' if category == 'working_automation' else None
             
             payload = {
                 'level': level,
@@ -156,6 +160,9 @@ def create_app(config_name='default'):
                 'category': category,
                 'timestamp': datetime.now().isoformat()
             }
+            if service:
+                payload['service'] = service
+            
             clean_payload = _sanitize_json_value(payload)
             # Verify serialization to prevent disconnects
             json.dumps(clean_payload)
