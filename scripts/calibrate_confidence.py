@@ -3,8 +3,11 @@
 Calibrate confidence and optimize per-horizon delta/conf thresholds.
 
 Outputs param_store.json with:
-  - isotonic bins (horizon -> [(c_in, c_out), ...])
   - thresholds (horizon -> {delta_thr, conf_thr})
+  - skipped_horizons (horizons with insufficient data)
+  - bandit configuration (A/B testing challenger thresholds)
+
+Note: Isotonic bins were removed and replaced by online adjustment in pattern_detector.py
 """
 from __future__ import annotations
 
@@ -16,58 +19,22 @@ from typing import Dict, List, Tuple
 
 from app import app
 from models import db, PredictionsLog, OutcomesLog
-import numpy as np  # type: ignore
+# numpy removed (was only used for deprecated isotonic_bins function)
 
 
+# ⚡ DEPRECATED: Isotonic bins function removed (no longer used)
+# Isotonic calibration was replaced by online adjustment in pattern_detector.py
+# This function is kept for reference but never called
 def isotonic_bins(pairs: List[Tuple[float, float]], bins: int = 10) -> List[Tuple[float, float]]:
-    """Build reliability bins (c_in -> c_out) using sklearn IsotonicRegression if available.
-
-    Fallback: decile grouping with monotonic smoothing.
+    """DEPRECATED: Build reliability bins (c_in -> c_out) using sklearn IsotonicRegression.
+    
+    This function is no longer used. Isotonic calibration was replaced by online adjustment
+    which directly queries the database for recent outcomes.
+    
+    Kept for reference only.
     """
-    if not pairs:
-        return []
-    try:
-        from sklearn.isotonic import IsotonicRegression  # type: ignore
-        x = np.array([float(c) for c, _ in pairs], dtype=float)
-        y = np.array([float(h) for _, h in pairs], dtype=float)
-        # Bound inputs to [0,1]
-        x = np.clip(x, 0.0, 1.0)
-        ir = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds='clip')
-        y_fit = ir.fit_transform(x, y)
-        # Build bins based on equal-frequency quantiles
-        order = np.argsort(x)
-        x_sorted = x[order]
-        y_sorted = y_fit[order]
-        n = len(x_sorted)
-        bins_out: List[Tuple[float, float]] = []
-        for i in range(bins):
-            lo = int(i * n / bins)
-            hi = int((i + 1) * n / bins)
-            hi = max(hi, lo + 1)
-            xs = x_sorted[lo:hi]
-            ys = y_sorted[lo:hi]
-            if xs.size == 0:
-                continue
-            bins_out.append((float(xs.mean()), float(ys.mean())))
-        return bins_out
-    except Exception:
-        # Fallback: simple deciles with monotonic smoothing (PAV-lite)
-        pairs = sorted(pairs, key=lambda x: x[0])
-        fallback_bins: List[Tuple[float, float]] = []
-        n = len(pairs)
-        for i in range(bins):
-            lo = int(i * n / bins)
-            hi = int((i + 1) * n / bins) or n
-            chunk = pairs[lo:hi]
-            if not chunk:
-                continue
-            c_in = sum(x for x, _ in chunk) / len(chunk)
-            c_out = sum(y for _, y in chunk) / len(chunk)
-            fallback_bins.append((c_in, c_out))
-        for i in range(1, len(fallback_bins)):
-            if fallback_bins[i][1] < fallback_bins[i - 1][1]:
-                fallback_bins[i] = (fallback_bins[i][0], fallback_bins[i - 1][1])
-        return fallback_bins
+    # Return empty list to indicate this is deprecated
+    return []
 
 
 def optimize_thresholds(pairs: List[Tuple[float, float]], deltas: List[float]) -> Dict[str, float]:
@@ -291,8 +258,7 @@ def run(window_days: int = 30, go_live: str | None = None, min_samples: int = 15
                     used_prev = True
                 else:
                     store['horizons'][h] = {
-                        'isotonic': [],
-                        'thresholds': {'delta_thr': 0.03, 'conf_thr': 0.65},
+                        'thresholds': {'delta_thr': 0.03, 'conf_thr': 0.65},  # Isotonic bins removed
                     }
                 state[h] = {
                     'n_pairs': len(pairs),
@@ -300,9 +266,10 @@ def run(window_days: int = 30, go_live: str | None = None, min_samples: int = 15
                     'used_default': (not used_prev),  # type: ignore[typeddict-item]
                 }
                 continue
-            bins = isotonic_bins(pairs, bins=10)
+            # ⚡ REMOVED: Isotonic bins no longer used (replaced by online adjustment)
+            # bins = isotonic_bins(pairs, bins=10)  # DEPRECATED: Not used in prediction
             th = optimize_thresholds(pairs, deltas)
-            store['horizons'][h] = {'isotonic': bins, 'thresholds': th}
+            store['horizons'][h] = {'thresholds': th}  # Only store thresholds (isotonic bins removed)
             state[h] = {'n_pairs': len(pairs), 'used_prev': False, 'used_default': False}  # type: ignore[typeddict-item]
             
             # ⚡ NEW: Challenger optimization (optional)

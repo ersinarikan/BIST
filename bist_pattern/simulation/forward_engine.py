@@ -156,7 +156,8 @@ def start_simulation(params: Dict[str, Any]) -> Dict[str, Any]:
             'topN': int,
             'commission': float,
             'stop_loss_pct': float,
-            'relative_drop_threshold': float
+            'relative_drop_threshold': float,
+            'simulation_mode': str ('model_test', 'hybrid', 'risk_management')
         }
     
     Returns:
@@ -174,6 +175,7 @@ def start_simulation(params: Dict[str, Any]) -> Dict[str, Any]:
     commission = float(params.get('commission', 0.0005))
     stop_loss_pct = float(params.get('stop_loss_pct', 0.03))
     relative_drop_threshold = float(params.get('relative_drop_threshold', 0.20))
+    simulation_mode = params.get('simulation_mode', 'hybrid')  # model_test, hybrid, risk_management
     
     duration_days = _parse_horizon(horizon)
     
@@ -222,6 +224,11 @@ def start_simulation(params: Dict[str, Any]) -> Dict[str, Any]:
         
         cash -= total_cost
         
+        # Calculate target exit time based on horizon
+        entry_time = datetime.utcnow()
+        horizon_days = _parse_horizon(signal['horizon'])
+        target_exit_time = entry_time + timedelta(days=horizon_days)
+        
         positions.append({
             'symbol': symbol,
             'shares': shares,
@@ -229,7 +236,8 @@ def start_simulation(params: Dict[str, Any]) -> Dict[str, Any]:
             'entry_cost': cost,
             'entry_confidence': signal['confidence'],
             'entry_horizon': signal['horizon'],
-            'entry_time': datetime.utcnow().isoformat()
+            'entry_time': entry_time.isoformat(),
+            'target_exit_time': target_exit_time.isoformat()  # Model's recommended exit time
         })
         
         trades.append({
@@ -258,7 +266,8 @@ def start_simulation(params: Dict[str, Any]) -> Dict[str, Any]:
             'topN': topN,
             'commission': commission,
             'stop_loss_pct': stop_loss_pct,
-            'relative_drop_threshold': relative_drop_threshold
+            'relative_drop_threshold': relative_drop_threshold,
+            'simulation_mode': simulation_mode
         },
         'portfolio': {
             'cash': cash,
@@ -325,6 +334,9 @@ def check_and_trade() -> Dict[str, Any]:
     trades_made = 0
     positions_to_remove = []
     
+    # Get simulation mode
+    simulation_mode = params.get('simulation_mode', 'hybrid')
+    
     # Check each position
     for i, pos in enumerate(positions):
         symbol = pos['symbol']
@@ -336,16 +348,60 @@ def check_and_trade() -> Dict[str, Any]:
         
         should_sell = False
         sell_reason = ''
+        trade_category = None  # 'model_performance' or 'risk_management'
         
-        # Stop-loss check
-        pnl_pct = (current_price - pos['entry_price']) / pos['entry_price']
-        if pnl_pct <= -params['stop_loss_pct']:
-            should_sell = True
-            sell_reason = 'stop_loss'
+        # ✅ NEW: Check if model's recommended horizon time has passed
+        target_exit_time_str = pos.get('target_exit_time')
+        if target_exit_time_str:
+            target_exit_time = datetime.fromisoformat(target_exit_time_str)
+            if datetime.utcnow() >= target_exit_time:
+                should_sell = True
+                sell_reason = 'horizon_reached'
+                trade_category = 'model_performance'
+                logger.info(f"⏰ {symbol}: Model's recommended horizon ({pos.get('entry_horizon', 'N/A')}) reached")
         
-        # Get new signal for this symbol
-        if not should_sell:
-            # Find signal for this symbol in recent predictions
+        # Risk management checks (only if not in model_test mode)
+        if not should_sell and simulation_mode != 'model_test':
+            # Stop-loss check
+            pnl_pct = (current_price - pos['entry_price']) / pos['entry_price']
+            if pnl_pct <= -params['stop_loss_pct']:
+                should_sell = True
+                sell_reason = 'stop_loss'
+                trade_category = 'risk_management'
+                logger.info(f"🛑 {symbol}: Stop-loss triggered ({pnl_pct*100:.2f}%)")
+            
+            # Get new signal for this symbol
+            if not should_sell:
+                # Find signal for this symbol in recent predictions
+                from models import PredictionsLog
+                
+                eligible_horizons = _get_eligible_horizons(_parse_horizon(horizon))
+                recent = PredictionsLog.query.filter(
+                    PredictionsLog.symbol == symbol,
+                    PredictionsLog.horizon.in_(eligible_horizons),
+                    PredictionsLog.ts_pred >= datetime.utcnow() - timedelta(hours=2)
+                ).order_by(PredictionsLog.confidence.desc()).first()
+                
+                if recent:
+                    # Determine action from delta_pred
+                    delta = float(recent.delta_pred or 0.0)
+                    action = 'buy' if delta > 0 else 'sell' if delta < 0 else 'hold'
+                    
+                    # Check for sell signal (model's recommendation)
+                    if action == 'sell':
+                        should_sell = True
+                        sell_reason = 'sell_signal'
+                        trade_category = 'model_performance'
+                        logger.info(f"📉 {symbol}: Model sell signal received")
+                    # Check for relative confidence drop (risk management)
+                    elif float(recent.confidence or 0.0) < pos['entry_confidence'] * (1 - params['relative_drop_threshold']):
+                        should_sell = True
+                        sell_reason = 'confidence_drop'
+                        trade_category = 'risk_management'
+                        logger.info(f"📊 {symbol}: Confidence dropped significantly")
+        
+        # In model_test mode, only sell when horizon is reached or model says sell
+        elif not should_sell and simulation_mode == 'model_test':
             from models import PredictionsLog
             
             eligible_horizons = _get_eligible_horizons(_parse_horizon(horizon))
@@ -356,18 +412,13 @@ def check_and_trade() -> Dict[str, Any]:
             ).order_by(PredictionsLog.confidence.desc()).first()
             
             if recent:
-                # Determine action from delta_pred
                 delta = float(recent.delta_pred or 0.0)
                 action = 'buy' if delta > 0 else 'sell' if delta < 0 else 'hold'
                 
-                # Check for sell signal
                 if action == 'sell':
                     should_sell = True
                     sell_reason = 'sell_signal'
-                # Check for relative confidence drop
-                elif float(recent.confidence or 0.0) < pos['entry_confidence'] * (1 - params['relative_drop_threshold']):
-                    should_sell = True
-                    sell_reason = 'confidence_drop'
+                    trade_category = 'model_performance'
         
         # Execute sell
         if should_sell:
@@ -387,7 +438,11 @@ def check_and_trade() -> Dict[str, Any]:
                 'proceeds': proceeds,
                 'commission': comm,
                 'profit': profit,
-                'reason': sell_reason
+                'reason': sell_reason,
+                'category': trade_category or 'unknown',  # Track trade category
+                'entry_time': pos.get('entry_time'),
+                'entry_horizon': pos.get('entry_horizon'),
+                'days_held': (datetime.utcnow() - datetime.fromisoformat(pos.get('entry_time', datetime.utcnow().isoformat()))).days
             })
             
             positions_to_remove.append(i)
@@ -440,6 +495,11 @@ def check_and_trade() -> Dict[str, Any]:
                 
                 cash -= total_cost
                 
+                # Calculate target exit time based on horizon
+                entry_time = datetime.utcnow()
+                horizon_days = _parse_horizon(candidate['horizon'])
+                target_exit_time = entry_time + timedelta(days=horizon_days)
+                
                 positions.append({
                     'symbol': symbol,
                     'shares': shares,
@@ -447,7 +507,8 @@ def check_and_trade() -> Dict[str, Any]:
                     'entry_cost': cost,
                     'entry_confidence': candidate['confidence'],
                     'entry_horizon': candidate['horizon'],
-                    'entry_time': datetime.utcnow().isoformat()
+                    'entry_time': entry_time.isoformat(),
+                    'target_exit_time': target_exit_time.isoformat()
                 })
                 
                 trades.append({
@@ -533,6 +594,19 @@ def stop_simulation() -> Dict[str, Any]:
     profitable_trades = sum(1 for t in sell_trades if t.get('profit', 0) > 0)
     hit_rate = (profitable_trades / len(sell_trades)) if sell_trades else 0
     
+    # ✅ NEW: Separate metrics for model performance vs risk management
+    model_trades = [t for t in sell_trades if t.get('category') == 'model_performance']
+    risk_trades = [t for t in sell_trades if t.get('category') == 'risk_management']
+    
+    model_pnl = sum(t.get('profit', 0) for t in model_trades)
+    risk_pnl = sum(t.get('profit', 0) for t in risk_trades)
+    
+    model_profitable = sum(1 for t in model_trades if t.get('profit', 0) > 0)
+    risk_profitable = sum(1 for t in risk_trades if t.get('profit', 0) > 0)
+    
+    model_hit_rate = (model_profitable / len(model_trades)) if model_trades else 0
+    risk_hit_rate = (risk_profitable / len(risk_trades)) if risk_trades else 0
+    
     # Total commission
     total_commission = sum(t.get('commission', 0) for t in trades)
     
@@ -550,7 +624,23 @@ def stop_simulation() -> Dict[str, Any]:
             'total_trades': len(trades),
             'profitable_trades': profitable_trades,
             'hit_rate': hit_rate,
-            'total_commission': total_commission
+            'total_commission': total_commission,
+            # ✅ NEW: Separate metrics
+            'model_performance': {
+                'trades': len(model_trades),
+                'pnl': model_pnl,
+                'profitable_trades': model_profitable,
+                'hit_rate': model_hit_rate,
+                'return_pct': (model_pnl / state['params']['initial_capital'] * 100) if state['params']['initial_capital'] > 0 else 0
+            },
+            'risk_management': {
+                'trades': len(risk_trades),
+                'pnl': risk_pnl,
+                'profitable_trades': risk_profitable,
+                'hit_rate': risk_hit_rate,
+                'return_pct': (risk_pnl / state['params']['initial_capital'] * 100) if state['params']['initial_capital'] > 0 else 0
+            },
+            'simulation_mode': state['params'].get('simulation_mode', 'hybrid')
         },
         'portfolio': {
             'cash': cash,

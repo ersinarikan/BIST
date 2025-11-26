@@ -1,11 +1,11 @@
 {
-  "version": 51,
+  "version": 150,
   "cycle": 2,
   "state": {
     "ACSEL_1d": {
       "symbol": "ACSEL",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T04:51:24.473642",
       "training_completed_at": "2025-11-25T12:09:47.906307",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045117.json",
@@ -14,8 +14,8 @@
       "training_dirhit_wfv": 33.33333333333333,
       "training_dirhit_online": 33.33333333333333,
       "adaptive_dirhit": 52.38095238095238,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
+      "error": null,
+      "cycle": 2,
       "retry_count": 0
     },
     "A1YEN_1d": {
@@ -69,7 +69,7 @@
     "ALCTL_1d": {
       "symbol": "ALCTL",
       "horizon": 1,
-      "status": "pending",
+      "status": "failed",
       "hpo_completed_at": null,
       "training_completed_at": null,
       "best_params_file": null,
@@ -78,9 +78,9 @@
       "training_dirhit_wfv": null,
       "training_dirhit_online": null,
       "adaptive_dirhit": null,
-      "error": null,
+      "error": "HPO failed",
       "cycle": 2,
-      "retry_count": 0
+      "retry_count": 1
     },
     "ALCAR_1d": {
       "symbol": "ALCAR",
@@ -102,38 +102,38 @@
       "symbol": "BALSU",
       "horizon": 1,
       "status": "completed",
-      "hpo_completed_at": "2025-11-21T19:58:48.718625",
-      "training_completed_at": "2025-11-24T23:43:13.832193",
-      "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251121_195842.json",
-      "hpo_dirhit": 75.1086956521739,
-      "training_dirhit": 52.08333333333333,
-      "training_dirhit_wfv": 52.08333333333333,
-      "training_dirhit_online": 52.08333333333333,
-      "adaptive_dirhit": 68.02536231884059,
+      "hpo_completed_at": "2025-11-26T06:52:20.358648",
+      "training_completed_at": "2025-11-26T06:54:22.064205",
+      "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c2_20251126_065211.json",
+      "hpo_dirhit": 76.95652173913044,
+      "training_dirhit": 76.95652173913044,
+      "training_dirhit_wfv": 76.95652173913044,
+      "training_dirhit_online": 76.95652173913044,
+      "adaptive_dirhit": 76.95652173913044,
       "error": "HPO failed",
-      "cycle": 1,
+      "cycle": 2,
       "retry_count": 1
     },
     "AKFIS_1d": {
       "symbol": "AKFIS",
       "horizon": 1,
       "status": "completed",
-      "hpo_completed_at": "2025-11-21T21:24:03.867539",
-      "training_completed_at": "2025-11-25T13:01:32.207286",
-      "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251121_212357.json",
+      "hpo_completed_at": "2025-11-26T06:52:00.910544",
+      "training_completed_at": "2025-11-26T06:54:07.475123",
+      "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c2_20251126_065153.json",
       "hpo_dirhit": 100.0,
-      "training_dirhit": 64.61538461538461,
-      "training_dirhit_wfv": 64.61538461538461,
-      "training_dirhit_online": 64.61538461538461,
-      "adaptive_dirhit": 0.0,
+      "training_dirhit": 100.0,
+      "training_dirhit_wfv": 100.0,
+      "training_dirhit_online": 100.0,
+      "adaptive_dirhit": 100.0,
       "error": "Interrupted - resumed after restart",
-      "cycle": 1,
+      "cycle": 2,
       "retry_count": 0
     },
     "AKYHO_1d": {
       "symbol": "AKYHO",
       "horizon": 1,
-      "status": "completed",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:52:15.565123",
       "training_completed_at": "2025-11-25T13:26:51.731106",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045206.json",
@@ -142,14 +142,14 @@
       "training_dirhit_wfv": 61.28228179143511,
       "training_dirhit_online": 61.28228179143511,
       "adaptive_dirhit": 38.33521550912855,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
-      "retry_count": 0
+      "error": "HPO failed",
+      "cycle": 2,
+      "retry_count": 1
     },
     "ANHYT_1d": {
       "symbol": "ANHYT",
       "horizon": 1,
-      "status": "completed",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:51:02.983520",
       "training_completed_at": "2025-11-25T02:49:42.910992",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045056.json",
@@ -158,14 +158,14 @@
       "training_dirhit_wfv": 50.53030303030303,
       "training_dirhit_online": 50.53030303030303,
       "adaptive_dirhit": 63.82867132867133,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
-      "retry_count": 0
+      "error": "HPO failed",
+      "cycle": 2,
+      "retry_count": 2
     },
     "ATAKP_1d": {
       "symbol": "ATAKP",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T04:51:25.926350",
       "training_completed_at": "2025-11-24T22:32:03.108684",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045119.json",
@@ -174,14 +174,14 @@
       "training_dirhit_wfv": 56.25,
       "training_dirhit_online": 56.25,
       "adaptive_dirhit": 87.5,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
+      "error": null,
+      "cycle": 2,
       "retry_count": 0
     },
     "ASELS_1d": {
       "symbol": "ASELS",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T04:52:46.474136",
       "training_completed_at": "2025-11-24T22:11:02.444397",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045236.json",
@@ -190,8 +190,8 @@
       "training_dirhit_wfv": 55.9222027972028,
       "training_dirhit_online": 55.9222027972028,
       "adaptive_dirhit": 5.357142857142857,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
+      "error": null,
+      "cycle": 2,
       "retry_count": 0
     },
     "ALARK_1d": {
@@ -213,7 +213,7 @@
     "AKSEN_1d": {
       "symbol": "AKSEN",
       "horizon": 1,
-      "status": "pending",
+      "status": "failed",
       "hpo_completed_at": null,
       "training_completed_at": null,
       "best_params_file": null,
@@ -222,14 +222,14 @@
       "training_dirhit_wfv": null,
       "training_dirhit_online": null,
       "adaptive_dirhit": null,
-      "error": null,
+      "error": "HPO failed",
       "cycle": 2,
-      "retry_count": 0
+      "retry_count": 1
     },
     "AVPGY_1d": {
       "symbol": "AVPGY",
       "horizon": 1,
-      "status": "completed",
+      "status": "failed",
       "hpo_completed_at": "2025-11-23T23:12:51.802010",
       "training_completed_at": "2025-11-24T23:05:23.250773",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251123_231242.json",
@@ -238,9 +238,9 @@
       "training_dirhit_wfv": 44.50757575757576,
       "training_dirhit_online": 44.50757575757576,
       "adaptive_dirhit": 0.0,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
-      "retry_count": 0
+      "error": "HPO failed",
+      "cycle": 2,
+      "retry_count": 1
     },
     "AVGYO_1d": {
       "symbol": "AVGYO",
@@ -261,7 +261,7 @@
     "ANSGR_1d": {
       "symbol": "ANSGR",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T04:52:50.917022",
       "training_completed_at": "2025-11-25T02:54:14.112049",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045244.json",
@@ -270,14 +270,14 @@
       "training_dirhit_wfv": 55.893719806763286,
       "training_dirhit_online": 55.893719806763286,
       "adaptive_dirhit": 84.78260869565217,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
+      "error": null,
+      "cycle": 2,
       "retry_count": 0
     },
     "AYCES_1d": {
       "symbol": "AYCES",
       "horizon": 1,
-      "status": "completed",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:51:20.028644",
       "training_completed_at": "2025-11-24T23:09:11.072118",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045111.json",
@@ -286,14 +286,14 @@
       "training_dirhit_wfv": 63.33333333333333,
       "training_dirhit_online": 63.33333333333333,
       "adaptive_dirhit": 12.5,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
-      "retry_count": 0
+      "error": "HPO failed",
+      "cycle": 2,
+      "retry_count": 1
     },
     "ARASE_1d": {
       "symbol": "ARASE",
       "horizon": 1,
-      "status": "completed",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:52:09.869632",
       "training_completed_at": "2025-11-24T21:41:06.312688",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045203.json",
@@ -302,14 +302,14 @@
       "training_dirhit_wfv": 60.416666666666664,
       "training_dirhit_online": 60.416666666666664,
       "adaptive_dirhit": 100.0,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
-      "retry_count": 0
+      "error": "HPO failed",
+      "cycle": 2,
+      "retry_count": 1
     },
     "AKSUE_1d": {
       "symbol": "AKSUE",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T04:52:30.631290",
       "training_completed_at": "2025-11-25T13:23:05.143624",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045222.json",
@@ -318,8 +318,8 @@
       "training_dirhit_wfv": 85.11904761904762,
       "training_dirhit_online": 85.11904761904762,
       "adaptive_dirhit": 77.77777777777777,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
+      "error": null,
+      "cycle": 2,
       "retry_count": 0
     },
     "AHSGY_1d": {
@@ -341,7 +341,7 @@
     "BALAT_1d": {
       "symbol": "BALAT",
       "horizon": 1,
-      "status": "completed",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:50:28.451638",
       "training_completed_at": "2025-11-24T23:42:01.700890",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045021.json",
@@ -350,14 +350,14 @@
       "training_dirhit_wfv": 70.00811688311688,
       "training_dirhit_online": 70.00811688311688,
       "adaptive_dirhit": 44.33921341816078,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
-      "retry_count": 0
+      "error": "HPO failed",
+      "cycle": 2,
+      "retry_count": 1
     },
     "AVHOL_1d": {
       "symbol": "AVHOL",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T04:53:13.785645",
       "training_completed_at": "2025-11-24T22:57:09.788818",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045306.json",
@@ -366,14 +366,14 @@
       "training_dirhit_wfv": 35.714285714285715,
       "training_dirhit_online": 35.714285714285715,
       "adaptive_dirhit": 50.0,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
+      "error": null,
+      "cycle": 2,
       "retry_count": 0
     },
     "ASTOR_1d": {
       "symbol": "ASTOR",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T04:52:16.844394",
       "training_completed_at": "2025-11-24T22:19:25.906844",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045210.json",
@@ -382,14 +382,14 @@
       "training_dirhit_wfv": 87.5,
       "training_dirhit_online": 87.5,
       "adaptive_dirhit": 69.16666666666666,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
+      "error": null,
+      "cycle": 2,
       "retry_count": 0
     },
     "ALKIM_1d": {
       "symbol": "ALKIM",
       "horizon": 1,
-      "status": "pending",
+      "status": "failed",
       "hpo_completed_at": null,
       "training_completed_at": null,
       "best_params_file": null,
@@ -398,14 +398,14 @@
       "training_dirhit_wfv": null,
       "training_dirhit_online": null,
       "adaptive_dirhit": null,
-      "error": null,
+      "error": "HPO failed",
       "cycle": 2,
-      "retry_count": 0
+      "retry_count": 1
     },
     "AHGAZ_1d": {
       "symbol": "AHGAZ",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T04:52:06.521336",
       "training_completed_at": "2025-11-25T12:41:21.359810",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045200.json",
@@ -414,8 +414,8 @@
       "training_dirhit_wfv": 20.0,
       "training_dirhit_online": 20.0,
       "adaptive_dirhit": 100.0,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
+      "error": null,
+      "cycle": 2,
       "retry_count": 0
     },
     "AYES_1d": {
@@ -453,7 +453,7 @@
     "ATLAS_1d": {
       "symbol": "ATLAS",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T04:50:31.469931",
       "training_completed_at": "2025-11-24T22:43:51.628286",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045024.json",
@@ -462,14 +462,14 @@
       "training_dirhit_wfv": 56.25,
       "training_dirhit_online": 56.25,
       "adaptive_dirhit": 95.83333333333334,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
+      "error": null,
+      "cycle": 2,
       "retry_count": 0
     },
     "AKCNS_1d": {
       "symbol": "AKCNS",
       "horizon": 1,
-      "status": "completed",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:50:55.752084",
       "training_completed_at": "2025-11-25T12:52:22.618104",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045047.json",
@@ -478,9 +478,9 @@
       "training_dirhit_wfv": 63.57142857142857,
       "training_dirhit_online": 63.57142857142857,
       "adaptive_dirhit": 80.55555555555554,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
-      "retry_count": 0
+      "error": "HPO failed",
+      "cycle": 2,
+      "retry_count": 1
     },
     "ASGYO_1d": {
       "symbol": "ASGYO",
@@ -533,7 +533,7 @@
     "BAGFS_1d": {
       "symbol": "BAGFS",
       "horizon": 1,
-      "status": "completed",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:51:08.185657",
       "training_completed_at": "2025-11-24T23:31:15.871753",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045103.json",
@@ -542,14 +542,14 @@
       "training_dirhit_wfv": 29.999999999999996,
       "training_dirhit_online": 29.999999999999996,
       "adaptive_dirhit": 93.75,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
-      "retry_count": 0
+      "error": "HPO failed",
+      "cycle": 2,
+      "retry_count": 1
     },
     "AZTEK_1d": {
       "symbol": "AZTEK",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T04:52:40.122935",
       "training_completed_at": "2025-11-24T23:26:28.127611",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045233.json",
@@ -558,8 +558,8 @@
       "training_dirhit_wfv": 48.86363636363636,
       "training_dirhit_online": 48.86363636363636,
       "adaptive_dirhit": 87.5,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
+      "error": null,
+      "cycle": 2,
       "retry_count": 0
     },
     "ATAGY_1d": {
@@ -613,7 +613,7 @@
     "ATEKS_1d": {
       "symbol": "ATEKS",
       "horizon": 1,
-      "status": "completed",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:52:46.518025",
       "training_completed_at": "2025-11-24T22:39:43.187127",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045239.json",
@@ -622,14 +622,14 @@
       "training_dirhit_wfv": 55.21100427350427,
       "training_dirhit_online": 55.21100427350427,
       "adaptive_dirhit": 52.291666666666664,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
-      "retry_count": 0
+      "error": "HPO failed",
+      "cycle": 2,
+      "retry_count": 1
     },
     "AKGRT_1d": {
       "symbol": "AKGRT",
       "horizon": 1,
-      "status": "completed",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:52:51.078998",
       "training_completed_at": "2025-11-25T13:10:13.232365",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045245.json",
@@ -638,14 +638,14 @@
       "training_dirhit_wfv": 45.299145299145295,
       "training_dirhit_online": 45.299145299145295,
       "adaptive_dirhit": 75.0,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
-      "retry_count": 0
+      "error": "HPO failed",
+      "cycle": 2,
+      "retry_count": 5
     },
     "ALVES_1d": {
       "symbol": "ALVES",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-23T19:37:39.294297",
       "training_completed_at": "2025-11-25T13:56:26.783227",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251123_193732.json",
@@ -654,14 +654,14 @@
       "training_dirhit_wfv": null,
       "training_dirhit_online": null,
       "adaptive_dirhit": 100.0,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
+      "error": null,
+      "cycle": 2,
       "retry_count": 0
     },
     "ATATP_1d": {
       "symbol": "ATATP",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T04:52:39.757142",
       "training_completed_at": "2025-11-24T22:35:49.542483",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045231.json",
@@ -670,8 +670,8 @@
       "training_dirhit_wfv": 56.430398246255024,
       "training_dirhit_online": 56.430398246255024,
       "adaptive_dirhit": 23.504273504273506,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
+      "error": null,
+      "cycle": 2,
       "retry_count": 0
     },
     "ARSAN_1d": {
@@ -693,7 +693,7 @@
     "ANELE_1d": {
       "symbol": "ANELE",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T04:51:56.640646",
       "training_completed_at": "2025-11-25T14:00:32.101435",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045149.json",
@@ -702,8 +702,8 @@
       "training_dirhit_wfv": 53.72023809523809,
       "training_dirhit_online": 53.72023809523809,
       "adaptive_dirhit": 48.69505494505495,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
+      "error": null,
+      "cycle": 2,
       "retry_count": 0
     },
     "ARZUM_1d": {
@@ -741,7 +741,7 @@
     "ARENA_1d": {
       "symbol": "ARENA",
       "horizon": 1,
-      "status": "completed",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:51:54.880259",
       "training_completed_at": "2025-11-24T21:53:11.696613",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045145.json",
@@ -750,14 +750,14 @@
       "training_dirhit_wfv": 50.0,
       "training_dirhit_online": 50.0,
       "adaptive_dirhit": 44.166666666666664,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
-      "retry_count": 0
+      "error": "HPO failed",
+      "cycle": 2,
+      "retry_count": 1
     },
     "AGESA_1d": {
       "symbol": "AGESA",
       "horizon": 1,
-      "status": "pending",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:51:15.305486",
       "training_completed_at": "2025-11-25T12:26:02.612263",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045107.json",
@@ -766,14 +766,14 @@
       "training_dirhit_wfv": 66.30681818181819,
       "training_dirhit_online": 66.30681818181819,
       "adaptive_dirhit": 100.0,
-      "error": null,
+      "error": "HPO failed",
       "cycle": 2,
-      "retry_count": 0
+      "retry_count": 1
     },
     "AKFGY_1d": {
       "symbol": "AKFGY",
       "horizon": 1,
-      "status": "skipped",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:52:38.906681",
       "training_completed_at": "2025-11-25T13:00:16.944177",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045232.json",
@@ -782,14 +782,14 @@
       "training_dirhit_wfv": 63.33333333333333,
       "training_dirhit_online": 63.33333333333333,
       "adaptive_dirhit": 90.625,
-      "error": "Insufficient data: 0/100 days",
+      "error": "HPO failed",
       "cycle": 2,
-      "retry_count": 0
+      "retry_count": 1
     },
     "ALFAS_1d": {
       "symbol": "ALFAS",
       "horizon": 1,
-      "status": "completed",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:51:25.737982",
       "training_completed_at": "2025-11-25T13:42:42.615058",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045114.json",
@@ -798,9 +798,9 @@
       "training_dirhit_wfv": 57.14285714285714,
       "training_dirhit_online": 57.14285714285714,
       "adaptive_dirhit": 56.25,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
-      "retry_count": 0
+      "error": "HPO failed",
+      "cycle": 2,
+      "retry_count": 5
     },
     "APBDL_1d": {
       "symbol": "APBDL",
@@ -837,7 +837,7 @@
     "BAKAB_1d": {
       "symbol": "BAKAB",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T04:52:18.170263",
       "training_completed_at": "2025-11-24T23:38:01.237744",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045212.json",
@@ -846,8 +846,8 @@
       "training_dirhit_wfv": 95.0,
       "training_dirhit_online": 95.0,
       "adaptive_dirhit": 93.75,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
+      "error": null,
+      "cycle": 2,
       "retry_count": 0
     },
     "ARDYZ_1d": {
@@ -869,7 +869,7 @@
     "BANVT_1d": {
       "symbol": "BANVT",
       "horizon": 1,
-      "status": "completed",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:53:14.888794",
       "training_completed_at": "2025-11-24T23:47:25.169166",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045309.json",
@@ -878,14 +878,14 @@
       "training_dirhit_wfv": 100.0,
       "training_dirhit_online": 100.0,
       "adaptive_dirhit": 93.75,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
-      "retry_count": 0
+      "error": "HPO failed",
+      "cycle": 2,
+      "retry_count": 1
     },
     "ARCLK_1d": {
       "symbol": "ARCLK",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T04:52:43.182279",
       "training_completed_at": "2025-11-24T21:45:21.325838",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045235.json",
@@ -894,14 +894,14 @@
       "training_dirhit_wfv": 0.0,
       "training_dirhit_online": 0.0,
       "adaptive_dirhit": 66.66666666666666,
-      "error": "Interrupted - resumed after restart",
-      "cycle": 1,
+      "error": null,
+      "cycle": 2,
       "retry_count": 0
     },
     "AGYO_1d": {
       "symbol": "AGYO",
       "horizon": 1,
-      "status": "pending",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:52:25.193469",
       "training_completed_at": "2025-11-25T12:37:21.551205",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045218.json",
@@ -910,14 +910,14 @@
       "training_dirhit_wfv": 62.857142857142854,
       "training_dirhit_online": 62.857142857142854,
       "adaptive_dirhit": 58.035714285714285,
-      "error": null,
+      "error": "HPO failed",
       "cycle": 2,
-      "retry_count": 0
+      "retry_count": 3
     },
     "AVTUR_1d": {
       "symbol": "AVTUR",
       "horizon": 1,
-      "status": "pending",
+      "status": "failed",
       "hpo_completed_at": null,
       "training_completed_at": null,
       "best_params_file": null,
@@ -926,9 +926,9 @@
       "training_dirhit_wfv": null,
       "training_dirhit_online": null,
       "adaptive_dirhit": null,
-      "error": null,
+      "error": "HPO failed",
       "cycle": 2,
-      "retry_count": 0
+      "retry_count": 1
     },
     "ALNTF_1d": {
       "symbol": "ALNTF",
@@ -960,7 +960,7 @@
       "adaptive_dirhit": null,
       "error": "HPO failed",
       "cycle": 2,
-      "retry_count": 2
+      "retry_count": 4
     },
     "AKFK_1d": {
       "symbol": "AKFK",
@@ -1023,7 +1023,7 @@
       "training_dirhit_online": null,
       "adaptive_dirhit": null,
       "error": "Insufficient data: 0/100 days",
-      "cycle": 1,
+      "cycle": 2,
       "retry_count": 0
     },
     "AKSFA_1d": {
@@ -1135,7 +1135,7 @@
       "training_dirhit_online": null,
       "adaptive_dirhit": null,
       "error": "Insufficient data: 0/100 days",
-      "cycle": 1,
+      "cycle": 2,
       "retry_count": 0
     },
     "ATLFA_1d": {
@@ -1151,7 +1151,7 @@
       "training_dirhit_online": null,
       "adaptive_dirhit": null,
       "error": "Insufficient data: 0/100 days",
-      "cycle": 1,
+      "cycle": 2,
       "retry_count": 0
     },
     "AKTIF_1d": {
@@ -1167,7 +1167,7 @@
       "training_dirhit_online": null,
       "adaptive_dirhit": null,
       "error": "Insufficient data: 0/100 days",
-      "cycle": 1,
+      "cycle": 2,
       "retry_count": 0
     },
     "ATAVK_1d": {
@@ -1183,7 +1183,7 @@
       "training_dirhit_online": null,
       "adaptive_dirhit": null,
       "error": "Insufficient data: 0/100 days",
-      "cycle": 1,
+      "cycle": 2,
       "retry_count": 0
     },
     "ALROS_1d": {
@@ -1237,7 +1237,7 @@
     "ATSYH_1d": {
       "symbol": "ATSYH",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T04:50:45.287198",
       "training_completed_at": "2025-11-24T22:48:34.814558",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045039.json",
@@ -1246,9 +1246,9 @@
       "training_dirhit_wfv": 80.35714285714286,
       "training_dirhit_online": 80.35714285714286,
       "adaptive_dirhit": 89.28571428571428,
-      "error": "HPO failed",
-      "cycle": 1,
-      "retry_count": 1
+      "error": null,
+      "cycle": 2,
+      "retry_count": 0
     },
     "BIGEN_1d": {
       "symbol": "BIGEN",
@@ -1429,7 +1429,7 @@
     "AGHOL_1d": {
       "symbol": "AGHOL",
       "horizon": 1,
-      "status": "pending",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:50:26.830736",
       "training_completed_at": "2025-11-25T12:29:42.106044",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045020.json",
@@ -1438,14 +1438,14 @@
       "training_dirhit_wfv": null,
       "training_dirhit_online": null,
       "adaptive_dirhit": 91.66666666666666,
-      "error": null,
+      "error": "HPO failed",
       "cycle": 2,
-      "retry_count": 1
+      "retry_count": 3
     },
     "AGROT_1d": {
       "symbol": "AGROT",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T01:34:01.789356",
       "training_completed_at": "2025-11-25T12:33:08.961816",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_013354.json",
@@ -1455,13 +1455,13 @@
       "training_dirhit_online": null,
       "adaptive_dirhit": 75.0,
       "error": null,
-      "cycle": 1,
+      "cycle": 2,
       "retry_count": 0
     },
     "AKSGY_1d": {
       "symbol": "AKSGY",
       "horizon": 1,
-      "status": "pending",
+      "status": "failed",
       "hpo_completed_at": null,
       "training_completed_at": null,
       "best_params_file": null,
@@ -1470,30 +1470,30 @@
       "training_dirhit_wfv": null,
       "training_dirhit_online": null,
       "adaptive_dirhit": null,
-      "error": null,
+      "error": "HPO failed",
       "cycle": 2,
-      "retry_count": 0
+      "retry_count": 3
     },
     "ARMGD_1d": {
       "symbol": "ARMGD",
       "horizon": 1,
       "status": "completed",
-      "hpo_completed_at": "2025-11-22T04:35:26.837330",
-      "training_completed_at": "2025-11-24T21:55:04.519694",
-      "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251122_043521.json",
+      "hpo_completed_at": "2025-11-26T14:11:51.652174",
+      "training_completed_at": "2025-11-26T14:15:29.082220",
+      "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c2_20251126_141146.json",
       "hpo_dirhit": 100.0,
-      "training_dirhit": 100.0,
-      "training_dirhit_wfv": 100.0,
-      "training_dirhit_online": 100.0,
-      "adaptive_dirhit": 100.0,
+      "training_dirhit": 88.88888888888887,
+      "training_dirhit_wfv": 88.88888888888887,
+      "training_dirhit_online": 88.88888888888887,
+      "adaptive_dirhit": 88.88888888888887,
       "error": null,
-      "cycle": 1,
+      "cycle": 2,
       "retry_count": 0
     },
     "ALKA_1d": {
       "symbol": "ALKA",
       "horizon": 1,
-      "status": "pending",
+      "status": "failed",
       "hpo_completed_at": null,
       "training_completed_at": null,
       "best_params_file": null,
@@ -1502,14 +1502,14 @@
       "training_dirhit_wfv": null,
       "training_dirhit_online": null,
       "adaptive_dirhit": null,
-      "error": null,
+      "error": "HPO failed",
       "cycle": 2,
-      "retry_count": 0
+      "retry_count": 1
     },
     "ALKLC_1d": {
       "symbol": "ALKLC",
       "horizon": 1,
-      "status": "completed",
+      "status": "failed",
       "hpo_completed_at": "2025-11-23T15:28:52.183106",
       "training_completed_at": "2025-11-25T13:50:08.753753",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251123_152846.json",
@@ -1518,9 +1518,9 @@
       "training_dirhit_wfv": 54.6875,
       "training_dirhit_online": 54.6875,
       "adaptive_dirhit": 71.69612794612794,
-      "error": null,
-      "cycle": 1,
-      "retry_count": 0
+      "error": "HPO failed",
+      "cycle": 2,
+      "retry_count": 2
     },
     "ALBRK_1d": {
       "symbol": "ALBRK",
@@ -1541,7 +1541,7 @@
     "ARTMS_1d": {
       "symbol": "ARTMS",
       "horizon": 1,
-      "status": "completed",
+      "status": "failed",
       "hpo_completed_at": "2025-11-23T22:21:46.056034",
       "training_completed_at": "2025-11-24T22:03:04.517903",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251123_222139.json",
@@ -1550,14 +1550,14 @@
       "training_dirhit_wfv": 66.66666666666666,
       "training_dirhit_online": 66.66666666666666,
       "adaptive_dirhit": 100.0,
-      "error": null,
-      "cycle": 1,
-      "retry_count": 0
+      "error": "HPO failed",
+      "cycle": 2,
+      "retry_count": 1
     },
     "ADEL_1d": {
       "symbol": "ADEL",
       "horizon": 1,
-      "status": "pending",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:51:29.399298",
       "training_completed_at": "2025-11-25T12:13:45.976897",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045122.json",
@@ -1566,14 +1566,14 @@
       "training_dirhit_wfv": 50.0,
       "training_dirhit_online": 50.0,
       "adaptive_dirhit": 86.1344537815126,
-      "error": null,
+      "error": "HPO failed",
       "cycle": 2,
-      "retry_count": 0
+      "retry_count": 3
     },
     "AEFES_1d": {
       "symbol": "AEFES",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-24T04:52:45.956951",
       "training_completed_at": "2025-11-25T12:21:51.873975",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045240.json",
@@ -1583,13 +1583,13 @@
       "training_dirhit_online": null,
       "adaptive_dirhit": 100.0,
       "error": null,
-      "cycle": 1,
-      "retry_count": 0
+      "cycle": 2,
+      "retry_count": 1
     },
     "AYEN_1d": {
       "symbol": "AYEN",
       "horizon": 1,
-      "status": "completed",
+      "status": "failed",
       "hpo_completed_at": "2025-11-24T04:52:32.133513",
       "training_completed_at": "2025-11-24T23:18:01.115612",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251124_045224.json",
@@ -1598,14 +1598,14 @@
       "training_dirhit_wfv": 67.16346153846155,
       "training_dirhit_online": 67.16346153846155,
       "adaptive_dirhit": 46.82539682539682,
-      "error": null,
-      "cycle": 1,
-      "retry_count": 0
+      "error": "HPO failed",
+      "cycle": 2,
+      "retry_count": 1
     },
     "BAHKM_1d": {
       "symbol": "BAHKM",
       "horizon": 1,
-      "status": "completed",
+      "status": "pending",
       "hpo_completed_at": "2025-11-23T11:48:40.755666",
       "training_completed_at": "2025-11-24T23:34:10.302946",
       "best_params_file": "/opt/bist-pattern/results/optuna_pilot_features_on_h1_c1_20251123_114829.json",
@@ -1615,7 +1615,7 @@
       "training_dirhit_online": 70.0,
       "adaptive_dirhit": 33.1283422459893,
       "error": null,
-      "cycle": 1,
+      "cycle": 2,
       "retry_count": 0
     },
     "ALTNY_1d": {
@@ -1664,7 +1664,7 @@
       "adaptive_dirhit": null,
       "error": "HPO failed",
       "cycle": 2,
-      "retry_count": 2
+      "retry_count": 3
     },
     "ADGYO_1d": {
       "symbol": "ADGYO",
@@ -3281,7 +3281,39 @@
       "error": "Interrupted - resumed after restart",
       "cycle": 2,
       "retry_count": 0
+    },
+    "BIZIM_1d": {
+      "symbol": "BIZIM",
+      "horizon": 1,
+      "status": "pending",
+      "hpo_completed_at": null,
+      "training_completed_at": null,
+      "best_params_file": null,
+      "hpo_dirhit": null,
+      "training_dirhit": null,
+      "training_dirhit_wfv": null,
+      "training_dirhit_online": null,
+      "adaptive_dirhit": null,
+      "error": "Interrupted - resumed after restart",
+      "cycle": 2,
+      "retry_count": 0
+    },
+    "APX30_1d": {
+      "symbol": "APX30",
+      "horizon": 1,
+      "status": "skipped",
+      "hpo_completed_at": null,
+      "training_completed_at": null,
+      "best_params_file": null,
+      "hpo_dirhit": null,
+      "training_dirhit": null,
+      "training_dirhit_wfv": null,
+      "training_dirhit_online": null,
+      "adaptive_dirhit": null,
+      "error": "Insufficient data: 1/100 days",
+      "cycle": 2,
+      "retry_count": 0
     }
   },
-  "last_updated": "2025-11-26T03:25:39.425214"
+  "last_updated": "2025-11-26T20:30:18.867085"
 }

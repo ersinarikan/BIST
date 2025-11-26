@@ -756,6 +756,11 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
             mask_count = 0
             mask_pct = 0.0
             
+            # ✅ FIX: Initialize low_support variables before conditional block (linter fix)
+            low_support = False
+            _min_mc = 0
+            _min_mp = 0.0
+            
             # 🔍 DEBUG: Calculate additional metrics
             if valid_count > 0:
                 # DirHit
@@ -797,9 +802,7 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
                 # Configure via environment:
                 #  - HPO_MIN_MASK_COUNT (int, default 0 → disabled)
                 #  - HPO_MIN_MASK_PCT (float percent, default 0 → disabled)
-                low_support = False
-                _min_mc = 0
-                _min_mp = 0.0
+                # Note: low_support, _min_mc, _min_mp already initialized above
                 try:
                     _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))
                 except Exception:
