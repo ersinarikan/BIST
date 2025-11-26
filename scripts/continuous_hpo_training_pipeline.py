@@ -166,6 +166,7 @@ logger.propagate = False  # Prevent propagation to root logger (CRITICAL!)
 try:
     if hasattr(app, 'socketio') and app.socketio is not None:
         _original_hpo_emit = app.socketio.emit
+        
         def _hpo_blocked_emit(event, data=None, *args, **kwargs):
             # Block pattern_analysis events completely in HPO process
             if event == 'pattern_analysis':
@@ -613,6 +614,13 @@ class ContinuousHPOPipeline:
             version = existing_data.get('version', 0) if existing_data else 0
             new_version = version + 1
             
+            # ✅ FIX: Test JSON serialization before writing to file
+            try:
+                json.dumps(merged_state)  # Test serialization
+            except Exception as json_err:
+                logger.error(f"❌ Error serializing state to JSON: {json_err}")
+                raise
+            
             data = {
                 'version': new_version,  # ✅ FIX: Add version number for optimistic locking
                 'cycle': self.cycle,
@@ -624,15 +632,35 @@ class ContinuousHPOPipeline:
             # Write to temp file first, then atomic rename
             tmp_path = self.state_file.with_suffix('.json.tmp')
             try:
-                with open(tmp_path, 'w') as f:
-                    json.dump(data, f, indent=2)
-                    f.flush()
-                    os.fsync(f.fileno())
+                # ✅ FIX: Ensure temp file directory exists and has proper permissions
+                tmp_path.parent.mkdir(parents=True, exist_ok=True)
+                ensure_directory_permissions(tmp_path.parent)
+                
+                # ✅ FIX: Write to temp file with explicit error handling
+                try:
+                    with open(tmp_path, 'w') as f:
+                        json.dump(data, f, indent=2)
+                        f.flush()
+                        os.fsync(f.fileno())
+                except Exception as write_file_err:
+                    logger.error(f"❌ Error writing temp file {tmp_path}: {write_file_err}")
+                    raise
+                
+                # ✅ FIX: Verify temp file was created and has content before renaming
+                if not tmp_path.exists():
+                    raise IOError(f"Temp file was not created: {tmp_path}")
+                if tmp_path.stat().st_size == 0:
+                    raise IOError(f"Temp file is empty: {tmp_path}")
                 
                 # Atomic rename (lock still held, preventing concurrent writes)
                 os.replace(tmp_path, self.state_file)
                 # ✅ FIX: Ensure file permissions for shared access
                 ensure_file_permissions(self.state_file)
+            except Exception as write_err:
+                logger.error(f"❌ Error writing state file: {write_err}")
+                import traceback
+                logger.error(f"Traceback: {''.join(traceback.format_exc())}")
+                raise  # Re-raise to be caught by outer exception handler
             finally:
                 # Clean up temp file if it still exists
                 if tmp_path.exists():

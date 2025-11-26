@@ -3,22 +3,22 @@ import os
 from gevent import monkey
 monkey.patch_all()
 
-from datetime import datetime
-from flask import Flask, jsonify, request, redirect, url_for
-from flask_login import LoginManager, current_user
-from flask_mail import Mail
-from flask_migrate import Migrate
-from flask_socketio import SocketIO, emit, join_room, leave_room
-from config import config
-from models import db, User
-from bist_pattern.core.config_manager import ConfigManager
-from bist_pattern.utils.error_handler import ErrorHandler
-import logging
-import time
-import threading
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-from flask_wtf import CSRFProtect
+from datetime import datetime  # noqa: E402
+from flask import Flask, jsonify, request, redirect, url_for  # noqa: E402
+from flask_login import LoginManager, current_user  # noqa: E402
+from flask_mail import Mail  # noqa: E402
+from flask_migrate import Migrate  # noqa: E402
+from flask_socketio import SocketIO, emit, join_room, leave_room  # noqa: E402
+from config import config  # noqa: E402
+from models import db, User  # noqa: E402
+from bist_pattern.core.config_manager import ConfigManager  # noqa: E402
+from bist_pattern.utils.error_handler import ErrorHandler  # noqa: E402
+import logging  # noqa: E402
+import time  # noqa: E402
+import threading  # noqa: E402
+from flask_limiter import Limiter  # noqa: E402
+from flask_limiter.util import get_remote_address  # noqa: E402
+from flask_wtf import CSRFProtect  # noqa: E402
 
 # Logger setup
 # Include PID and module name in logs for clearer provenance
@@ -159,7 +159,7 @@ def create_app(config_name='default'):
             clean_payload = _sanitize_json_value(payload)
             # Verify serialization to prevent disconnects
             json.dumps(clean_payload)
-            socketio.emit('log_update', clean_payload, room='admin')
+            socketio.emit('log_update', clean_payload, room='admin')  # type: ignore
         except Exception:
             pass
     
@@ -442,6 +442,7 @@ def create_app(config_name='default'):
 
     # ✅ DEBUG: Wrap socketio.emit AND Flask-SocketIO emit to log all emissions
     _original_socketio_emit = socketio.emit
+    
     def _logged_socketio_emit(event, data=None, *args, **kwargs):
         try:
             room = kwargs.get('room') or kwargs.get('to') or 'broadcast'
@@ -459,9 +460,6 @@ def create_app(config_name='default'):
     socketio.emit = _logged_socketio_emit
     
     # Also wrap the standalone emit function from flask_socketio
-    from flask_socketio import emit as _flask_socketio_emit_original
-    _original_flask_emit = _flask_socketio_emit_original
-    
     # Note: We can't easily wrap the imported emit function globally,
     # but we can monitor socketio.emit which is what matters
 
