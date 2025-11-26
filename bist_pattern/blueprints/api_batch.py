@@ -15,8 +15,10 @@ bp = Blueprint('api_batch', __name__, url_prefix='/api/batch')
 
 def register(app):
     """Register batch API blueprint"""
+    from ..extensions import csrf
     
     @bp.route('/pattern-analysis', methods=['POST'])
+    @csrf.exempt  # ✅ FIX: Exempt from CSRF for frontend POST requests
     def batch_pattern_analysis():
         """
         Batch pattern analysis for multiple symbols (cache-only fast path)
@@ -76,12 +78,16 @@ def register(app):
                 # File cache (accept even if stale; mark with stale flag)
                 if not result:
                     try:
+                        import os as _os
+                        from bist_pattern.core.broadcaster import _sanitize_json_value
                         fpath = _os.path.join(file_cache_dir, f'{sym}.json')
                         if _os.path.exists(fpath):
                             st = _os.stat(fpath)
                             age = (_time.time() - float(getattr(st, 'st_mtime', 0)))
                             with open(fpath, 'r') as rf:
                                 result = _json.load(rf)
+                                # ✅ FIX: Sanitize loaded JSON to handle NaN/Infinity from file cache
+                                result = _sanitize_json_value(result)
                             # Attach staleness metadata
                             try:
                                 if isinstance(result, dict):
@@ -128,6 +134,7 @@ def register(app):
             }), 500
     
     @bp.route('/predictions', methods=['POST'])
+    @csrf.exempt  # ✅ FIX: Exempt from CSRF for frontend POST requests
     def batch_predictions():
         """
         Batch predictions for multiple symbols (fast path, no fresh compute)
@@ -230,6 +237,11 @@ def register(app):
                                     price_val = v['price']
                                     if price_val is not None:
                                         out[kk] = float(price_val)
+                                        # ✅ FIX: Also extract confidence if available (for price-based predictions)
+                                        conf_key = f'{kk}_conf'
+                                        conf = v.get('confidence')
+                                        if isinstance(conf, (int, float)):
+                                            out[conf_key] = float(conf)
                             elif isinstance(v, (int, float)):
                                 out[kk] = float(v)
                 except Exception:
@@ -267,26 +279,58 @@ def register(app):
 
                     pred_entry = predictions_map.get(sym)
                     normalized = {}
-                    if isinstance(pred_entry, dict) and pred_entry.get('enhanced'):
-                        normalized = _normalize(pred_entry.get('enhanced'))
-                    if not normalized and isinstance(pred_entry, dict) and pred_entry.get('basic'):
-                        normalized = _normalize(pred_entry.get('basic'))
+                    model_used = None
+                    normalized_enhanced = {}
+                    normalized_basic = {}
+                    
+                    # ✅ FIX: Normalize both enhanced and basic, then merge intelligently
+                    if isinstance(pred_entry, dict):
+                        if pred_entry.get('enhanced'):
+                            normalized_enhanced = _normalize(pred_entry.get('enhanced'))
+                        if pred_entry.get('basic'):
+                            normalized_basic = _normalize(pred_entry.get('basic'))
+                    
+                    # Merge: Use enhanced where available, fallback to basic for missing horizons
+                    if normalized_enhanced:
+                        normalized = normalized_enhanced.copy()
+                        model_used = 'enhanced'
+                        # Fill missing horizons from basic
+                        for h in ('1d', '3d', '7d', '14d', '30d'):
+                            if h not in normalized and h in normalized_basic:
+                                normalized[h] = normalized_basic[h]
+                                # Also copy confidence if available
+                                conf_key = f'{h}_conf'
+                                if conf_key in normalized_basic and conf_key not in normalized:
+                                    normalized[conf_key] = normalized_basic[conf_key]
+                    elif normalized_basic:
+                        normalized = normalized_basic.copy()
+                        model_used = 'basic'
 
                     if normalized:
                         # Extract confidences from normalized (1d_conf, 3d_conf, etc.)
                         confidences = {}
                         predictions = {}
+                        # ✅ FIX: Track which model was used for each horizon
+                        models_by_horizon = {}
+                        
                         for k, v in normalized.items():
                             if k.endswith('_conf'):
                                 horizon = k.replace('_conf', '')
                                 confidences[horizon] = v
                             else:
                                 predictions[k] = v
+                                # Determine model for this horizon
+                                if normalized_enhanced and k in normalized_enhanced:
+                                    models_by_horizon[k] = 'enhanced'
+                                elif normalized_basic and k in normalized_basic:
+                                    models_by_horizon[k] = 'basic'
                         
                         results[sym] = {
                             'status': 'success',
                             'predictions': predictions,
                             'confidences': confidences,
+                            'model': model_used or 'basic',  # Overall model (enhanced if any horizon uses it)
+                            'models_by_horizon': models_by_horizon,  # ✅ FIX: Per-horizon model info
                             'current_price': last_close_by_symbol.get(sym),
                             'source_timestamp': (datetime.fromtimestamp(bulk_mtime).isoformat() if bulk_mtime else None),
                             'analysis_timestamp': analysis_ts

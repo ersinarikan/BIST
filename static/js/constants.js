@@ -147,9 +147,13 @@ export const WS_EVENTS = {
 export const WS_CONFIG = {
   PATH: '/socket.io',
   TRANSPORTS: ['websocket', 'polling'],
-  RECONNECTION_DELAY: 3000,  // ✅ FIX: Increased from 1500ms to 3000ms to reduce server load
-  RECONNECTION_ATTEMPTS: 8,
-  TIMEOUT: 10000  // ✅ FIX: Reduced from 20000ms to 10000ms for faster failure detection
+  RECONNECTION_DELAY: 5000,  // ✅ FIX: Increased to 5s to reduce aggressive reconnection
+  RECONNECTION_DELAY_MAX: 30000,  // ✅ FIX: Max delay cap at 30s
+  RECONNECTION_ATTEMPTS: 20,  // ✅ FIX: Increased attempts
+  TIMEOUT: 20000,  // ✅ FIX: Connection timeout (not ping timeout)
+  RANDOMIZATION_FACTOR: 0.5,  // ✅ FIX: Add jitter to prevent thundering herd
+  PING_TIMEOUT: 60000,  // ✅ FIX: Match server ping_timeout (60s)
+  PING_INTERVAL: 25000  // ✅ FIX: Match server ping_interval (25s)
 };
 
 // Cache and throttling

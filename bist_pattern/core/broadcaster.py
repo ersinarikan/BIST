@@ -2,9 +2,6 @@ import os
 import sys
 import logging
 import math
-import json
-
-import requests
 
 
 logger = logging.getLogger(__name__)
@@ -33,11 +30,36 @@ def _sanitize_json_value(value, context=None):
     - nan → 0 or context-appropriate default
     - Very large values → JSON-safe maximum (1e15)
     - Very small values → JSON-safe minimum (-1e15)
+    - NumPy types → converted to native Python types
     
     Args:
         value: Value to sanitize
         context: Optional context hint (e.g., 'learning_rate', 'n_estimators') for smart defaults
     """
+    # ✅ CRITICAL FIX: Handle NumPy types FIRST before checking Python types
+    # NumPy types (float64, int64, ndarray, etc.) are not JSON serializable
+    try:
+        import numpy as np
+        if isinstance(value, np.floating):
+            # Convert numpy float to Python float, then check for nan/inf
+            value = float(value)
+        elif isinstance(value, np.integer):
+            # Convert numpy int to Python int
+            return int(value)
+        elif isinstance(value, np.bool_):
+            # Convert numpy bool to Python bool
+            return bool(value)
+        elif isinstance(value, np.ndarray):
+            # Convert numpy array to list, recursively sanitize
+            return [_sanitize_json_value(v, context=context) for v in value.tolist()]
+        elif hasattr(np, 'generic') and isinstance(value, np.generic):
+            # Catch-all for other numpy scalar types
+            return _sanitize_json_value(value.item(), context=context)
+    except ImportError:
+        pass  # numpy not installed, skip
+    except Exception:
+        pass  # any other error, skip and try standard handling
+    
     if isinstance(value, float):
         if math.isnan(value):
             # For NaN, use HPO mid-range or default values (from optuna_hpo_pilot.py)
@@ -161,111 +183,8 @@ def _infer_context(key):
 
 def broadcast_user_signal(symbol: str, result: dict, flask_app=None) -> None:
     """Broadcast compact user signal via internal API.
-
-    Training contexts are gated off to avoid noisy logs and unintended calls.
+    
+    ✅ TEMPORARILY DISABLED for debugging WebSocket issues
     """
-    try:
-        if _in_training_context():
-            logger.debug("Broadcast disabled in training context; skipping")
-            return
-
-        # Build compact payload
-        visual_evidence = []
-        try:
-            vis = [p for p in (result.get('patterns') or []) if (p.get('source') == 'VISUAL_YOLO')]
-            vis_sorted = sorted(vis, key=lambda p: float(p.get('confidence', 0.0)), reverse=True)
-            for p in vis_sorted[:3]:
-                visual_evidence.append({
-                    'pattern': p.get('pattern'),
-                    'confidence': float(p.get('confidence', 0.0))
-                })
-        except Exception:
-            visual_evidence = []
-
-        signal_data = {
-            'symbol': symbol,
-            'overall_signal': result.get('overall_signal', {}),
-            'patterns': result.get('patterns', []),
-            'visual': visual_evidence,
-            'current_price': result.get('current_price', 0),
-            'timestamp': result.get('timestamp')
-        }
-        payload = {
-            'user_id': 1,
-            'signal_data': signal_data
-        }
-        
-        # ⚡ CRITICAL FIX: Sanitize payload for JSON serialization
-        # Handle inf, nan, and out-of-range float values by rounding/clamping to reasonable ranges
-        # This preserves best parameters instead of losing them
-        try:
-            payload = _sanitize_json_value(payload)
-            # Test JSON serialization before sending
-            json.dumps(payload)
-        except (ValueError, TypeError, OverflowError) as json_err:
-            # ⚡ DEBUG: Log the problematic values to find root cause
-            logger.warning(f"⚠️ JSON serialization error for {symbol}: {json_err}")
-            try:
-                # Find problematic values
-                problematic = _find_problematic_values(payload)
-                if problematic:
-                    logger.warning(f"⚠️ Problematic values for {symbol}: {problematic[:200]}")  # Limit log size
-            except Exception:
-                pass
-            logger.warning(f"⚠️ Skipping broadcast for {symbol} due to JSON error")
-            return
-
-        # Prefer Flask config for token; fallback to environment
-        token = None
-        if flask_app is not None:
-            try:
-                token = flask_app.config.get('INTERNAL_API_TOKEN')
-            except Exception:
-                token = None
-        if not token:
-            token = os.getenv('INTERNAL_API_TOKEN')
-        if not token:
-            logger.warning("INTERNAL_API_TOKEN not configured - skipping live signal broadcast")
-            return
-
-        headers = {
-            'Content-Type': 'application/json',
-            'X-Internal-Token': token
-        }
-        resp = requests.post(
-            'http://localhost:5000/api/internal/broadcast-user-signal',
-            json=payload,
-            headers=headers,
-            timeout=5
-        )
-        if resp.status_code == 200:
-            logger.info(f"🔔 Live signal sent for {symbol}")
-        else:
-            logger.warning(f"⚠️ Live signal failed for {symbol}: {resp.status_code}")
-
-        # Additionally emit to stock room so all subscribers (watchlist) receive updates
-        try:
-            if flask_app is not None and hasattr(flask_app, 'socketio'):
-                # ⚡ CRITICAL FIX: Sanitize result before socketio broadcast
-                sanitized_result = _sanitize_json_value(result)
-                try:
-                    # Test JSON serialization
-                    json.dumps(sanitized_result)
-                except (ValueError, TypeError, OverflowError) as json_err:
-                    logger.warning(f"⚠️ SocketIO JSON serialization error for {symbol}: {json_err}, skipping socketio broadcast")
-                else:
-                    flask_app.socketio.emit('pattern_analysis', {
-                        'symbol': symbol,
-                        'data': sanitized_result,
-                        'timestamp': result.get('timestamp')
-                    }, room=f'stock_{symbol}')
-                    logger.debug(f"Stock room broadcast sent for {symbol}")
-        except Exception as e:
-            logger.warning(f"Stock room broadcast error for {symbol}: {e}")
-    except Exception as e:
-        # ⚡ CRITICAL FIX: More specific error message for JSON issues
-        error_msg = str(e)
-        if 'JSON' in error_msg or 'not JSON compliant' in error_msg or 'Out of range float' in error_msg:
-            logger.warning(f"⚠️ Live signal broadcast error for {symbol}: Out of range float values are not JSON compliant")
-        else:
-            logger.warning(f"⚠️ Live signal broadcast error for {symbol}: {e}")
+    logger.warning(f"🚫 broadcast_user_signal called for {symbol} - DISABLED for debugging")
+    return  # Disabled for debugging

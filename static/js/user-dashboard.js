@@ -148,13 +148,30 @@ class DashboardState {
 class UIRenderer {
   constructor(state) {
     this.state = state;
+    // ✅ FIX: DOM cache for performance
+    this._domCache = new Map();
+  }
+  
+  /**
+   * ✅ FIX: Cached DOM query helper
+   */
+  _getElement(id) {
+    if (!this._domCache.has(id)) {
+      const el = document.getElementById(id);
+      if (el) {
+        this._domCache.set(id, el);
+      }
+      return el;
+    }
+    return this._domCache.get(id);
   }
 
   /**
    * Render watchlist cards
    */
   renderWatchlist() {
-    const container = document.getElementById('watchlist');
+    // ✅ FIX: Use cached DOM query
+    const container = this._getElement('watchlist');
     if (!container) return;
 
     const stocks = this.state.watchedStocks;
@@ -219,6 +236,12 @@ class UIRenderer {
     const signalEl = document.getElementById(`signal-${symbol}`);
     if (!signalEl) return;
 
+    // ✅ FIX: Handle null signalData (no prediction available)
+    if (!signalData) {
+      signalEl.innerHTML = '<span class="text-muted">Sinyal bekleniyor...</span>';
+      return;
+    }
+
     const horizon = this.state.getCurrentHorizon();
     const confidence = Math.round((signalData.confidence || 0) * 100);
     const delta = signalData.delta || 0;
@@ -271,40 +294,48 @@ class UIRenderer {
     const changeClass = getPriceChangeClass(changePct);
     const changeText = formatPercentage(changePct);
 
-    // Determine best model
+    // ✅ FIX: Determine best model for selected horizon - always show "En iyi" if model available
     const analysis = this.state.analysisBySymbol[symbol];
     let bestModelHTML = '';
     
     try {
       const hu = analysis?.ml_unified?.[horizon];
-      // ✅ FIX: Check if enhanced exists and has better confidence/reliability than basic
-      // If best field is not set, prefer enhanced if available and has confidence > basic
-      let bestTag = hu?.best;
-      if (!bestTag) {
-        // No best field, determine best based on availability and quality
-        if (hu?.enhanced && hu?.basic) {
-          // Both exist, compare confidence/reliability
-          const enhConf = hu.enhanced.confidence || hu.enhanced.reliability || 0;
-          const basConf = hu.basic.confidence || hu.basic.reliability || 0;
-          bestTag = enhConf >= basConf ? 'enhanced' : 'basic';
-        } else {
-          // Only one exists
-          bestTag = hu?.enhanced ? 'enhanced' : (hu?.basic ? 'basic' : null);
+      // ✅ FIX: Always determine best model for consistency
+      let bestTag = null;
+      
+      if (hu) {
+        // Use best field if available
+        bestTag = hu.best;
+        
+        // If best not set, determine based on availability and quality
+        if (!bestTag) {
+          if (hu.enhanced && hu.basic) {
+            // Both exist, compare confidence/reliability
+            const enhConf = hu.enhanced.confidence || hu.enhanced.reliability || 0;
+            const basConf = hu.basic.confidence || hu.basic.reliability || 0;
+            bestTag = enhConf >= basConf ? 'enhanced' : 'basic';
+          } else {
+            // Only one exists
+            bestTag = hu.enhanced ? 'enhanced' : (hu.basic ? 'basic' : null);
+          }
         }
       }
       
+      // ✅ FIX: If no bestTag from ml_unified, check models_by_horizon
+      if (!bestTag) {
+        const predData = this.state.predictionsBySymbol[symbol];
+        const modelsByHorizon = predData?.models_by_horizon || {};
+        const horizonModel = modelsByHorizon[horizon];
+        
+        // Use horizon-specific model if available, otherwise fallback to overall model
+        bestTag = horizonModel || model;
+      }
+      
+      // ✅ FIX: Always show "En iyi: ..." if we have a model (consistency)
       if (bestTag) {
         const badgeColor = bestTag === 'enhanced' ? 'warning text-dark' : 'info';
         bestModelHTML = buildBadgeHTML(
           `En iyi: ${translateModelLabel(bestTag)}`,
-          badgeColor.split(' ')[0],
-          badgeColor.split(' ')[1] || '',
-          ''
-        );
-      } else if (model) {
-        const badgeColor = model === 'enhanced' ? 'warning text-dark' : 'info';
-        bestModelHTML = buildBadgeHTML(
-          translateModelLabel(model),
           badgeColor.split(' ')[0],
           badgeColor.split(' ')[1] || '',
           ''
@@ -333,6 +364,13 @@ class UIRenderer {
 
     const horizon = this.state.getCurrentHorizon();
     const maxShow = UI_LIMITS.MAX_PATTERN_BADGES;
+
+    // ✅ FIX: Debug log to check patterns
+    const patterns = Array.isArray(analysis.patterns) ? analysis.patterns : [];
+    const fingptPatterns = patterns.filter(p => (p.source || '').toUpperCase() === 'FINGPT');
+    if (fingptPatterns.length > 0) {
+      logDebug(`${symbol}: updatePatterns - FINGPT pattern found:`, fingptPatterns[0]);
+    }
 
     // ML unified badges
     const mlBadges = this._buildMLBadges(analysis, horizon);
@@ -441,19 +479,35 @@ class UIRenderer {
   _buildPatternBadges(analysis, maxCount) {
     const patterns = Array.isArray(analysis.patterns) ? analysis.patterns : [];
     
+    // ✅ FIX: Debug log to check FINGPT patterns
+    const fingptPatterns = patterns.filter(p => (p.source || '').toUpperCase() === 'FINGPT');
+    if (fingptPatterns.length > 0) {
+      logDebug('_buildPatternBadges - FINGPT patterns found:', fingptPatterns.length);
+    }
+    
     return patterns
       .filter(p => {
         const src = (p.source || '').toUpperCase();
         // Exclude ML patterns (they're shown in ML unified section)
+        // ✅ FIX: FINGPT patterns should be included
         return src !== 'ML_PREDICTOR' && src !== 'ENHANCED_ML';
       })
       .slice(0, Math.max(0, maxCount))
       .map(p => {
         const src = (p.source || '').toUpperCase();
         const conf = Math.round((p.confidence || 0) * 100);
-        const name = typeof window.translatePattern === 'function' 
-          ? window.translatePattern(p.pattern || '') 
-          : (p.pattern || '').toString().replace(/_/g, ' ');
+        
+        // ✅ FIX: For FINGPT patterns, show "Sezgisel" instead of pattern name
+        let name;
+        if (src === 'FINGPT') {
+          const signal = (p.signal || '').toUpperCase();
+          const signalLabel = signal === 'BULLISH' ? 'Yükseliş' : signal === 'BEARISH' ? 'Düşüş' : 'Nötr';
+          name = `Sezgisel (${signalLabel})`;
+        } else {
+          name = typeof window.translatePattern === 'function' 
+            ? window.translatePattern(p.pattern || '') 
+            : (p.pattern || '').toString().replace(/_/g, ' ');
+        }
         
         // ✅ FIX: Signal'a göre renk belirle (öncelikli)
         const signal = (p.signal || '').toUpperCase();
@@ -548,6 +602,33 @@ class UIRenderer {
 
 /**
  * ============================================
+ * OPERATION LOCK (Race Condition Prevention)
+ * ============================================
+ */
+class OperationLock {
+  constructor() {
+    this.locks = new Map();
+  }
+  
+  acquire(key) {
+    if (this.locks.has(key)) {
+      return false;
+    }
+    this.locks.set(key, Date.now());
+    return true;
+  }
+  
+  release(key) {
+    this.locks.delete(key);
+  }
+  
+  isLocked(key) {
+    return this.locks.has(key);
+  }
+}
+
+/**
+ * ============================================
  * MAIN DASHBOARD APPLICATION
  * ============================================
  */
@@ -560,6 +641,67 @@ class UserDashboard {
     this.ws = getWebSocket(userId);
     
     this.initialized = false;
+    
+    // ✅ FIX: Operation lock for race condition prevention
+    this.operationLock = new OperationLock();
+    
+    // ✅ FIX: Cleanup tracking
+    this._cleanupFunctions = [];
+    this._timestampInterval = null;
+    this._domCache = new Map();
+    
+    // ✅ FIX: Track last processed timestamps to prevent duplicate WebSocket updates
+    this._lastProcessedTimestamps = new Map(); // symbol -> timestamp
+    this._patternUpdateDebounce = new Map(); // symbol -> timeout ID
+  }
+
+  /**
+   * ✅ FIX: Helper function to build ml_unified from batch predictions
+   * Eliminates duplicate code in loadBatchData, openDetailModal, rerenderPredictionsFromCache
+   */
+  _buildMLUnifiedFromBatchPredictions(predictions, confidences, models_by_horizon, currentPrice, model) {
+    const mlUnified = {};
+    const horizons = ['1d', '3d', '7d', '14d', '30d'];
+    
+    horizons.forEach(horizon => {
+      const pred = predictions[horizon];
+      const conf = confidences && confidences[horizon];
+      
+      // Determine model for this specific horizon
+      let modelToUse = 'basic';
+      if (models_by_horizon && models_by_horizon[horizon]) {
+        modelToUse = models_by_horizon[horizon];
+      } else if (model) {
+        modelToUse = model;
+      }
+      
+      if (pred && typeof pred === 'object') {
+        const price = pred.price || pred.ensemble_prediction || pred.prediction;
+        if (typeof price === 'number' && price > 0 && currentPrice > 0) {
+          const deltaPct = (price - currentPrice) / currentPrice;
+          mlUnified[horizon] = {
+            [modelToUse]: {
+              price: price,
+              delta_pct: deltaPct,
+              confidence: (typeof conf === 'number' ? conf : (pred.confidence || pred.reliability || 0.3))
+            },
+            best: modelToUse
+          };
+        }
+      } else if (typeof pred === 'number' && pred > 0 && currentPrice > 0) {
+        const deltaPct = (pred - currentPrice) / currentPrice;
+        mlUnified[horizon] = {
+          [modelToUse]: {
+            price: pred,
+            delta_pct: deltaPct,
+            confidence: (typeof conf === 'number' ? conf : 0.3)
+          },
+          best: modelToUse
+        };
+      }
+    });
+    
+    return mlUnified;
   }
 
   /**
@@ -596,7 +738,16 @@ class UserDashboard {
    * Initialize WebSocket and attach handlers
    */
   _initializeWebSocket() {
-    this.ws.connect();
+    // ✅ FIX: Don't disconnect if already connected - this causes reconnection loops
+    if (this.ws && this.ws.socket && this.ws.socket.connected) {
+      logDebug('WebSocket already connected, skipping reconnection');
+      return;
+    }
+
+    // ✅ FIX: Only connect if not already connected
+    if (!this.ws || !this.ws.socket || !this.ws.socket.connected) {
+      this.ws.connect();
+    }
 
     // Connection status
     this.ws.on('connection_status', (data) => {
@@ -609,15 +760,21 @@ class UserDashboard {
     });
 
     // Pattern analysis updates
+    // ✅ FIX: DISABLED - Client already loads data from batch API cache on initial load
+    // WebSocket pattern_analysis events are not needed since:
+    // 1. Client loads all data from batch API (cache) on page load
+    // 2. Automation cycle writes to cache files, client reads from cache
+    // 3. WebSocket events cause unnecessary UI updates and race conditions
+    // 4. Only live_signal events are needed for real-time updates
+    // 
+    // If you need real-time pattern updates, use a polling mechanism or
+    // only enable this for specific use cases (e.g., admin dashboard)
+    /*
     this.ws.on('pattern_analysis', (data) => {
-      // ✅ FIX: Handle both formats - direct data or nested data.data
-      const symbol = data.symbol || (data.data && data.data.symbol) || null;
-      if (symbol && this.state.isWatched(symbol)) {
-        const analysis = data.data || data;  // Support both formats
-        this.state.updateAnalysis(symbol, analysis);
-        this.handlePatternUpdate(data);
-      }
+      // Disabled - using batch API cache instead
+      logDebug(`Pattern analysis event ignored (using batch API cache): ${data.symbol}`);
     });
+    */
 
     // Live signals
     this.ws.on('live_signal', (data) => {
@@ -628,6 +785,21 @@ class UserDashboard {
     this.ws.on('notification', (data) => {
       this.ui.showNotification(data.type, data.message);
     });
+
+    // ✅ FIX: Cleanup WebSocket on page unload
+    if (typeof window !== 'undefined') {
+      const cleanup = () => {
+        if (this.ws) {
+          try {
+            this.ws.disconnect();
+          } catch (e) {
+            logDebug('Error disconnecting WebSocket on unload:', e);
+          }
+        }
+      };
+      window.addEventListener('beforeunload', cleanup);
+      window.addEventListener('pagehide', cleanup);
+    }
   }
 
   /**
@@ -676,9 +848,18 @@ class UserDashboard {
 
   /**
    * Start timestamp updater
+   * ✅ FIX: Track interval for cleanup
+   */
+  /**
+   * Start timestamp updater
+   * ✅ FIX: Track interval for cleanup (memory leak prevention)
    */
   _startTimestampUpdater() {
-    setInterval(() => {
+    // Clear existing interval if any
+    if (this._timestampInterval) {
+      clearInterval(this._timestampInterval);
+    }
+    this._timestampInterval = setInterval(() => {
       this.ui.updateTimestamp();
     }, 1000);
   }
@@ -730,13 +911,20 @@ class UserDashboard {
 
   /**
    * Load batch data for symbols
+   * ✅ FIX: Added race condition prevention and better error handling
    */
   async loadBatchData(symbols) {
     if (symbols.length === 0) return;
-
-    logDebug(`Loading batch data for ${symbols.length} symbols...`);
-
+    
+    // ✅ FIX: Prevent race condition
+    const lockKey = 'loadBatchData';
+    if (!this.operationLock.acquire(lockKey)) {
+      logDebug('loadBatchData already in progress, skipping...');
+      return;
+    }
+    
     try {
+      logDebug(`Loading batch data for ${symbols.length} symbols...`);
       // Load patterns and predictions in parallel
       const [patternsResp, predictionsResp] = await Promise.all([
         this.api.getBatchPatternAnalysis(symbols).catch(e => {
@@ -754,6 +942,19 @@ class UserDashboard {
         const results = patternsResp.results || {};
         Object.entries(results).forEach(([symbol, analysis]) => {
           if (analysis && analysis.status === 'success') {
+            // ✅ FIX: Debug log to check if FINGPT patterns are present
+            const patterns = analysis.patterns || [];
+            const fingptPatterns = patterns.filter(p => (p.source || '').toUpperCase() === 'FINGPT');
+            if (fingptPatterns.length > 0) {
+              logDebug(`${symbol}: FINGPT pattern found:`, fingptPatterns[0]);
+            }
+            
+            // ✅ FIX: Track timestamp from batch API to prevent stale WebSocket updates
+            const timestamp = analysis.timestamp || patternsResp.timestamp;
+            if (timestamp) {
+              this._lastProcessedTimestamps.set(symbol, timestamp);
+            }
+            
             this.state.updateAnalysis(symbol, analysis);
             this.handlePatternUpdate({ symbol, data: analysis });
           }
@@ -770,11 +971,36 @@ class UserDashboard {
               confidences: result.confidences || {},
               current_price: result.current_price,
               model: result.model,
+              models_by_horizon: result.models_by_horizon || {},  // ✅ FIX: Include per-horizon model info
               fetched_at: result.source_timestamp
             };
             this.state.updatePredictions(symbol, predData);
             this.ui.updatePredictions(symbol, predData);
             this.ui.updatePrice(symbol, result.current_price);
+            
+            // ✅ FIX: Use helper function to build ml_unified (eliminates duplicate code)
+            let analysis = this.state.analysisBySymbol[symbol] || { symbol };
+            const mlUnified = this._buildMLUnifiedFromBatchPredictions(
+              result.predictions,
+              result.confidences,
+              result.models_by_horizon,
+              result.current_price || 0,
+              result.model
+            );
+            
+            if (Object.keys(mlUnified).length > 0) {
+              if (!analysis.ml_unified) {
+                analysis.ml_unified = {};
+              }
+              Object.assign(analysis.ml_unified, mlUnified);
+            }
+            
+            // Update analysis with current_price
+            analysis.current_price = result.current_price;
+            
+            // Update state and trigger signal update
+            this.state.updateAnalysis(symbol, analysis);
+            this.handlePatternUpdate({ symbol, data: analysis });
           }
         });
       }
@@ -786,6 +1012,10 @@ class UserDashboard {
       
     } catch (e) {
       console.error('Batch data load error:', e);
+      this.ui.showNotification('error', 'Veri yükleme hatası');
+    } finally {
+      // ✅ FIX: Always release lock
+      this.operationLock.release(lockKey);
     }
   }
 
@@ -795,26 +1025,38 @@ class UserDashboard {
   handlePatternUpdate(data) {
     // ✅ FIX: Handle both formats - direct data or nested data.data
     const symbol = data.symbol || (data.data && data.data.symbol) || null;
-    const analysis = data.data || data;  // Support both { data: {...} } and direct {...}
+    const incoming = data.data || data;  // Support both { data: {...} } and direct {...}
     
     if (!symbol || !this.state.isWatched(symbol)) return;
 
+    // Merge with existing analysis to preserve ML predictions/confidence
+    const existing = this.state.analysisBySymbol[symbol] || {};
+    const merged = {
+      ...existing,
+      ...incoming,
+      ml_unified: incoming.ml_unified || existing.ml_unified,
+      patterns: Array.isArray(incoming.patterns) ? incoming.patterns : existing.patterns,
+      indicators: incoming.indicators || existing.indicators
+    };
+
     // Update price
-    const currentPrice = analysis.current_price || analysis.price || 0;
+    const currentPrice = merged.current_price || merged.price || 0;
     this.ui.updatePrice(symbol, currentPrice);
 
     // Update signal
     const horizon = this.state.getCurrentHorizon();
-    const signalData = this._computeHorizonSignal(analysis, horizon);
+    const signalData = this._computeHorizonSignal(merged, horizon);
     if (signalData) {
       this.ui.updateSignal(symbol, signalData);
+    } else {
+      this.ui.updateSignal(symbol, null);
     }
 
     // Update patterns
-    this.ui.updatePatterns(symbol, analysis);
+    this.ui.updatePatterns(symbol, merged);
     
     // Update state
-    this.state.updateAnalysis(symbol, analysis);
+    this.state.updateAnalysis(symbol, merged);
 
     // Update timestamp
     this.ui.updateTimestamp();
@@ -842,16 +1084,20 @@ class UserDashboard {
         
         if (pick && typeof pick.delta_pct === 'number') {
           delta = pick.delta_pct;
-          // ✅ FIX: Use confidence or reliability, but don't default to 0.5 if missing
-          // If confidence is missing, try to calculate from reliability or use a lower default
+          // ✅ FIX: Use confidence or reliability, with appropriate defaults
           confidence = pick.confidence;
           if (confidence === undefined || confidence === null) {
             confidence = pick.reliability;
           }
           if (confidence === undefined || confidence === null) {
-            // ✅ FIX: Lower default (0.3 = 30%) instead of 0.5 (50%)
-            // This indicates uncertainty rather than neutral confidence
-            confidence = 0.3;
+            // ✅ FIX: Default confidence based on model type
+            // Basic model: 0.4 (40%) - lower than enhanced (0.6-0.7)
+            // Enhanced model or unknown: 0.3 (30%) - indicates uncertainty
+            if (bestModel === 'basic') {
+              confidence = 0.4;
+            } else {
+              confidence = 0.3;
+            }
           }
         }
       }
@@ -911,12 +1157,39 @@ class UserDashboard {
         this.ui.updatePredictions(stock.symbol, predData);
         
         // Also update signal based on new horizon
-        const analysis = this.state.analysisBySymbol[stock.symbol];
+        let analysis = this.state.analysisBySymbol[stock.symbol];
         if (analysis) {
           const horizon = this.state.getCurrentHorizon();
+          
+          // ✅ FIX: Use helper function to rebuild ml_unified if missing (eliminates duplicate code)
+          if (!analysis.ml_unified || !analysis.ml_unified[horizon]) {
+            const currentPrice = predData.current_price || analysis.current_price || 0;
+            if (currentPrice > 0 && predData.predictions) {
+              const mlUnified = this._buildMLUnifiedFromBatchPredictions(
+                predData.predictions,
+                predData.confidences,
+                predData.models_by_horizon,
+                currentPrice,
+                predData.model
+              );
+              
+              if (Object.keys(mlUnified).length > 0) {
+                if (!analysis.ml_unified) {
+                  analysis.ml_unified = {};
+                }
+                Object.assign(analysis.ml_unified, mlUnified);
+                // Update state with rebuilt ml_unified
+                this.state.updateAnalysis(stock.symbol, analysis);
+              }
+            }
+          }
+          
           const signalData = this._computeHorizonSignal(analysis, horizon);
           if (signalData) {
             this.ui.updateSignal(stock.symbol, signalData);
+          } else {
+            // ✅ FIX: If signal is null, clear the signal display
+            this.ui.updateSignal(stock.symbol, null);
           }
         }
       }
@@ -1150,16 +1423,59 @@ class UserDashboard {
       const title = document.getElementById('detailTitle');
       if (title) title.textContent = `${symbol} Detay`;
 
-      // Load price history
-      const priceData = await this.api.getStockPrices(symbol, { days: 60 });
+      // Load price history, analysis, and ML predictions in parallel
+      const [priceData, analysisData, predictionsData] = await Promise.all([
+        this.api.getStockPrices(symbol, { days: 60 }).catch(e => {
+          console.warn('Price data load failed:', e);
+          return { data: [] };
+        }),
+        // Load analysis from cache or API
+        (async () => {
+          let analysis = this.state.analysisBySymbol[symbol];
+          if (!analysis) {
+            try {
+              analysis = await this.api.getPatternAnalysis(symbol, { fast: true });
+              this.state.updateAnalysis(symbol, analysis);
+            } catch (e) {
+              console.warn('Pattern analysis load failed:', e);
+              analysis = { symbol, status: 'error' };
+            }
+          }
+          return analysis;
+        })(),
+        // ✅ FIX: Load ML predictions separately from batch API
+        this.api.getBatchPredictions([symbol]).catch(e => {
+          console.warn('ML predictions load failed:', e);
+          return { status: 'error', results: {} };
+        })
+      ]);
+
       const prices = priceData.data || [];
-      
-      // Load analysis
-      let analysis = this.state.analysisBySymbol[symbol];
-      if (!analysis) {
-        const analysisData = await this.api.getPatternAnalysis(symbol, { fast: true });
-        analysis = analysisData;
-        this.state.updateAnalysis(symbol, analysis);
+      let analysis = analysisData;
+
+      // ✅ FIX: Use helper function to merge ML predictions (eliminates duplicate code)
+      if (predictionsData.status === 'success' && predictionsData.results && predictionsData.results[symbol]) {
+        const predResult = predictionsData.results[symbol];
+        if (predResult && predResult.predictions) {
+          const currentPrice = predResult.current_price || (prices.length > 0 ? prices[prices.length - 1]?.close : 0) || 0;
+          const mlUnified = this._buildMLUnifiedFromBatchPredictions(
+            predResult.predictions,
+            predResult.confidences,
+            predResult.models_by_horizon,
+            currentPrice,
+            predResult.model
+          );
+
+          // Merge ml_unified into analysis
+          if (Object.keys(mlUnified).length > 0) {
+            if (!analysis.ml_unified) {
+              analysis.ml_unified = {};
+            }
+            Object.assign(analysis.ml_unified, mlUnified);
+            // Update state with enriched analysis
+            this.state.updateAnalysis(symbol, analysis);
+          }
+        }
       }
 
       // Render chart, patterns, ML summary, etc.
@@ -1170,7 +1486,7 @@ class UserDashboard {
       modal.show();
     } catch (e) {
       console.error('Detail modal error:', e);
-      this.ui.showNotification('error', 'Detay yüklenemedi');
+      this.ui.showNotification('error', 'Detay yüklenemedi: ' + (e.message || 'Bilinmeyen hata'));
     }
   }
 
@@ -1674,6 +1990,48 @@ class UserDashboard {
       mlBox.innerHTML = '<span class="text-danger">ML özet yüklenemedi</span>';
     }
   }
+
+  /**
+   * ✅ FIX: Cleanup method to prevent memory leaks
+   */
+  cleanup() {
+    // Clear debounce timeouts
+    this._patternUpdateDebounce.forEach((timeoutId) => {
+      clearTimeout(timeoutId);
+    });
+    this._patternUpdateDebounce.clear();
+    
+    // Clear timestamp tracking
+    this._lastProcessedTimestamps.clear();
+    
+    // Clear intervals
+    if (this._timestampInterval) {
+      clearInterval(this._timestampInterval);
+      this._timestampInterval = null;
+    }
+    
+    // Execute cleanup functions
+    this._cleanupFunctions.forEach(fn => {
+      try {
+        fn();
+      } catch (e) {
+        console.warn('Cleanup function error:', e);
+      }
+    });
+    this._cleanupFunctions = [];
+    
+    // Disconnect WebSocket
+    if (this.ws) {
+      try {
+        this.ws.disconnect();
+      } catch (e) {
+        console.warn('WebSocket disconnect error:', e);
+      }
+    }
+    
+    // Clear DOM cache
+    this._domCache.clear();
+  }
 }
 
 /**
@@ -1712,6 +2070,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Make globally accessible for onclick handlers
   window.dashboard = dashboard;
+  
+  // ✅ FIX: Cleanup on page unload (memory leak prevention)
+  window.addEventListener('beforeunload', () => {
+    if (dashboard) {
+      dashboard.cleanup();
+    }
+  });
   
   console.log('✅ Dashboard ready');
 });

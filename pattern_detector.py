@@ -2096,12 +2096,15 @@ class HybridPatternDetector:
 
                         preds = obj.setdefault('predictions', {})
                         ent = preds.setdefault(symbol, {})
+                        # ✅ FIX: Always write enhanced if available
                         if isinstance(cur_enhanced, dict) and cur_enhanced:
                             ent['enhanced'] = cur_enhanced
                         elif isinstance(enhanced_predictions, dict) and enhanced_predictions:
                             ent['enhanced'] = enhanced_predictions
-                        elif isinstance(ml_predictions, dict) and ml_predictions:
-                            ent.setdefault('basic', ml_predictions)
+                        # ✅ FIX: Always write basic if available (even if enhanced exists)
+                        # This allows fallback to basic for horizons not in enhanced
+                        if isinstance(ml_predictions, dict) and ml_predictions:
+                            ent['basic'] = ml_predictions
 
                         # Atomic write with optional advisory lock
                         tmp_path = path + '.tmp'
@@ -2320,7 +2323,7 @@ class HybridPatternDetector:
             out: dict = {}
             for key, val in preds.items():
                 v = None
-                conf = 0.5  # Basic ML default confidence
+                conf = 0.4  # Basic ML default confidence (lower than enhanced 0.6-0.7)
                 if isinstance(val, (int, float)):
                     v = float(val)
                 elif isinstance(val, dict):

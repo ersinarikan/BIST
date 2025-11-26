@@ -85,12 +85,20 @@ def register(app):
             signal_data = data.get('signal_data')
             if not user_id or not signal_data:
                 return jsonify({'status': 'error', 'error': 'user_id and signal_data are required'}), 400
+            
+            # ✅ DEBUG: Log what we're about to emit
+            symbol = signal_data.get('symbol', 'UNKNOWN')
+            app.logger.debug(f"🔔 broadcast_user_signal called for {symbol}, will emit 'user_signal' to room user_{user_id}")
+            
             room = f'user_{user_id}'
             app.socketio.emit('user_signal', {
                 'user_id': user_id,
                 'signal': signal_data,
                 'timestamp': datetime.now().isoformat()
             }, to=room)
+            
+            app.logger.debug(f"✅ user_signal emitted for {symbol} to {room}")
+            
             return jsonify({'status': 'success', 'message': f'signal broadcasted to {room}'})
         except Exception as e:
             app.logger.error(f"Internal user signal broadcast error: {e}")
@@ -1551,7 +1559,6 @@ def register(app):
             # Online adjustment is enabled if calibration is NOT bypassed AND env var allows it
             try:
                 import os as _os2
-                import json as _json_horizon
                 # Global enable check
                 global_online_adj_enabled = (
                     not calibration_state.get('bypass', True) and

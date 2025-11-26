@@ -11,6 +11,8 @@ def start_gunicorn_log_tailer(app: Any, socketio: Any) -> None:
 
     Controlled by ENV: ENABLE_GUNICORN_TAIL=true
     """
+    # ⚡ DISABLED TEMPORARILY: To debug WebSocket stability
+    return
 
     try:
         enabled = str(os.getenv('ENABLE_GUNICORN_TAIL', 'False')).lower() == 'true'
@@ -34,16 +36,22 @@ def start_gunicorn_log_tailer(app: Any, socketio: Any) -> None:
                         if not line:
                             time.sleep(1)
                             continue
-                        payload = {
-                            'level': 'INFO',
-                            'message': line.strip(),
-                            'category': category,
-                            'timestamp': datetime.now().isoformat(),
-                        }
+                        # ✅ CRITICAL FIX: Sanitize log payload to prevent parse errors
                         try:
-                            socketio.emit('log_update', payload, to='admin')
-                            socketio.emit('log_update', payload)
+                            from bist_pattern.core.broadcaster import _sanitize_json_value
+                            import json
+                            payload = {
+                                'level': 'INFO',
+                                'message': line.strip()[:1000],  # Limit message length
+                                'category': category[:50],  # Limit category length
+                                'timestamp': datetime.now().isoformat(),
+                            }
+                            sanitized_payload = _sanitize_json_value(payload)
+                            json.dumps(sanitized_payload)  # Test serialization
+                            # ✅ FIX: Only send to admin room, use 'room' parameter not 'to'
+                            socketio.emit('log_update', sanitized_payload, room='admin')
                         except Exception:
+                            # Silently ignore - log tailer is best-effort
                             pass
             except Exception:
                 pass
@@ -53,5 +61,3 @@ def start_gunicorn_log_tailer(app: Any, socketio: Any) -> None:
             t.start()
     except Exception:
         pass
-
-

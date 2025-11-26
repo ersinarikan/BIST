@@ -147,14 +147,50 @@ class MLPredictionSystem:
                 seasonal_periods = 5
                 ets_model = ExponentialSmoothing(close, trend='add', seasonal='add', seasonal_periods=seasonal_periods)  # type: ignore
                 ets_fit = ets_model.fit(optimized=True, use_brute=True)
+                # ✅ FIX: Calculate confidence from model fit quality (AIC + in-sample metrics)
+                # Lower AIC = better fit = higher confidence
+                # Also consider in-sample prediction accuracy
+                try:
+                    aic = float(ets_fit.aic) if hasattr(ets_fit, 'aic') else None
+                    
+                    # Calculate in-sample prediction accuracy (RMSE)
+                    try:
+                        fitted_values = ets_fit.fittedvalues
+                        if len(fitted_values) > 0 and len(close) == len(fitted_values):
+                            residuals = close - fitted_values
+                            rmse = float((residuals ** 2).mean() ** 0.5)
+                            # Normalize RMSE to confidence: lower RMSE → higher confidence
+                            # Typical RMSE range: 0.1-2.0 (relative to price), normalize to 0.0-0.1 confidence impact
+                            current_price = float(close.iloc[-1]) if len(close) > 0 else 1.0
+                            rmse_pct = rmse / max(current_price, 1.0)  # RMSE as percentage of price
+                            rmse_penalty = min(0.1, max(0.0, rmse_pct * 2))  # Penalty up to 0.1
+                        else:
+                            rmse_penalty = 0.05  # Default penalty if can't calculate
+                    except Exception:
+                        rmse_penalty = 0.05  # Default penalty
+                    
+                    # Combine AIC and RMSE for confidence
+                    if aic is not None:
+                        # AIC-based confidence: AIC < 1000 → 0.5, AIC > 2000 → 0.4
+                        aic_conf = 0.5 - max(0, min(0.1, (aic - 1000) / 10000))
+                        aic_conf = max(0.4, min(0.5, aic_conf))
+                        # Apply RMSE penalty
+                        model_quality = max(0.35, min(0.5, aic_conf - rmse_penalty))
+                    else:
+                        # No AIC, use RMSE-based confidence
+                        model_quality = max(0.35, min(0.45, 0.45 - rmse_penalty))
+                except Exception:
+                    model_quality = 0.45  # Default for ETS
+                
                 for h in self.prediction_horizons:
                     fc = float(ets_fit.forecast(steps=h).iloc[-1])
                     models[str(h)] = {
                         'type': 'ets',
                         'forecast': fc,
                         'seasonal_periods': seasonal_periods,
+                        'confidence': model_quality,  # ✅ FIX: Store calculated confidence
                     }
-                logger.debug(f"✅ ETS trained for {symbol}")
+                logger.debug(f"✅ ETS trained for {symbol} (confidence: {model_quality:.2f})")
             except Exception as e:
                 logger.debug(f"ETS training failed for {symbol}: {e}")
 
@@ -165,6 +201,38 @@ class MLPredictionSystem:
                 # Simple automatically selected (p,d,q) candidate; conservative
                 order = (1, 1, 1)
                 arima_fit = ARIMA(close, order=order).fit()  # type: ignore
+                # ✅ FIX: Calculate confidence from model fit quality (AIC + in-sample metrics)
+                try:
+                    aic = float(arima_fit.aic) if hasattr(arima_fit, 'aic') else None
+                    
+                    # Calculate in-sample prediction accuracy (RMSE)
+                    try:
+                        fitted_values = arima_fit.fittedvalues
+                        if len(fitted_values) > 0 and len(close) == len(fitted_values):
+                            residuals = close - fitted_values
+                            rmse = float((residuals ** 2).mean() ** 0.5)
+                            # Normalize RMSE to confidence: lower RMSE → higher confidence
+                            current_price = float(close.iloc[-1]) if len(close) > 0 else 1.0
+                            rmse_pct = rmse / max(current_price, 1.0)  # RMSE as percentage of price
+                            rmse_penalty = min(0.1, max(0.0, rmse_pct * 2))  # Penalty up to 0.1
+                        else:
+                            rmse_penalty = 0.05  # Default penalty if can't calculate
+                    except Exception:
+                        rmse_penalty = 0.05  # Default penalty
+                    
+                    # Combine AIC and RMSE for confidence
+                    if aic is not None:
+                        # AIC-based confidence: AIC < 1000 → 0.45, AIC > 2000 → 0.35
+                        aic_conf = 0.45 - max(0, min(0.1, (aic - 1000) / 10000))
+                        aic_conf = max(0.35, min(0.45, aic_conf))
+                        # Apply RMSE penalty
+                        model_quality = max(0.3, min(0.45, aic_conf - rmse_penalty))
+                    else:
+                        # No AIC, use RMSE-based confidence
+                        model_quality = max(0.3, min(0.4, 0.4 - rmse_penalty))
+                except Exception:
+                    model_quality = 0.4  # Default for ARIMA
+                
                 for h in self.prediction_horizons:
                     fc = float(arima_fit.forecast(steps=h).iloc[-1])
                     # Prefer ETS for short horizons; ARIMA for long
@@ -173,8 +241,9 @@ class MLPredictionSystem:
                             'type': 'arima',
                             'forecast': fc,
                             'order': order,
+                            'confidence': model_quality,  # ✅ FIX: Store calculated confidence
                         }
-                logger.debug(f"✅ ARIMA trained for {symbol}")
+                logger.debug(f"✅ ARIMA trained for {symbol} (confidence: {model_quality:.2f})")
             except Exception as e:
                 logger.debug(f"ARIMA training failed for {symbol}: {e}")
         
@@ -221,18 +290,60 @@ class MLPredictionSystem:
             m = models.get(str(h), {})
             mtype = m.get('type')
             proj = None
+            confidence = None
+            
             if mtype == 'ets' and isinstance(m.get('forecast'), (int, float)):
                 proj = float(m['forecast'])
+                # ✅ FIX: Use calculated confidence from model training
+                confidence = m.get('confidence', 0.45)  # Default 0.45 for ETS
             elif mtype == 'arima' and isinstance(m.get('forecast'), (int, float)):
                 proj = float(m['forecast'])
+                # ✅ FIX: Use calculated confidence from model training
+                confidence = m.get('confidence', 0.4)  # Default 0.4 for ARIMA
             else:
+                # Naive mean fallback
                 mw = m.get('window', max(10, h * 5))
                 base = float(df['close'].tail(mw).mean()) if len(df) >= mw else current
                 proj = current + (base - current) * min(1.0, h / 30.0)
+                
+                # ✅ FIX: Calculate dynamic confidence for naive mean based on data quality
+                # Factors: volatility, trend strength, data amount
+                try:
+                    # Calculate volatility (lower volatility = higher confidence)
+                    returns = df['close'].pct_change().dropna()
+                    volatility = float(returns.std()) if len(returns) > 0 else 0.1
+                    # Normalize volatility: 0.01 (1%) = high confidence, 0.05 (5%) = low confidence
+                    vol_penalty = min(0.15, max(0.0, (volatility - 0.01) * 3))  # Penalty up to 0.15
+                    
+                    # Calculate trend strength (stronger trend = higher confidence)
+                    if len(df) >= 20:
+                        short_ma = float(df['close'].tail(10).mean())
+                        long_ma = float(df['close'].tail(20).mean())
+                        trend_strength = abs(short_ma - long_ma) / max(long_ma, 1.0)
+                        # Strong trend (>5%) = bonus, weak trend (<1%) = penalty
+                        trend_bonus = min(0.05, max(-0.05, (trend_strength - 0.01) * 2))
+                    else:
+                        trend_bonus = 0.0
+                    
+                    # Data amount factor (more data = higher confidence)
+                    data_factor = min(0.05, len(df) / 200.0)  # Bonus up to 0.05 for 200+ days
+                    
+                    # Base confidence for naive mean
+                    base_conf = 0.35
+                    # Apply adjustments
+                    confidence = base_conf + data_factor + trend_bonus - vol_penalty
+                    # Clamp to reasonable range [0.25, 0.45]
+                    confidence = max(0.25, min(0.45, confidence))
+                except Exception:
+                    # Fallback to default if calculation fails
+                    confidence = 0.4
+            
             if alpha:
                 sent = float(sentiment_score) if sentiment_score is not None else 0.5
                 proj = proj * (1 + alpha * (sent - 0.5))
-            out[f'{h}d'] = {'price': float(proj)}
+            
+            # ✅ FIX: Use calculated confidence from model, or fallback to default
+            out[f'{h}d'] = {'price': float(proj), 'confidence': confidence or 0.4}
         out['timestamp'] = datetime.now().isoformat()
         out['model'] = 'basic_ets_arima' if STATSMODELS_AVAILABLE else 'basic_naive'
         return out

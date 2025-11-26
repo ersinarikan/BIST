@@ -169,12 +169,22 @@ class WorkingAutomationPipeline:
                                         # Fallback emit if broadcast helper is absent
                                         sock = getattr(flask_app, 'socketio', None)
                                         if sock is not None:
-                                            sock.emit('log_update', {
-                                                'level': level,
-                                                'message': message,
-                                                'category': category,
-                                                'timestamp': datetime.now().isoformat(),
-                                            })
+                                            # ✅ FIX: Sanitize log_update data to prevent parse errors
+                                            try:
+                                                from bist_pattern.core.broadcaster import _sanitize_json_value
+                                                import json
+                                                log_data = {
+                                                    'level': level,
+                                                    'message': str(message)[:1000],  # Limit message length
+                                                    'category': category,
+                                                    'timestamp': datetime.now().isoformat(),
+                                                }
+                                                sanitized_data = _sanitize_json_value(log_data)
+                                                json.dumps(sanitized_data)  # Test serialization
+                                                # ✅ FIX: Only send to admin room - user clients don't need log updates
+                                                sock.emit('log_update', sanitized_data, room='admin')
+                                            except Exception as sanitize_err:
+                                                logger.debug(f"Log broadcast sanitization failed: {sanitize_err}")
                                 except Exception as e:
                                     # ✅ FIX: Log exception instead of silent pass
                                     logger.debug(f"_broadcast failed: {e}")
@@ -416,7 +426,29 @@ class WorkingAutomationPipeline:
                                                         },
                                                         'timestamp': datetime.now().isoformat(),
                                                     }
-                                                    sock.emit('pattern_analysis', emit_data)
+                                                    # ✅ CRITICAL FIX: Sanitize emit_data before sending to prevent parse errors
+                                                    # NaN, inf, and out-of-range float values cause JSON serialization errors
+                                                    try:
+                                                        from bist_pattern.core.broadcaster import _sanitize_json_value
+                                                        import json
+                                                        sanitized_data = _sanitize_json_value(emit_data)
+                                                        # Test JSON serialization before emitting
+                                                        json.dumps(sanitized_data)
+                                                        emit_data = sanitized_data
+                                                    except Exception as sanitize_err:
+                                                        logger.debug(f"Sanitization failed for {symbol}: {sanitize_err}, skipping emit")
+                                                        emit_data = None
+                                                    
+                                                    # ✅ CRITICAL FIX: DISABLED pattern_analysis broadcasts completely
+                                                    # User dashboard reads from batch API cache, doesn't need WebSocket events
+                                                    # Admin dashboard can also use batch API for monitoring
+                                                    # This eliminates unnecessary WebSocket traffic and parse errors
+                                                    # if emit_data is not None:
+                                                    #     try:
+                                                    #         sock.emit('pattern_analysis', emit_data, room='admin')
+                                                    #     except Exception as emit_err:
+                                                    #         logger.debug(f"Socket emit failed for {symbol}: {emit_err}")
+                                                    pass  # Broadcast disabled
                                             except Exception as e:
                                                 # ✅ FIX: Log exception instead of silent pass
                                                 logger.debug(f"Socket emit failed for {symbol}: {e}")

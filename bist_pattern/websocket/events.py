@@ -16,11 +16,26 @@ def register_socketio_events(app):
             current_app.logger.info(
                 f"🔗 Client connected: {getattr(request, 'sid', 'n/a')}"
             )
-        emit('status', {
-            'message': 'Connected to BIST AI System',
-            'timestamp': datetime.now().isoformat(),
-            'connection_id': getattr(request, 'sid', None)  # type: ignore[attr-defined]
-        })
+        # ✅ CRITICAL FIX: Sanitize status data before emitting
+        try:
+            from bist_pattern.core.broadcaster import _sanitize_json_value
+            import json
+            status_data = {
+                'message': 'Connected to BIST AI System',
+                'timestamp': datetime.now().isoformat(),
+                'connection_id': str(getattr(request, 'sid', None) or '')[:100]  # type: ignore[attr-defined]
+            }
+            sanitized_status = _sanitize_json_value(status_data)
+            json.dumps(sanitized_status)  # Test serialization
+            emit('status', sanitized_status)
+        except Exception as e:
+            if current_app and current_app.logger:
+                current_app.logger.debug(f"Status emit sanitization failed: {e}")
+            # Fallback: send minimal status
+            try:
+                emit('status', {'message': 'Connected', 'timestamp': datetime.now().isoformat()})
+            except Exception:
+                pass
 
     def _on_disconnect():
         if current_app and current_app.logger:
@@ -34,7 +49,22 @@ def register_socketio_events(app):
             current_app.logger.info(
                 f"👤 Client joined admin room: {getattr(request, 'sid', 'n/a')}"
             )
-        emit('room_joined', {'room': 'admin', 'message': 'Admin dashboard connected'})
+        # ✅ CRITICAL FIX: Sanitize room_joined data before emitting
+        try:
+            from bist_pattern.core.broadcaster import _sanitize_json_value
+            import json
+            room_data = {'room': 'admin', 'message': 'Admin dashboard connected'}
+            sanitized_room = _sanitize_json_value(room_data)
+            json.dumps(sanitized_room)  # Test serialization
+            emit('room_joined', sanitized_room)
+        except Exception as e:
+            if current_app and current_app.logger:
+                current_app.logger.debug(f"Room joined emit sanitization failed: {e}")
+            # Fallback: send minimal data
+            try:
+                emit('room_joined', {'room': 'admin'})
+            except Exception:
+                pass
 
     def _on_join_user(data):
         user_id = data.get('user_id', 'anonymous')
@@ -43,7 +73,22 @@ def register_socketio_events(app):
             current_app.logger.info(
                 f"👤 Client joined user room: {getattr(request, 'sid', 'n/a')} -> user_{user_id}"
             )
-        emit('room_joined', {'room': f'user_{user_id}', 'message': 'User interface connected'})
+        # ✅ CRITICAL FIX: Sanitize room_joined data before emitting
+        try:
+            from bist_pattern.core.broadcaster import _sanitize_json_value
+            import json
+            room_data = {'room': f'user_{user_id}', 'message': 'User interface connected'}
+            sanitized_room = _sanitize_json_value(room_data)
+            json.dumps(sanitized_room)  # Test serialization
+            emit('room_joined', sanitized_room)
+        except Exception as e:
+            if current_app and current_app.logger:
+                current_app.logger.debug(f"Room joined emit sanitization failed: {e}")
+            # Fallback: send minimal data
+            try:
+                emit('room_joined', {'room': f'user_{user_id}'})
+            except Exception:
+                pass
 
     def _on_subscribe_stock(data):
         symbol = data.get('symbol', '').upper()
@@ -53,7 +98,22 @@ def register_socketio_events(app):
                 current_app.logger.info(
                     f"📈 Client subscribed to {symbol}: {getattr(request, 'sid', 'n/a')}"
                 )
-            emit('subscription_confirmed', {'symbol': symbol, 'message': f'Subscribed to {symbol} updates'})
+            # ✅ CRITICAL FIX: Sanitize subscription_confirmed data before emitting
+            try:
+                from bist_pattern.core.broadcaster import _sanitize_json_value
+                import json
+                sub_data = {'symbol': symbol, 'message': f'Subscribed to {symbol} updates'}
+                sanitized_sub = _sanitize_json_value(sub_data)
+                json.dumps(sanitized_sub)  # Test serialization
+                emit('subscription_confirmed', sanitized_sub)
+            except Exception as e:
+                if current_app and current_app.logger:
+                    current_app.logger.debug(f"Subscription confirmed emit sanitization failed: {e}")
+                # Fallback: send minimal data
+                try:
+                    emit('subscription_confirmed', {'symbol': symbol})
+                except Exception:
+                    pass
 
     def _on_unsubscribe_stock(data):
         symbol = data.get('symbol', '').upper()
@@ -63,45 +123,30 @@ def register_socketio_events(app):
                 current_app.logger.info(
                     f"📉 Client unsubscribed from {symbol}: {getattr(request, 'sid', 'n/a')}"
                 )
-            emit('subscription_removed', {'symbol': symbol, 'message': f'Unsubscribed from {symbol}'})
+            # ✅ CRITICAL FIX: Sanitize subscription_removed data before emitting
+            try:
+                from bist_pattern.core.broadcaster import _sanitize_json_value
+                import json
+                sub_data = {'symbol': symbol, 'message': f'Unsubscribed from {symbol}'}
+                sanitized_sub = _sanitize_json_value(sub_data)
+                json.dumps(sanitized_sub)  # Test serialization
+                emit('subscription_removed', sanitized_sub)
+            except Exception as e:
+                if current_app and current_app.logger:
+                    current_app.logger.debug(f"Subscription removed emit sanitization failed: {e}")
+                # Fallback: send minimal data
+                try:
+                    emit('subscription_removed', {'symbol': symbol})
+                except Exception:
+                    pass
 
     def _on_request_pattern_analysis(data):
+        # ✅ CRITICAL FIX: DISABLED - User dashboard reads from batch API cache
+        # This event handler is no longer needed and was causing unnecessary WebSocket traffic
         symbol = data.get('symbol', '').upper()
-        if not symbol:
-            return
-        try:
-            # Cache-only: do not import or trigger detector here
-            # Try cached fast path first
-            try:
-                from bist_pattern.core.cache import cache_get as _cache_get  # type: ignore
-            except Exception:
-                _cache_get = None  # type: ignore
-
-            cache_key = f"pattern_analysis:{symbol}"
-            result = None
-            if callable(_cache_get):
-                result = _cache_get(cache_key)
-            # Do NOT compute here. If cache miss → pending
-            if not result:
-                result = {'symbol': symbol, 'status': 'pending'}
-            emit('pattern_analysis', {
-                'symbol': symbol,
-                'data': result,
-                'timestamp': datetime.now().isoformat()
-            })
-            sock.emit('pattern_analysis', {
-                'symbol': symbol,
-                'data': result,
-                'timestamp': datetime.now().isoformat()
-            }, to=f'stock_{symbol}')
-            if current_app and current_app.logger:
-                current_app.logger.info(
-                    f"📊 Pattern analysis (cache-only) sent for {symbol} to {getattr(request, 'sid', 'n/a')} and stock room"
-                )
-        except Exception as e:  # pragma: no cover
-            emit('error', {'message': f'Pattern analysis failed for {symbol}: {str(e)}'})
-            if current_app and current_app.logger:
-                current_app.logger.error(f"Pattern analysis error for {symbol}: {e}")
+        if symbol and current_app and current_app.logger:
+            current_app.logger.debug(f"📊 Pattern analysis request ignored for {symbol} - use batch API instead")
+        # Do nothing - client should use batch API endpoints instead
 
     # Register handlers dynamically to the provided socketio instance
     sock.on('connect')(_on_connect)
@@ -110,4 +155,5 @@ def register_socketio_events(app):
     sock.on('join_user')(_on_join_user)
     sock.on('subscribe_stock')(_on_subscribe_stock)
     sock.on('unsubscribe_stock')(_on_unsubscribe_stock)
-    sock.on('request_pattern_analysis')(_on_request_pattern_analysis)
+    # ✅ CRITICAL FIX: Disabled request_pattern_analysis handler - use batch API instead
+    # sock.on('request_pattern_analysis')(_on_request_pattern_analysis)

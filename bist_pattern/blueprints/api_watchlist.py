@@ -1,5 +1,4 @@
 from flask import Blueprint, jsonify, request
-from datetime import datetime
 from flask_login import login_required, current_user
 
 from ..extensions import csrf
@@ -84,16 +83,17 @@ def register(app):
                 except Exception:
                     pass
             db.session.commit()
-            # Cache-only: no fresh analysis on add
-            try:
-                if hasattr(app, 'socketio'):
-                    app.socketio.emit('pattern_analysis', {
-                        'symbol': symbol,
-                        'data': {'symbol': symbol, 'status': 'pending'},
-                        'timestamp': datetime.now().isoformat()
-                    }, to=f'stock_{symbol}')
-            except Exception:
-                pass
+            # ✅ FIX: Disabled pattern_analysis broadcast - user dashboard reads from batch API cache
+            # No need to broadcast when adding to watchlist, client will load from cache on next refresh
+            # try:
+            #     if hasattr(app, 'socketio'):
+            #         app.socketio.emit('pattern_analysis', {
+            #             'symbol': symbol,
+            #             'data': {'symbol': symbol, 'status': 'pending'},
+            #             'timestamp': datetime.now().isoformat()
+            #         }, to=f'stock_{symbol}')
+            # except Exception:
+            #     pass
             return jsonify({'status': 'success', 'item': item.to_dict()})
         except Exception as e:
             app.logger.error(f"Watchlist add error: {e}")
@@ -326,11 +326,14 @@ def register(app):
             try:
                 import os
                 import json
+                from bist_pattern.core.broadcaster import _sanitize_json_value
                 log_dir = os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
                 fpath = os.path.join(log_dir, 'ml_bulk_predictions.json')
                 if os.path.exists(fpath):
                     with open(fpath, 'r') as rf:
                         data = json.load(rf) or {}
+                        # ✅ FIX: Sanitize loaded JSON
+                        data = _sanitize_json_value(data)
                         predictions_map = (data.get('predictions') or {}) if isinstance(data, dict) else {}
                 bulk_mtime = os.path.getmtime(fpath) if os.path.exists(fpath) else None
             except Exception:

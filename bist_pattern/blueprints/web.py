@@ -54,15 +54,36 @@ def register(app):
         try:
             # Inject real user info for UI display and websocket room subscription
             try:
+                # ✅ FIX: Ensure current_user is authenticated and has an ID
+                if not current_user.is_authenticated:
+                    app.logger.warning("User dashboard accessed but user not authenticated")
+                    return redirect(url_for('auth.login'))
+                
                 uid = getattr(current_user, 'id', None)
+                if uid is None:
+                    app.logger.error(f"User {getattr(current_user, 'email', 'unknown')} has no ID attribute")
+                    # Try to get ID from database
+                    try:
+                        from models import User
+                        user = User.query.filter_by(email=getattr(current_user, 'email', None)).first()
+                        if user:
+                            uid = user.id
+                            app.logger.info(f"Retrieved user ID {uid} from database for {user.email}")
+                        else:
+                            app.logger.error(f"User not found in database: {getattr(current_user, 'email', 'unknown')}")
+                    except Exception as db_err:
+                        app.logger.error(f"Database error retrieving user ID: {db_err}")
+                
                 email = getattr(current_user, 'email', None)
                 username = getattr(current_user, 'username', None)
                 full_name = getattr(current_user, 'full_name', None) or username or (email.split('@')[0] if email else 'Kullanıcı')
-            except Exception:
+            except Exception as e:
+                app.logger.error(f"Error extracting user info: {e}")
                 uid = None
                 email = None
                 full_name = 'Kullanıcı'
             
+            # ✅ FIX: Always inject user_id (even if None) so frontend can handle it
             resp = make_response(render_template('user_dashboard.html', 
                                                   user_id=uid,
                                                   user_email=email,
@@ -71,7 +92,8 @@ def register(app):
             resp.headers['Pragma'] = 'no-cache'
             resp.headers['Expires'] = '0'
             return resp
-        except Exception:
+        except Exception as e:
+            app.logger.error(f"User dashboard error: {e}")
             return jsonify({'error': 'User dashboard not available'}), 500
 
     app.register_blueprint(bp)

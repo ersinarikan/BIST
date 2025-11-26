@@ -98,15 +98,21 @@
             to { opacity: 1; transform: translateY(0); }
         }
     </style>
-    {% if user_id %}
-    <script id="app-user" type="application/json">{{ user_id|tojson }}</script>
+    {# ✅ FIX: Always inject user_id script (even if None) so frontend can handle it properly #}
+    <script id="app-user" type="application/json">{{ user_id|tojson if user_id is not none else 'null' }}</script>
     <script>
         try{
             const el = document.getElementById('app-user');
-            if(el){ window.APP_USER_ID = JSON.parse(el.textContent || 'null'); }
-        }catch(e){}
+            if(el){ 
+                const userIdValue = JSON.parse(el.textContent || 'null');
+                window.APP_USER_ID = (userIdValue !== null && userIdValue !== undefined) ? userIdValue : null;
+                console.log('🔐 User ID injected:', window.APP_USER_ID);
+            }
+        }catch(e){
+            console.error('❌ Error parsing user ID:', e);
+            window.APP_USER_ID = null;
+        }
     </script>
-    {% endif %}
 </head>
 <body>
     <!-- Navigation -->

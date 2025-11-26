@@ -1,4 +1,8 @@
 import os
+# ✅ CRITICAL FIX: Gevent monkey patching must be the very first thing
+from gevent import monkey
+monkey.patch_all()
+
 from datetime import datetime
 from flask import Flask, jsonify, request, redirect, url_for
 from flask_login import LoginManager, current_user
@@ -110,8 +114,8 @@ def create_app(config_name='default'):
         cors_allowed_origins=app.config.get('CORS_ORIGINS', '*'),
         logger=False,
         engineio_logger=False,
-        ping_timeout=90,
-        ping_interval=45,
+        ping_timeout=60,  # ✅ FIX: Reduced to 60s (standard)
+        ping_interval=25,  # ✅ FIX: Reduced to 25s to keep connection active through proxies
         message_queue=mq_url,
     )
     if not mq_url:
@@ -139,14 +143,11 @@ def create_app(config_name='default'):
     except Exception:
         pass
 
-    # Real-time log broadcasting function (defined early to avoid race condition with log tailer threads)
+    # ✅ CRITICAL FIX: Disable log_update broadcasts - they cause parse errors
+    # Admin dashboard can use API endpoints for logs instead
     def broadcast_log(level, message, category='system'):
-        socketio.emit('log_update', {
-            'level': level,
-            'message': message,
-            'category': category,
-            'timestamp': datetime.now().isoformat()
-        }, room='admin')  # type: ignore[call-arg]
+        """Broadcast disabled - use API endpoints instead"""
+        pass  # Disabled
     
     # Store broadcast_log on app early to avoid race condition with log tailer threads
     app.broadcast_log = broadcast_log
@@ -425,16 +426,52 @@ def create_app(config_name='default'):
     # REALTIME WEBSOCKET HANDLERS
     # ==========================================
 
+    # ✅ DEBUG: Wrap socketio.emit AND Flask-SocketIO emit to log all emissions
+    _original_socketio_emit = socketio.emit
+    def _logged_socketio_emit(event, data=None, *args, **kwargs):
+        try:
+            room = kwargs.get('room') or kwargs.get('to') or 'broadcast'
+            symbol = data.get('symbol') if isinstance(data, dict) else 'N/A'
+            logger.warning(f"🔊 SOCKETIO.EMIT: event='{event}', room='{room}', symbol='{symbol}'")
+            if event == 'pattern_analysis':
+                import traceback
+                logger.error(f"⚠️ UNEXPECTED pattern_analysis emit! Traceback:\n{''.join(traceback.format_stack())}")
+        except Exception as e:
+            logger.debug(f"Emit logging error: {e}")
+        return _original_socketio_emit(event, data, *args, **kwargs)
+    
+    socketio.emit = _logged_socketio_emit
+    
+    # Also wrap the standalone emit function from flask_socketio
+    from flask_socketio import emit as _flask_socketio_emit_original
+    _original_flask_emit = _flask_socketio_emit_original
+    
+    # Note: We can't easily wrap the imported emit function globally,
+    # but we can monitor socketio.emit which is what matters
 
 
     @socketio.on('connect')
     def handle_connect(auth):
         logger.info(f"🔗 Client connected: {request.sid}")
-        emit('status', {
-            'message': 'Connected to BIST AI System', 
-            'timestamp': datetime.now().isoformat(),
-            'connection_id': request.sid
-        })
+        # ✅ CRITICAL FIX: Sanitize status data before emitting
+        try:
+            from bist_pattern.core.broadcaster import _sanitize_json_value
+            import json
+            status_data = {
+                'message': 'Connected to BIST AI System',
+                'timestamp': datetime.now().isoformat(),
+                'connection_id': str(request.sid)[:100]
+            }
+            sanitized_status = _sanitize_json_value(status_data)
+            json.dumps(sanitized_status)  # Test serialization
+            emit('status', sanitized_status)
+        except Exception as e:
+            logger.debug(f"Status emit sanitization failed: {e}")
+            # Fallback: send minimal status
+            try:
+                emit('status', {'message': 'Connected', 'timestamp': datetime.now().isoformat()})
+            except Exception:
+                pass
     
     @socketio.on('disconnect')
     def handle_disconnect():
@@ -444,14 +481,42 @@ def create_app(config_name='default'):
     def handle_join_admin():
         join_room('admin')
         logger.info(f"👤 Client joined admin room: {request.sid}")
-        emit('room_joined', {'room': 'admin', 'message': 'Admin dashboard connected'})
+        # ✅ CRITICAL FIX: Sanitize room_joined data before emitting
+        try:
+            from bist_pattern.core.broadcaster import _sanitize_json_value
+            import json
+            room_data = {'room': 'admin', 'message': 'Admin dashboard connected'}
+            sanitized_room = _sanitize_json_value(room_data)
+            json.dumps(sanitized_room)  # Test serialization
+            emit('room_joined', sanitized_room)
+        except Exception as e:
+            logger.debug(f"Room joined emit sanitization failed: {e}")
+            # Fallback: send minimal data
+            try:
+                emit('room_joined', {'room': 'admin'})
+            except Exception:
+                pass
     
     @socketio.on('join_user')
     def handle_join_user(data):
         user_id = data.get('user_id', 'anonymous')
         join_room(f'user_{user_id}')
         logger.info(f"👤 Client joined user room: {request.sid} -> user_{user_id}")
-        emit('room_joined', {'room': f'user_{user_id}', 'message': 'User interface connected'})
+        # ✅ CRITICAL FIX: Sanitize room_joined data before emitting
+        try:
+            from bist_pattern.core.broadcaster import _sanitize_json_value
+            import json
+            room_data = {'room': f'user_{user_id}', 'message': 'User interface connected'}
+            sanitized_room = _sanitize_json_value(room_data)
+            json.dumps(sanitized_room)  # Test serialization
+            emit('room_joined', sanitized_room)
+        except Exception as e:
+            logger.debug(f"Room joined emit sanitization failed: {e}")
+            # Fallback: send minimal data
+            try:
+                emit('room_joined', {'room': f'user_{user_id}'})
+            except Exception:
+                pass
     
     @socketio.on('subscribe_stock')
     def handle_subscribe_stock(data):
@@ -459,7 +524,21 @@ def create_app(config_name='default'):
         if symbol:
             join_room(f'stock_{symbol}')
             logger.info(f"📈 Client subscribed to {symbol}: {request.sid}")
-            emit('subscription_confirmed', {'symbol': symbol, 'message': f'Subscribed to {symbol} updates'})
+            # ✅ CRITICAL FIX: Sanitize subscription_confirmed data before emitting
+            try:
+                from bist_pattern.core.broadcaster import _sanitize_json_value
+                import json
+                sub_data = {'symbol': symbol, 'message': f'Subscribed to {symbol} updates'}
+                sanitized_sub = _sanitize_json_value(sub_data)
+                json.dumps(sanitized_sub)  # Test serialization
+                emit('subscription_confirmed', sanitized_sub)
+            except Exception as e:
+                logger.debug(f"Subscription confirmed emit sanitization failed: {e}")
+                # Fallback: send minimal data
+                try:
+                    emit('subscription_confirmed', {'symbol': symbol})
+                except Exception:
+                    pass
     
     @socketio.on('unsubscribe_stock')
     def handle_unsubscribe_stock(data):
@@ -467,39 +546,29 @@ def create_app(config_name='default'):
         if symbol:
             leave_room(f'stock_{symbol}')
             logger.info(f"📉 Client unsubscribed from {symbol}: {request.sid}")
-            emit('subscription_removed', {'symbol': symbol, 'message': f'Unsubscribed from {symbol}'})
-    
-    @socketio.on('request_pattern_analysis')
-    def handle_pattern_request(data):
-        symbol = data.get('symbol', '').upper()
-        if symbol:
+            # ✅ CRITICAL FIX: Sanitize subscription_removed data before emitting
             try:
-                # Cache-only: do not compute here
-                from bist_pattern.core.cache import cache_get as _cache_get  # type: ignore
-                cache_key = f"pattern_analysis:{symbol}"
-                result = None
-                try:
-                    result = _cache_get(cache_key)
-                except Exception:
-                    result = None
-                if not result:
-                    result = {'symbol': symbol, 'status': 'pending'}
-                # Send to requesting client
-                emit('pattern_analysis', {
-                    'symbol': symbol,
-                    'data': result,
-                    'timestamp': datetime.now().isoformat()
-                })
-                # Also broadcast to stock room for other subscribers
-                socketio.emit('pattern_analysis', {
-                    'symbol': symbol,
-                    'data': result,
-                    'timestamp': datetime.now().isoformat()
-                }, room=f'stock_{symbol}')  # type: ignore[call-arg]
-                logger.info(f"📊 Pattern analysis (cache-only) sent for {symbol} to {request.sid} and stock room")
+                from bist_pattern.core.broadcaster import _sanitize_json_value
+                import json
+                sub_data = {'symbol': symbol, 'message': f'Unsubscribed from {symbol}'}
+                sanitized_sub = _sanitize_json_value(sub_data)
+                json.dumps(sanitized_sub)  # Test serialization
+                emit('subscription_removed', sanitized_sub)
             except Exception as e:
-                emit('error', {'message': f'Pattern analysis failed for {symbol}: {str(e)}'})
-                logger.error(f"Pattern analysis error for {symbol}: {e}")
+                logger.debug(f"Subscription removed emit sanitization failed: {e}")
+                # Fallback: send minimal data
+                try:
+                    emit('subscription_removed', {'symbol': symbol})
+                except Exception:
+                    pass
+    
+    # ✅ CRITICAL FIX: DISABLED request_pattern_analysis handler - use batch API instead
+    # @socketio.on('request_pattern_analysis')
+    # def handle_pattern_request(data):
+    #     symbol = data.get('symbol', '').upper()
+    #     if symbol:
+    #         logger.debug(f"📊 Pattern analysis request ignored for {symbol} - use batch API instead")
+    #     # Do nothing - client should use batch API endpoints instead
     
     # Real-time log broadcasting function (already defined earlier to avoid race condition)
     # broadcast_log function and app.broadcast_log assignment moved earlier (before log tailer)

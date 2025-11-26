@@ -48,15 +48,9 @@ def init_extensions(app):
     # Expose socketio and broadcaster on app for backward compatibility
     app.socketio = socketio
 
+    # ✅ CRITICAL FIX: Disable broadcast_log - it causes parse errors and unnecessary WebSocket traffic
     def broadcast_log(level, message, category='system'):
-        # WebSocket broadcast to admin dashboard
-        socketio.emit('log_update', {
-            'level': level,
-            'message': message,
-            'category': category,
-            'timestamp': __import__('datetime').datetime.now().isoformat()
-        }, to='admin')
-        
+        """Broadcast disabled - use API endpoints instead"""
         # Also log to stdout for journalctl visibility
         import logging
         logger = logging.getLogger(f'broadcast.{category}')

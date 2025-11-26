@@ -129,6 +129,7 @@ def register(app):
                 import os as _os
                 import json as _json
                 import time as _time
+                from bist_pattern.core.broadcaster import _sanitize_json_value
                 ttl = float(_os.getenv('PATTERN_FILE_CACHE_TTL', '300'))
                 _os.makedirs(file_cache_path, exist_ok=True)
                 fpath = _os.path.join(file_cache_path, f'{sym}.json')
@@ -137,6 +138,8 @@ def register(app):
                     age = (_time.time() - float(getattr(st, 'st_mtime', 0)))
                     with open(fpath, 'r') as rf:
                         file_cache_hit = _json.load(rf)
+                        # ✅ FIX: Sanitize loaded JSON to handle NaN/Infinity from file cache
+                        file_cache_hit = _sanitize_json_value(file_cache_hit)
                     if isinstance(file_cache_hit, dict):
                         file_cache_hit.setdefault('symbol', sym)
                         file_cache_hit.setdefault('status', 'success')
