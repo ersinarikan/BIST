@@ -312,7 +312,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('--limit', type=int, default=1000)
     args = ap.parse_args()
-    return run(args.limit)
+    try:
+        return run(args.limit)
+    finally:
+        # ✅ FIX: Safely shutdown logging to prevent cleanup errors
+        # This prevents "TypeError: 'NoneType' object is not callable" during cleanup
+        try:
+            logging.shutdown()
+        except Exception:
+            # Ignore any errors during logging shutdown (non-critical)
+            pass
 
 
 if __name__ == '__main__':
