@@ -160,6 +160,29 @@ logger.setLevel(logging.INFO)
 logger.handlers.clear()  # Clear any existing handlers
 logger.propagate = False  # Prevent propagation to root logger (CRITICAL!)
 
+# ✅ CRITICAL FIX: Disable WebSocket pattern_analysis emissions in HPO process
+# HPO service runs in separate process and should not broadcast to clients
+# This prevents data leakage and WebSocket disconnections
+try:
+    if hasattr(app, 'socketio') and app.socketio is not None:
+        _original_hpo_emit = app.socketio.emit
+        def _hpo_blocked_emit(event, data=None, *args, **kwargs):
+            # Block pattern_analysis events completely in HPO process
+            if event == 'pattern_analysis':
+                logger.debug(f"🚫 HPO: Blocked pattern_analysis emit for {data.get('symbol', 'N/A') if isinstance(data, dict) else 'N/A'}")
+                return  # Block the event
+            # Allow other events (log_update, etc.) but only to admin room
+            # HPO process should not send data to user rooms
+            room = kwargs.get('room') or kwargs.get('to')
+            if room and not room.startswith('admin'):
+                logger.debug(f"🚫 HPO: Blocked emit to non-admin room '{room}'")
+                return  # Block non-admin room broadcasts
+            return _original_hpo_emit(event, data, *args, **kwargs)
+        app.socketio.emit = _hpo_blocked_emit
+        logger.info("✅ HPO: WebSocket pattern_analysis emissions disabled")
+except Exception as e:
+    logger.warning(f"⚠️ HPO: Failed to disable WebSocket emissions: {e}")
+
 # Create file handler with append mode (only for our logger)
 file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
 file_handler.setLevel(logging.INFO)

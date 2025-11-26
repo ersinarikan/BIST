@@ -143,11 +143,25 @@ def create_app(config_name='default'):
     except Exception:
         pass
 
-    # ✅ CRITICAL FIX: Disable log_update broadcasts - they cause parse errors
-    # Admin dashboard can use API endpoints for logs instead
+    # ✅ ENABLED LOG BROADCAST (Sanitized)
     def broadcast_log(level, message, category='system'):
-        """Broadcast disabled - use API endpoints instead"""
-        pass  # Disabled
+        """Broadcast log message via WebSocket safely"""
+        try:
+            from bist_pattern.core.broadcaster import _sanitize_json_value
+            import json
+            
+            payload = {
+                'level': level,
+                'message': str(message)[:2000],
+                'category': category,
+                'timestamp': datetime.now().isoformat()
+            }
+            clean_payload = _sanitize_json_value(payload)
+            # Verify serialization to prevent disconnects
+            json.dumps(clean_payload)
+            socketio.emit('log_update', clean_payload, room='admin')
+        except Exception:
+            pass
     
     # Store broadcast_log on app early to avoid race condition with log tailer threads
     app.broadcast_log = broadcast_log
@@ -435,7 +449,9 @@ def create_app(config_name='default'):
             logger.warning(f"🔊 SOCKETIO.EMIT: event='{event}', room='{room}', symbol='{symbol}'")
             if event == 'pattern_analysis':
                 import traceback
-                logger.error(f"⚠️ UNEXPECTED pattern_analysis emit! Traceback:\n{''.join(traceback.format_stack())}")
+                logger.error(f"⚠️ BLOCKED pattern_analysis emit! Traceback:\n{''.join(traceback.format_stack())}")
+                return  # ✅ CRITICAL FIX: Prevent this event from being sent
+
         except Exception as e:
             logger.debug(f"Emit logging error: {e}")
         return _original_socketio_emit(event, data, *args, **kwargs)
