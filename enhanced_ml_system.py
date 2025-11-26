@@ -341,6 +341,8 @@ class EnhancedMLSystem:
         self.use_reference_historical_r2 = False
         # ⚡ NEW: Meta-learners storage (Ridge for stacking)
         self.meta_learners = {}  # {symbol_horizon: Ridge model}
+        # ✅ FIX: Store model order for meta-stacking (ensures prediction uses same order as training)
+        self.meta_model_orders = {}  # {symbol_horizon: ['xgboost', 'lightgbm', 'catboost']}
         # ✅ FIX: Use ConfigManager for consistent config access
         self.model_directory = ConfigManager.get('ML_MODEL_PATH', "enhanced_ml_models")
         self.prediction_horizons = [1, 3, 7, 14, 30]  # 1D, 3D, 7D, 14D, 30D
@@ -3241,6 +3243,28 @@ class EnhancedMLSystem:
                                 pass
                         
                         if len(oof_list) >= 2:
+                            # ✅ FIX: Record which models were used for meta-learner training
+                            # This ensures prediction uses the same model order
+                            model_order = []  # Track model order: ['xgboost', 'lightgbm', 'catboost']
+                            if 'xgboost' in horizon_models:
+                                try:
+                                    _ = xgb_oof_preds  # type: ignore[name-defined]
+                                    model_order.append('xgboost')
+                                except NameError:
+                                    pass
+                            if 'lightgbm' in horizon_models:
+                                try:
+                                    _ = lgb_oof_preds  # type: ignore[name-defined]
+                                    model_order.append('lightgbm')
+                                except NameError:
+                                    pass
+                            if 'catboost' in horizon_models:
+                                try:
+                                    _ = cat_oof_preds  # type: ignore[name-defined]
+                                    model_order.append('catboost')
+                                except NameError:
+                                    pass
+                            
                             # Stack OOF predictions as features
                             meta_X = np.column_stack(oof_list)  # Shape: (n_samples, n_models)
                             # Filter rows where all models have valid OOF preds
@@ -3361,8 +3385,13 @@ class EnhancedMLSystem:
                             # Store scaler with special key
                             scaler_key = f"{symbol}_{horizon}d_meta_scaler"
                             self.scalers[scaler_key] = meta_scaler
+                            # ✅ FIX: Store model order to ensure prediction uses same order
+                            model_order_key = f"{symbol}_{horizon}d_meta_model_order"
+                            if not hasattr(self, 'meta_model_orders'):
+                                self.meta_model_orders = {}
+                            self.meta_model_orders[model_order_key] = model_order
                             
-                            logger.info(f"✅ Meta-learner saved for {symbol} {horizon}d (alpha={best_alpha:.2f})")
+                            logger.info(f"✅ Meta-learner saved for {symbol} {horizon}d (alpha={best_alpha:.2f}, models={model_order})")
                     except Exception as e:
                         logger.error(f"Meta-learner training error: {e}")
                 
@@ -4857,9 +4886,15 @@ class EnhancedMLSystem:
                                     meta_model = self.meta_learners[meta_key]
                                     meta_scaler = self.scalers[scaler_key]
                                     
-                                    # ⚡ CRITICAL FIX: Check if prediction model count matches training model count
-                                    # Meta-learner was trained with N models (e.g., 3: XGBoost, LightGBM, CatBoost)
-                                    # But prediction might have fewer models (e.g., 2: LightGBM, CatBoost) if one failed
+                                    # ✅ FIX: Get model order from training (ensures same order as training)
+                                    model_order_key = f"{symbol}_{horizon}d_meta_model_order"
+                                    training_model_order = None
+                                    if hasattr(self, 'meta_model_orders') and model_order_key in self.meta_model_orders:
+                                        training_model_order = self.meta_model_orders[model_order_key]
+                                    
+                                    # ⚡ CRITICAL FIX: Reorder predictions to match training order
+                                    # Meta-learner was trained with specific model order (e.g., ['xgboost', 'lightgbm'])
+                                    # Prediction must use the same order, even if more models are available
                                     expected_n_models = None
                                     if hasattr(meta_scaler, 'n_features_in_'):
                                         expected_n_models = meta_scaler.n_features_in_
@@ -4868,8 +4903,50 @@ class EnhancedMLSystem:
                                     elif hasattr(meta_scaler, 'scale_') and meta_scaler.scale_ is not None:
                                         expected_n_models = meta_scaler.scale_.shape[0]
                                     
-                                    if expected_n_models is not None and len(returns_list) != expected_n_models:
-                                        # Model count mismatch: fallback to weighted average
+                                    # Reorder predictions to match training order
+                                    if training_model_order and len(training_model_order) > 0:
+                                        # Create ordered lists matching training order
+                                        ordered_returns = []
+                                        ordered_predictions = []
+                                        ordered_weights = []
+                                        
+                                        # Map model names to their predictions
+                                        model_to_pred = {}
+                                        model_to_ret = {}
+                                        model_to_weight = {}
+                                        for model_name, pred_info in model_predictions.items():
+                                            model_to_pred[model_name] = pred_info['prediction']
+                                            model_to_ret[model_name] = pred_info.get('pred_ret', 0.0)
+                                            model_to_weight[model_name] = pred_info['confidence']
+                                        
+                                        # Build ordered lists based on training order
+                                        for model_name in training_model_order:
+                                            if model_name in model_to_pred:
+                                                ordered_predictions.append(model_to_pred[model_name])
+                                                ordered_returns.append(model_to_ret[model_name])
+                                                ordered_weights.append(model_to_weight[model_name])
+                                        
+                                        # Check if we have the expected number of models
+                                        if len(ordered_returns) == expected_n_models:
+                                            # Use ordered predictions for meta-stacking
+                                            meta_X = np.array(ordered_returns, dtype=float).reshape(1, -1)
+                                            meta_X_scaled = meta_scaler.transform(meta_X)
+                                            ensemble_ret = float(meta_model.predict(meta_X_scaled)[0])
+                                            current_px = float(current_data['close'].iloc[-1])
+                                            ensemble_pred = float(current_px * (1.0 + ensemble_ret))
+                                            avg_confidence = (np.mean(ordered_weights) * 1.1) * confidence_scale
+                                            logger.debug(f"Meta-stacking used for {symbol} {horizon}d (ordered: {training_model_order})")
+                                        else:
+                                            # Model count mismatch: fallback to weighted average
+                                            logger.warning(
+                                                f"Meta-stacking model count mismatch for {symbol} {horizon}d: "
+                                                f"expected {expected_n_models} models ({training_model_order}), "
+                                                f"got {len(ordered_returns)} available. Falling back to weighted average."
+                                            )
+                                            ensemble_pred = np.average(predictions_list, weights=weights) if sum(weights) > 0 else float(np.mean(predictions_list))
+                                            avg_confidence = (np.mean(weights) if sum(weights) > 0 else 0.55) * confidence_scale
+                                    elif expected_n_models is not None and len(returns_list) != expected_n_models:
+                                        # Model count mismatch (no order info): fallback to weighted average
                                         logger.warning(
                                             f"Meta-stacking model count mismatch for {symbol} {horizon}d: "
                                             f"expected {expected_n_models} models, got {len(returns_list)}. "
@@ -4878,7 +4955,7 @@ class EnhancedMLSystem:
                                         ensemble_pred = np.average(predictions_list, weights=weights) if sum(weights) > 0 else float(np.mean(predictions_list))
                                         avg_confidence = (np.mean(weights) if sum(weights) > 0 else 0.55) * confidence_scale
                                     else:
-                                        # Stack predictions as features (returns domain)
+                                        # Stack predictions as features (returns domain) - original order
                                         meta_X = np.array(returns_list, dtype=float).reshape(1, -1)
                                         
                                         # ⚡ FIX: Scale features before prediction
@@ -5431,6 +5508,14 @@ class EnhancedMLSystem:
                 _atomic_write_pickle(scalers_file, symbol_scalers)
                 logger.debug(f"Meta-scalers saved: {len(symbol_scalers)} scalers")
             
+            # ✅ FIX: Save meta model orders (ensures prediction uses same order as training)
+            if hasattr(self, 'meta_model_orders'):
+                symbol_meta_orders = {k: v for k, v in self.meta_model_orders.items() if k.startswith(symbol)}
+                if symbol_meta_orders:
+                    orders_file = f"{self.model_directory}/{symbol}_meta_model_orders.pkl"
+                    _atomic_write_pickle(orders_file, symbol_meta_orders)
+                    logger.debug(f"Meta model orders saved: {len(symbol_meta_orders)} orders")
+            
             # Feature columns'ı ayrı JSON olarak kaydet (prediction için gerekli)
             try:
                 cols_file = f"{self.model_directory}/{symbol}_feature_columns.json"
@@ -5861,6 +5946,18 @@ class EnhancedMLSystem:
                     symbol_scalers = joblib.load(scalers_file) or {}
                     self.scalers.update(symbol_scalers)
                     logger.debug(f"Meta-scalers loaded: {len(symbol_scalers)} scalers")
+            except Exception as e:
+                logger.debug(f"Meta-scaler load failed: {e}")
+            
+            # ✅ FIX: Load meta model orders (ensures prediction uses same order as training)
+            try:
+                orders_file = f"{self.model_directory}/{symbol}_meta_model_orders.pkl"
+                if os.path.exists(orders_file):
+                    symbol_meta_orders = joblib.load(orders_file) or {}
+                    if not hasattr(self, 'meta_model_orders'):
+                        self.meta_model_orders = {}
+                    self.meta_model_orders.update(symbol_meta_orders)
+                    logger.debug(f"Meta model orders loaded: {len(symbol_meta_orders)} orders")
             except Exception as e:
                 logger.debug(f"Meta-scaler load failed: {e}")
             
