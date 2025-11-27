@@ -1013,6 +1013,8 @@ class HybridPatternDetector:
             # VALIDATION PIPELINE: Multi-stage pattern validation
             # ==========================================
             patterns = []
+            # ✅ FIX: Initialize FinGPT patterns list before validation (will be populated later)
+            fingpt_patterns = []
             # ✅ Pattern Validation with standalone ADVANCED/YOLO support
             validation_enabled = str(os.getenv('ENABLE_PATTERN_VALIDATION', 'True')).lower() == 'true'
             
@@ -1030,6 +1032,9 @@ class HybridPatternDetector:
                     )
                     
                     patterns = validated_patterns
+                    # ✅ FIX: Add FinGPT patterns after validation (they don't go through validation pipeline)
+                    if fingpt_patterns:
+                        patterns.extend(fingpt_patterns)
                     
                     logger.info(
                         f"✅ Pattern Validation {symbol}: "
@@ -1044,9 +1049,15 @@ class HybridPatternDetector:
                     patterns = basic_patterns + advanced_patterns
                     for p in patterns:
                         p['confidence'] = p.get('confidence', 0.5) * 0.8
+                    # ✅ FIX: Add FinGPT patterns even in fallback
+                    if fingpt_patterns:
+                        patterns.extend(fingpt_patterns)
             else:
                 # Validation disabled: use all patterns without filtering
                 patterns = basic_patterns + advanced_patterns + yolo_patterns_raw
+                # ✅ FIX: Add FinGPT patterns even when validation is disabled
+                if fingpt_patterns:
+                    patterns.extend(fingpt_patterns)
                 logger.debug(f"Pattern validation disabled for {symbol}")
             
             # ML predictions: coordinated (Basic + Enhanced) in one place
@@ -1222,6 +1233,8 @@ class HybridPatternDetector:
                 logger.error(f"Coordinated ML prediction integration hatası {symbol}: {e}")
 
             # FinGPT sentiment (optional) - integrate as additional signal
+            # ✅ FIX: Store FinGPT patterns separately to add after validation
+            fingpt_patterns = []
             try:
                 # ✅ FIX: Use ConfigManager for consistent config access
                 # Check if FinGPT is enabled and available
@@ -1264,7 +1277,7 @@ class HybridPatternDetector:
                                     preview += "..."
                                 news_items_preview.append(preview)
                             
-                            patterns.append({
+                            fingpt_patterns.append({
                                 'pattern': 'FINGPT_SENTIMENT',
                                 'signal': sig,
                                 'confidence': max(0.3, min(0.9, conf)),
@@ -1828,6 +1841,12 @@ class HybridPatternDetector:
                 logger.debug(f"   Traceback:\n{traceback.format_exc()}")
                 ml_unified = {}
 
+            # ✅ FIX: Debug log to verify FinGPT and YOLO patterns are in the list before caching
+            fingpt_count = len([p for p in patterns if p.get('source') == 'FINGPT'])
+            yolo_count = len([p for p in patterns if 'YOLO' in str(p.get('source', ''))])
+            if fingpt_count > 0 or yolo_count > 0:
+                logger.debug(f"📊 {symbol}: Patterns before cache - FinGPT: {fingpt_count}, YOLO: {yolo_count}, Total: {len(patterns)}")
+            
             result = {
                 'symbol': symbol,
                 'status': 'success',

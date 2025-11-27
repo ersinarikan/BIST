@@ -11,7 +11,7 @@ import logging
 import os
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Any, Optional
-# from datetime import datetime  # unused
+from datetime import datetime  # ✅ FIX: Use for parsing pub_date
 from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
@@ -316,8 +316,39 @@ class AsyncRSSNewsProvider:
                     
                     # Extract publication date
                     date_elem = item.find('pubDate') or item.find('published')
+                    pub_date_str = ''
+                    pub_timestamp = None
                     if date_elem is not None and date_elem.text:
-                        pub_date = date_elem.text.strip()
+                        pub_date_str = date_elem.text.strip()
+                        # ✅ FIX: Parse pub_date to timestamp for lookback_hours filtering
+                        try:
+                            # Try parsing common RSS date formats
+                            from email.utils import parsedate_to_datetime
+                            try:
+                                pub_dt = parsedate_to_datetime(pub_date_str)
+                                pub_timestamp = pub_dt.timestamp()
+                            except Exception:
+                                # Fallback: try datetime parsing
+                                try:
+                                    pub_dt = datetime.fromisoformat(pub_date_str.replace('Z', '+00:00'))
+                                    pub_timestamp = pub_dt.timestamp()
+                                except Exception:
+                                    # If parsing fails, use current time (assume recent)
+                                    pub_timestamp = time.time()
+                        except Exception:
+                            # If all parsing fails, use current time (assume recent)
+                            pub_timestamp = time.time()
+                    else:
+                        # No pub_date: assume recent (use current time)
+                        pub_timestamp = time.time()
+                    
+                    # ✅ FIX: Filter by lookback_hours (24 hours by default)
+                    # Only include news items within the lookback window
+                    if pub_timestamp:
+                        age_hours = (time.time() - pub_timestamp) / 3600.0
+                        if age_hours > self.lookback_hours:
+                            # Skip news older than lookback_hours
+                            continue
                     
                     # Combine title and description
                     text = f"{title}. {description}".strip()
@@ -327,7 +358,8 @@ class AsyncRSSNewsProvider:
                             'text': text,
                             'title': title,
                             'description': description,
-                            'pub_date': pub_date,
+                            'pub_date': pub_date_str,
+                            'pub_timestamp': pub_timestamp,  # ✅ FIX: Store timestamp for filtering
                             'timestamp': time.time()
                         })
                 
@@ -368,6 +400,14 @@ class AsyncRSSNewsProvider:
                         relevant_news = []
                         
                         for news_item in all_news:
+                            # ✅ FIX: Filter by lookback_hours (24 hours) based on pub_timestamp
+                            pub_timestamp = news_item.get('pub_timestamp')
+                            if pub_timestamp:
+                                age_hours = (time.time() - pub_timestamp) / 3600.0
+                                if age_hours > self.lookback_hours:
+                                    # Skip news older than lookback_hours
+                                    continue
+                            
                             text = news_item.get('text', '')
                             if self._is_relevant_news(text, symbol_upper):
                                 relevant_news.append(text)
@@ -381,7 +421,15 @@ class AsyncRSSNewsProvider:
                             self._stats['cache_hits'] += 1
                             logger.debug(f"📰 Found {len(relevant_news)} specific news for {symbol}")
                         else:
-                            logger.debug(f"📰 No specific news found for {symbol}")
+                            # ✅ DEBUG: Log sample news items to understand why no match (INFO level for visibility)
+                            if all_news and len(all_news) > 0:
+                                sample_count = min(3, len(all_news))
+                                logger.info(f"📰 {symbol}: No specific news found. Cache has {len(all_news)} total news. Sample titles:")
+                                for i, news_item in enumerate(all_news[:sample_count], 1):
+                                    title = news_item.get('title', news_item.get('text', ''))[:100]
+                                    logger.info(f"   {i}. {title}...")
+                            else:
+                                logger.info(f"📰 {symbol}: No specific news found. Cache is empty.")
                         
                         return relevant_news[:self.max_items]
                 
@@ -425,6 +473,33 @@ class AsyncRSSNewsProvider:
         if any(pattern in text_upper for pattern in symbol_patterns):
             return True
         
+        # ✅ FIX: Check special cases BEFORE database lookup (works even without DB)
+        # Special cases for well-known companies (common abbreviations/names)
+        special_cases = {
+            'THYAO': ['THY', 'TÜRK HAVA YOLLARI', 'TURK HAVA YOLLARI'],
+            'GARAN': ['GARANTİ', 'GARANTI BANKASI', 'GARANTI BANK'],
+            'AKBNK': ['AKBANK'],
+            'ASELS': ['ASELSAN'],  # ✅ FIX: ASELSAN is the company name for ASELS
+            'BIMAS': ['BİM', 'BIM'],
+            'TUPRS': ['TÜPRAŞ', 'TUPRAS'],
+            'PETKM': ['PETKİM', 'PETKIM'],
+        }
+        if symbol_upper in special_cases:
+            special_names = special_cases[symbol_upper]
+            for special_name in special_names:
+                if special_name and len(special_name) > 2:
+                    # Check with flexible word boundaries
+                    special_patterns = [
+                        f" {special_name} ", f" {special_name},", f" {special_name}.",
+                        f" {special_name}:", f" {special_name}-", f"({special_name})",
+                        f"[{special_name}]", f"{special_name} ", f" {special_name}"
+                    ]
+                    if any(pattern in text_upper for pattern in special_patterns):
+                        return True
+                    # Also check if special_name is a substring (for compound words, minimum 4 chars)
+                    if len(special_name) > 4 and special_name in text_upper:
+                        return True
+        
         # ✅ FIX: Also check company name from database with flexible matching
         try:
             from flask import current_app
@@ -458,19 +533,6 @@ class AsyncRSSNewsProvider:
                         if len(words) >= 1:
                             # First word (e.g., "ASELSAN")
                             name_variants.append(words[0])
-                        
-                        # Special cases for well-known companies
-                        special_cases = {
-                            'THYAO': ['THY', 'TÜRK HAVA YOLLARI', 'TURK HAVA YOLLARI'],
-                            'GARAN': ['GARANTİ', 'GARANTI BANKASI', 'GARANTI BANK'],
-                            'AKBNK': ['AKBANK'],
-                            'ASELS': ['ASELSAN'],
-                            'BIMAS': ['BİM', 'BIM'],
-                            'TUPRS': ['TÜPRAŞ', 'TUPRAS'],
-                            'PETKM': ['PETKİM', 'PETKIM'],
-                        }
-                        if symbol_upper in special_cases:
-                            name_variants.extend(special_cases[symbol_upper])
                         
                         # Check all variants with flexible word boundaries
                         for variant in name_variants:

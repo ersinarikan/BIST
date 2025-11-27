@@ -1021,9 +1021,13 @@ def main():
     total_days_list = [_estimate_days(s) for s in symbols]
     min_days = min(total_days_list) if total_days_list else 0
     
-    # ✅ UNIFORM 1500 TRIALS FOR ALL HORIZONS (USER REQUEST)
+    # ✅ UNIFORM TRIALS FOR ALL HORIZONS (USER REQUEST)
     # All horizons get same quality treatment
-    target_trials = 1500
+    # ✅ CRITICAL FIX: Read target_trials from environment variable (default: 1500)
+    try:
+        target_trials = int(os.getenv('HPO_TRIALS', '1500'))
+    except Exception:
+        target_trials = 1500  # Fallback to default
     target_timeout = 72 * 3600  # 72h for all
     
     # Data quality gating: If not enough data, reduce to 1000 trials

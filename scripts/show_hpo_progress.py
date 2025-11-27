@@ -25,7 +25,11 @@ STATE_FILE = Path('/opt/bist-pattern/results/continuous_hpo_state.json')
 RESULTS_DIR = Path('/opt/bist-pattern/results')
 # Canonical study directory (single source of truth)
 HPO_STUDIES_DIR = Path('/opt/bist-pattern/hpo_studies')
-TARGET_TRIALS = 1500  # PRODUCTION default
+# ✅ CRITICAL FIX: Read TARGET_TRIALS from environment variable (default: 1500)
+try:
+    TARGET_TRIALS = int(os.getenv('HPO_TRIALS', '1500'))
+except Exception:
+    TARGET_TRIALS = 1500  # PRODUCTION default
 
 
 def load_state() -> Dict:
@@ -403,9 +407,12 @@ def get_completed_tasks() -> Dict[str, Dict]:
                             if task_key in completed:
                                 continue
                             
-                            # Check if this study has 1500 complete trials (HPO finished)
+                            # Check if this study has enough complete trials (HPO finished)
                             trial_info = get_trial_info_from_db(db_file)
-                            if trial_info and trial_info.get('complete_trials', 0) >= 1490:  # Allow some margin
+                            # ✅ CRITICAL: Only detect as completed if HPO is truly completed (TARGET_TRIALS - 10 trials)
+                            min_trials_for_recovery = max(1, TARGET_TRIALS - 10)
+                            # We need TARGET_TRIALS trials to find best parameters - partial progress is not enough
+                            if trial_info and trial_info.get('complete_trials', 0) >= min_trials_for_recovery:  # HPO completed
                                 # This HPO completed but state file doesn't show it as completed
                                 # Add it to completed list with info from study file
                                 if task_key not in completed:
@@ -513,6 +520,51 @@ def calculate_statistics(completed: Dict[str, Dict]) -> Dict:
     return stats
 
 
+def get_all_tasks_from_state() -> Dict[str, Dict]:
+    """Get all tasks from state file, grouped by status"""
+    state = load_state()
+    current_cycle = state.get('cycle', 1)
+    tasks = state.get('state', {})
+    
+    all_tasks = {
+        'pending': {},
+        'failed': {},
+        'completed': {},
+        'training': {},
+        'skipped': {}
+    }
+    
+    for key, task in tasks.items():
+        if not isinstance(task, dict):
+            continue
+        
+        task_cycle = task.get('cycle', 0)
+        if task_cycle != current_cycle:
+            continue
+        
+        status = task.get('status', 'unknown')
+        symbol = task.get('symbol', '')
+        horizon = task.get('horizon', 0)
+        
+        task_info = {
+            'symbol': symbol,
+            'horizon': horizon,
+            'status': status,
+            'error': task.get('error'),
+            'hpo_completed_at': task.get('hpo_completed_at'),
+            'training_completed_at': task.get('training_completed_at'),
+            'retry_count': task.get('retry_count', 0)
+        }
+        
+        if status in all_tasks:
+            all_tasks[status][key] = task_info
+        else:
+            # Unknown status - add to pending
+            all_tasks['pending'][key] = task_info
+    
+    return all_tasks
+
+
 def main():
     """Main function"""
     print("=" * 100)
@@ -529,6 +581,9 @@ def main():
     # Get active HPO processes
     active_hpo = get_active_hpo_processes()
     
+    # Get all tasks from state
+    all_tasks = get_all_tasks_from_state()
+    
     # Get training status
     training = get_training_status()
     
@@ -538,11 +593,43 @@ def main():
     # Calculate statistics
     stats = calculate_statistics(completed)
     
+    # ✅ FIX: Also check study files for running trials (HPO might be running but process not in ps)
+    # This handles cases where HPO is running but process name doesn't match or process died
+    study_based_active = {}
+    state = load_state()
+    current_cycle = state.get('cycle', 1)
+    
+    # Check all tasks from state file for study files with running trials
+    all_tasks = get_all_tasks_from_state()
+    for status_group in ['pending', 'failed', 'hpo_in_progress']:
+        tasks = all_tasks.get(status_group, {})
+        for key, task in tasks.items():
+            if key in active_hpo:  # Already in active_hpo, skip
+                continue
+            
+            symbol = task['symbol']
+            horizon = task['horizon']
+            db_file = find_study_db(symbol, horizon, cycle=current_cycle)
+            if db_file and db_file.exists():
+                trial_info = get_trial_info_from_db(db_file)
+                if trial_info and trial_info.get('running_trials', 0) > 0:
+                    # HPO is running (has running trials in study file)
+                    study_based_active[key] = {
+                        'symbol': symbol,
+                        'horizon': horizon,
+                        'target_trials': TARGET_TRIALS,
+                        'pid': None,  # Process not found in ps
+                        'from_study_file': True  # Mark as detected from study file
+                    }
+    
+    # Merge active_hpo and study_based_active
+    all_active_hpo = {**active_hpo, **study_based_active}
+    
     # Display active HPOs
-    if active_hpo:
-        print("🔬 HPO YAPILIYOR:")
+    if all_active_hpo:
+        print("🔬 HPO YAPILIYOR (Aktif Process'ler):")
         print("-" * 100)
-        for key, info in sorted(active_hpo.items()):
+        for key, info in sorted(all_active_hpo.items()):
             symbol = info['symbol']
             horizon = info['horizon']
             target_trials = info['target_trials']
@@ -633,7 +720,115 @@ def main():
                 print(f"   {symbol}_{horizon}d: Study dosyası bulunamadı")
                 print()
     else:
-        print("🔬 HPO YAPILIYOR: Yok")
+        print("🔬 HPO YAPILIYOR (Aktif Process'ler): Yok")
+        print()
+    
+    # Display pending tasks (with study file info if available)
+    # ✅ FIX: Exclude tasks that are already in all_active_hpo (they're already shown above)
+    pending_tasks = all_tasks.get('pending', {})
+    # Remove tasks that are already active
+    pending_tasks_filtered = {k: v for k, v in pending_tasks.items() if k not in all_active_hpo}
+    
+    if pending_tasks_filtered:
+        print("⏳ HPO BEKLEYEN (Pending - Process Yok):")
+        print("-" * 100)
+        state = load_state()
+        current_cycle = state.get('cycle', 1)
+        
+        for key in sorted(pending_tasks_filtered.keys()):
+            task = pending_tasks_filtered[key]
+            symbol = task['symbol']
+            horizon = task['horizon']
+            
+            # Check if study file exists (HPO might have started but process died)
+            db_file = find_study_db(symbol, horizon, cycle=current_cycle)
+            if db_file and db_file.exists():
+                trial_info = get_trial_info_from_db(db_file)
+                if trial_info:
+                    total = trial_info['total_trials']
+                    complete = trial_info['complete_trials']
+                    running = trial_info['running_trials']
+                    best_dirhit = trial_info.get('best_dirhit')
+                    
+                    status_line = f"   {symbol}_{horizon}d: Trial {total}/{TARGET_TRIALS}"
+                    if running > 0:
+                        status_line += f" (Running: {running}, Complete: {complete})"
+                    else:
+                        status_line += f" (Complete: {complete})"
+                    print(status_line)
+                    
+                    if best_dirhit is not None:
+                        print(f"      🏆 En İyi DirHit: {best_dirhit:.2f}%")
+                    print()
+                else:
+                    print(f"   {symbol}_{horizon}d: Pending (study file var ama okunamadı)")
+                    print()
+            else:
+                print(f"   {symbol}_{horizon}d: Pending (henüz başlamadı)")
+                print()
+    else:
+        print("⏳ HPO BEKLEYEN (Pending): Yok")
+        print()
+    
+    # Display failed tasks
+    # ✅ FIX: Exclude tasks that are already in all_active_hpo (they're running, not failed)
+    failed_tasks = all_tasks.get('failed', {})
+    failed_tasks_filtered = {k: v for k, v in failed_tasks.items() if k not in all_active_hpo}
+    
+    if failed_tasks_filtered:
+        print("❌ HPO BAŞARISIZ (Failed):")
+        print("-" * 100)
+        state = load_state()
+        current_cycle = state.get('cycle', 1)
+        
+        for key in sorted(failed_tasks_filtered.keys()):
+            task = failed_tasks_filtered[key]
+            symbol = task['symbol']
+            horizon = task['horizon']
+            error = task.get('error', 'Unknown error')
+            retry_count = task.get('retry_count', 0)
+            
+            # Check if study file exists (might have partial progress)
+            db_file = find_study_db(symbol, horizon, cycle=current_cycle)
+            if db_file and db_file.exists():
+                trial_info = get_trial_info_from_db(db_file)
+                if trial_info:
+                    total = trial_info['total_trials']
+                    complete = trial_info['complete_trials']
+                    best_dirhit = trial_info.get('best_dirhit')
+                    
+                    print(f"   {symbol}_{horizon}d: Trial {total}/1500 (Complete: {complete})")
+                    if best_dirhit is not None:
+                        print(f"      🏆 En İyi DirHit: {best_dirhit:.2f}%")
+                    print(f"      ❌ Hata: {error[:80]}")
+                    if retry_count > 0:
+                        print(f"      🔄 Retry: {retry_count}/10")
+                    print()
+                else:
+                    print(f"   {symbol}_{horizon}d: Failed - {error[:80]}")
+                    if retry_count > 0:
+                        print(f"      🔄 Retry: {retry_count}/10")
+                    print()
+            else:
+                print(f"   {symbol}_{horizon}d: Failed - {error[:80]}")
+                if retry_count > 0:
+                    print(f"      🔄 Retry: {retry_count}/3")
+                print()
+    else:
+        print("❌ HPO BAŞARISIZ (Failed): Yok")
+        print()
+    
+    # Display skipped tasks
+    skipped_tasks = all_tasks.get('skipped', {})
+    if skipped_tasks:
+        print("⏭️  HPO ATLANAN (Skipped):")
+        print("-" * 100)
+        for key in sorted(skipped_tasks.keys()):
+            task = skipped_tasks[key]
+            symbol = task['symbol']
+            horizon = task['horizon']
+            error = task.get('error', 'Unknown reason')
+            print(f"   {symbol}_{horizon}d: {error[:80]}")
         print()
     
     # Display training

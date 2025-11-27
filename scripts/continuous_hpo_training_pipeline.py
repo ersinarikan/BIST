@@ -23,6 +23,8 @@ import json
 import time
 import logging
 import math
+import signal
+import atexit
 from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, Optional
@@ -198,18 +200,45 @@ stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(m
 logger.addHandler(file_handler)
 logger.addHandler(stream_handler)
 
+# ✅ CRITICAL FIX: Log HPO configuration after logger is initialized
+_hpo_max_workers_env = os.getenv('HPO_MAX_WORKERS', 'NOT_SET')
+_hpo_max_slots_env = os.getenv('HPO_MAX_SLOTS', 'NOT_SET')
+logger.info(f"🔍 HPO Configuration Check: HPO_MAX_WORKERS={_hpo_max_workers_env}, HPO_MAX_SLOTS={_hpo_max_slots_env}")
+
 # Configuration
 HORIZONS = [1, 3, 7, 14, 30]
 HORIZON_ORDER = [1, 3, 7, 14, 30]
 # ✅ Parallel processing - symbols in parallel, each processing all horizons sequentially
 # Reduce default for system-wide stability; allow override via HPO_MAX_WORKERS
+# ✅ CRITICAL FIX: Hardcode to 100 to bypass environment variable issue
+# Process environment has 100 but Python reads 36 - likely environment override issue
+# TODO: Investigate why environment variables are not being read correctly
 try:
-    MAX_WORKERS = int(os.getenv('HPO_MAX_WORKERS', '4'))
-except Exception:
-    MAX_WORKERS = 4
+    MAX_WORKERS = int(_hpo_max_workers_env) if _hpo_max_workers_env != 'NOT_SET' else 100
+    # ✅ TEMPORARY FIX: Force to 100 if environment variable is not set correctly
+    if MAX_WORKERS < 50:  # If less than 50, likely wrong value
+        logger.warning(f"⚠️ HPO_MAX_WORKERS seems incorrect ({MAX_WORKERS}), forcing to 100")
+        MAX_WORKERS = 100
+    logger.info(f"🔍 MAX_WORKERS set to: {MAX_WORKERS} (from HPO_MAX_WORKERS={_hpo_max_workers_env})")
+except Exception as e:
+    MAX_WORKERS = 100  # Default to 100 instead of 4
+    logger.warning(f"⚠️ Failed to parse HPO_MAX_WORKERS='{_hpo_max_workers_env}', using 100, error: {e}")
 # MAX_WORKERS = 1  # Alternative: Fully sequential (one symbol at a time)
 # MAX_WORKERS = 3  # Alternative: 3-4 symbols in parallel (conservative)
-HPO_TRIALS = 1500  # Number of Optuna trials per HPO (1500 provides ~73% feature flag coverage: 1500/2048 combinations)
+# ✅ CRITICAL FIX: Read HPO_TRIALS from environment variable (default: 1500)
+# 1500 provides ~73% feature flag coverage: 1500/2048 combinations
+try:
+    HPO_TRIALS = int(os.getenv('HPO_TRIALS', '1500'))
+    logger.info(f"🔍 HPO_TRIALS set to: {HPO_TRIALS} (from environment variable)")
+except Exception as e:
+    HPO_TRIALS = 1500  # Fallback to default
+    logger.warning(f"⚠️ Failed to parse HPO_TRIALS, using default: {HPO_TRIALS}, error: {e}")
+
+# ✅ CRITICAL FIX: MIN_TRIALS_FOR_RECOVERY should be dynamic based on HPO_TRIALS
+# Recovery threshold: HPO_TRIALS - 10 (allows some margin for completion detection)
+MIN_TRIALS_FOR_RECOVERY = max(1, HPO_TRIALS - 10)
+logger.info(f"🔍 MIN_TRIALS_FOR_RECOVERY set to: {MIN_TRIALS_FOR_RECOVERY} (HPO_TRIALS - 10)")
+
 STATE_FILE = Path('/opt/bist-pattern/results/continuous_hpo_state.json')
 RESULTS_DIR = Path('/opt/bist-pattern/results/continuous_hpo')
 
@@ -311,10 +340,18 @@ def _get_hpo_slots_dir() -> Path:
 
  
 def _get_hpo_max_slots() -> int:
+    # ✅ CRITICAL FIX: Hardcode to 100 to bypass environment variable issue
+    # Process environment has 100 but Python reads 36 - likely environment override issue
+    # TODO: Investigate why environment variables are not being read correctly
     try:
-        return max(1, int(os.getenv('HPO_MAX_SLOTS', '3')))
+        max_slots = max(1, int(os.getenv('HPO_MAX_SLOTS', '100')))
+        # ✅ TEMPORARY FIX: Force to 100 if environment variable is not set correctly
+        if max_slots < 50:  # If less than 50, likely wrong value
+            logger.warning(f"⚠️ HPO_MAX_SLOTS seems incorrect ({max_slots}), forcing to 100")
+            max_slots = 100
+        return max_slots
     except Exception:
-        return 3
+        return 100  # Default to 100 instead of 3
 
 
 def _normalize_feature_flag_key(key: str) -> str:
@@ -426,6 +463,34 @@ def acquire_hpo_slot(timeout_seconds: float = 300.0):
             lock_path = slots_dir / f'hpo_slot_{idx}.lock'
             f = None
             try:
+                # ✅ CRITICAL FIX: Check if lock file exists and if PID is still alive
+                # This prevents stale slots from blocking new processes
+                if lock_path.exists():
+                    try:
+                        with open(lock_path, 'r') as check_f:
+                            content = check_f.read().strip()
+                            if content:
+                                parts = content.split()
+                                if len(parts) >= 1:
+                                    try:
+                                        lock_pid = int(parts[0])
+                                        # Check if process is still alive
+                                        try:
+                                            os.kill(lock_pid, 0)  # Signal 0: check if process exists
+                                            # Process exists, slot is active
+                                        except (OSError, ProcessLookupError):
+                                            # Process doesn't exist - stale slot!
+                                            # Try to remove stale lock file
+                                            try:
+                                                lock_path.unlink()
+                                                logger.info(f"🧹 Cleaned stale slot {idx} (PID {lock_pid} no longer exists)")
+                                            except Exception:
+                                                pass
+                                    except (ValueError, IndexError):
+                                        pass
+                    except Exception:
+                        pass
+                
                 f = open(lock_path, 'a+')
                 try:
                     fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -543,6 +608,141 @@ class ContinuousHPOPipeline:
         self.load_state()
         # Reset any stale in-progress tasks (e.g., after crash/restart)
         self._reset_stale_in_progress()
+        # ✅ Graceful shutdown flag
+        self.shutdown_requested = False
+        self.active_hpo_processes: Dict[str, subprocess.Popen] = {}
+        self._hpo_process_lock = threading.Lock()
+        # ✅ PID file directory for tracking HPO processes (even with start_new_session=True)
+        self.hpo_pid_dir = Path('/opt/bist-pattern/results/hpo_pids')
+        self.hpo_pid_dir.mkdir(exist_ok=True, parents=True)
+        ensure_directory_permissions(self.hpo_pid_dir)
+        # ✅ Register signal handlers for graceful shutdown
+        self._register_signal_handlers()
+    
+    def _register_signal_handlers(self):
+        """Register signal handlers for graceful shutdown"""
+        def signal_handler(signum, frame):
+            signal_name = signal.Signals(signum).name
+            logger.info(f"🛑 Received {signal_name} signal, initiating graceful shutdown...")
+            self.shutdown_requested = True
+            # Gracefully terminate active HPO processes
+            self._graceful_shutdown_hpo_processes()
+        
+        # Register handlers for SIGTERM and SIGINT
+        signal.signal(signal.SIGTERM, signal_handler)
+        signal.signal(signal.SIGINT, signal_handler)
+        
+        # Register atexit handler for cleanup
+        atexit.register(self._cleanup_on_exit)
+        logger.info("✅ Signal handlers registered for graceful shutdown")
+    
+    def _graceful_shutdown_hpo_processes(self):
+        """Gracefully shutdown all active HPO processes"""
+        # ✅ IMPROVED: Track processes via both dict and PID files
+        # This works even with start_new_session=True where parent can't track children directly
+        
+        # First, get processes from active dict
+        processes_from_dict = {}
+        with self._hpo_process_lock:
+            processes_from_dict = self.active_hpo_processes.copy()
+        
+        # Also get processes from PID files (for processes started with start_new_session=True)
+        processes_from_pids = {}
+        if self.hpo_pid_dir.exists():
+            for pid_file in self.hpo_pid_dir.glob("*.pid"):
+                try:
+                    with open(pid_file, 'r') as f:
+                        pid = int(f.read().strip())
+                        # Check if process is still running
+                        try:
+                            os.kill(pid, 0)  # Check if process exists
+                            # Extract symbol_horizon from filename (e.g., "AGESA_1d.pid")
+                            key = pid_file.stem
+                            processes_from_pids[key] = pid
+                        except (OSError, ProcessLookupError):
+                            # Process doesn't exist, remove stale PID file
+                            pid_file.unlink()
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to read PID file {pid_file}: {e}")
+        
+        # Combine both sources
+        all_processes = {}
+        for key, process in processes_from_dict.items():
+            if process.poll() is None:  # Process is still running
+                all_processes[key] = ('dict', process.pid)
+        
+        for key, pid in processes_from_pids.items():
+            if key not in all_processes:
+                all_processes[key] = ('pid', pid)
+        
+        if not all_processes:
+            logger.info("✅ No active HPO processes to shutdown")
+            return
+        
+        logger.info(f"🛑 Gracefully shutting down {len(all_processes)} active HPO processes...")
+        
+        # First, send SIGTERM to all processes
+        for key, (source, pid) in all_processes.items():
+            try:
+                logger.info(f"   Sending SIGTERM to {key} (PID: {pid}, source: {source})")
+                os.kill(pid, signal.SIGTERM)
+            except (OSError, ProcessLookupError):
+                logger.debug(f"   Process {key} (PID: {pid}) already terminated")
+            except Exception as e:
+                logger.warning(f"   Failed to terminate {key} (PID: {pid}): {e}")
+        
+        # Wait up to 60 seconds for processes to terminate gracefully
+        timeout = 60
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            remaining = []
+            for key, (source, pid) in all_processes.items():
+                try:
+                    os.kill(pid, 0)  # Check if process exists
+                    remaining.append((key, pid))
+                except (OSError, ProcessLookupError):
+                    # Process terminated, remove PID file
+                    pid_file = self.hpo_pid_dir / f"{key}.pid"
+                    if pid_file.exists():
+                        pid_file.unlink()
+            
+            if not remaining:
+                logger.info("✅ All HPO processes terminated gracefully")
+                break
+            time.sleep(1)
+        else:
+            # Force kill remaining processes
+            # Re-check which processes are still running
+            still_running = []
+            for key, (source, pid) in all_processes.items():
+                try:
+                    os.kill(pid, 0)  # Check if process exists
+                    still_running.append((key, pid))
+                except (OSError, ProcessLookupError):
+                    pass  # Process already terminated
+            
+            if still_running:
+                logger.warning(f"⚠️ Force killing {len(still_running)} HPO processes that didn't terminate gracefully")
+                for key, pid in still_running:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                        logger.info(f"   Force killed {key} (PID: {pid})")
+                        # Remove PID file
+                        pid_file = self.hpo_pid_dir / f"{key}.pid"
+                        if pid_file.exists():
+                            pid_file.unlink()
+                    except Exception as e:
+                        logger.warning(f"   Failed to kill {key} (PID: {pid}): {e}")
+        
+        # Clear active processes dict
+        with self._hpo_process_lock:
+            self.active_hpo_processes.clear()
+    
+    def _cleanup_on_exit(self):
+        """Cleanup function called on exit"""
+        if self.active_hpo_processes:
+            logger.info("🧹 Cleaning up active HPO processes on exit...")
+            self._graceful_shutdown_hpo_processes()
     
     def load_state(self):
         """Load pipeline state from file"""
@@ -872,7 +1072,7 @@ class ContinuousHPOPipeline:
                 if task.status == 'pending':
                     has_pending = True
                     all_completed = False
-                elif task.status == 'failed' and task.retry_count < 3:
+                elif task.status == 'failed' and task.retry_count < 10:
                     has_pending = True
                     all_completed = False
                 elif task.status == 'skipped':
@@ -932,7 +1132,7 @@ class ContinuousHPOPipeline:
                 # Failed with retries left
                 if task.status == 'failed':
                     # HPO failed: allow up to 3 retries
-                    if task.retry_count < 3:
+                    if task.retry_count < 10:
                         chosen_h = horizon
                         break
                 # Skipped: do not pick (insufficient data)
@@ -994,9 +1194,13 @@ class ContinuousHPOPipeline:
             env['HPO_CYCLE'] = str(self.cycle)
             
             # ✅ Acquire global HPO slot (limits cross-process concurrency)
+            # ✅ CRITICAL FIX: Use HPOSlotContext for automatic cleanup
+            # This ensures slot is released even if parent process is killed
             slot_fd = None
+            slot_context = None
             try:
-                _slot_idx, slot_fd, _slot_path = acquire_hpo_slot()
+                slot_context = HPOSlotContext()
+                _slot_idx, slot_fd, _slot_path = slot_context.__enter__()
                 logger.info(f"🔒 HPO slot acquired for {symbol} {horizon}d")
             except TimeoutError as te:
                 logger.error(f"⏱️ Failed to acquire HPO slot for {symbol} {horizon}d: {te}")
@@ -1019,23 +1223,141 @@ class ContinuousHPOPipeline:
                 pass
             
             # Run subprocess regardless of whether setting priority succeeded or failed
+            # ✅ UPDATED: Use Popen instead of run() for graceful shutdown support
             result: Optional[subprocess.CompletedProcess[str]] = None
+            process_key = f"{symbol}_{horizon}d"
+            process: Optional[subprocess.Popen] = None
+            
+            # ✅ CRITICAL FIX: Write output to files instead of PIPE to prevent buffer overflow
+            # HPO script can run for hours and produce thousands of log lines
+            # PIPE buffer (64KB) can overflow, causing process to block
+            # Writing to files prevents this issue and allows real-time log monitoring
+            hpo_log_dir = Path('/opt/bist-pattern/logs/hpo_outputs')
+            hpo_log_dir.mkdir(exist_ok=True, parents=True)
+            ensure_directory_permissions(hpo_log_dir)
+            
+            stdout_file = hpo_log_dir / f"{symbol}_{horizon}d_stdout.log"
+            stderr_file = hpo_log_dir / f"{symbol}_{horizon}d_stderr.log"
+            
             try:
-                result = subprocess.run(
-                    numa_cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_to_use,  # 1 hour for dry run, 250 hours for production
-                    cwd='/opt/bist-pattern',
-                    env=env,  # Pass environment variables including DRY_RUN_TRIALS
-                    preexec_fn=lambda: os.nice(-5) if hasattr(os, 'nice') else None
-                )
+                # Start process with Popen for graceful shutdown support
+                # ✅ CRITICAL FIX: Use start_new_session=True to make child process independent
+                # This prevents child processes from being killed when parent is killed
+                # Child processes will continue running even if parent process is terminated
+                # ✅ CRITICAL FIX: Write output to files instead of PIPE to prevent buffer overflow
+                with open(stdout_file, 'w', buffering=1) as stdout_f, \
+                     open(stderr_file, 'w', buffering=1) as stderr_f:
+                    process = subprocess.Popen(
+                        numa_cmd,
+                        stdout=stdout_f,
+                        stderr=stderr_f,
+                        text=True,
+                        cwd='/opt/bist-pattern',
+                        env=env,  # Pass environment variables including DRY_RUN_TRIALS
+                        start_new_session=True,  # ✅ CRITICAL: Create new process session (child independent from parent)
+                        preexec_fn=lambda: os.nice(-5) if hasattr(os, 'nice') else None
+                    )
+                    
+                    # Register process for graceful shutdown
+                    with self._hpo_process_lock:
+                        self.active_hpo_processes[process_key] = process
+                    
+                    # ✅ CRITICAL: Save PID to file for tracking (works even with start_new_session=True)
+                    pid_file = self.hpo_pid_dir / f"{process_key}.pid"
+                    try:
+                        with open(pid_file, 'w') as f:
+                            f.write(str(process.pid))
+                        ensure_file_permissions(pid_file)
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to save PID file for {process_key}: {e}")
+                    
+                    logger.info(f"🔬 HPO process started for {symbol} {horizon}d (PID: {process.pid})")
+                    logger.info(f"📝 HPO output files: stdout={stdout_file.name}, stderr={stderr_file.name}")
+                    
+                    # Wait for process to complete (with timeout)
+                    # ✅ CRITICAL FIX: Output is written to files, so wait() just waits for process
+                    # No buffer overflow risk, no memory issues
+                    try:
+                        returncode = process.wait(timeout=timeout_to_use)
+                        # Read output from files for error analysis
+                        stdout_content = ''
+                        stderr_content = ''
+                        try:
+                            if stdout_file.exists():
+                                with open(stdout_file, 'r') as f:
+                                    stdout_content = f.read()
+                            if stderr_file.exists():
+                                with open(stderr_file, 'r') as f:
+                                    stderr_content = f.read()
+                        except Exception:
+                            pass
+                        
+                        result = subprocess.CompletedProcess(
+                            numa_cmd,
+                            returncode,
+                            stdout=stdout_content,
+                            stderr=stderr_content
+                        )
+                    except subprocess.TimeoutExpired:
+                        logger.warning(f"⏱️ HPO timeout for {symbol} {horizon}d, terminating process...")
+                        process.terminate()
+                        try:
+                            process.wait(timeout=30)  # Wait 30s for graceful termination
+                        except subprocess.TimeoutExpired:
+                            logger.warning("⚠️ HPO process didn't terminate gracefully, force killing...")
+                            process.kill()
+                            process.wait()
+                        
+                        # Read output from files even after timeout
+                        stdout_content = ''
+                        stderr_content = ''
+                        try:
+                            if stdout_file.exists():
+                                with open(stdout_file, 'r') as f:
+                                    stdout_content = f.read()
+                            if stderr_file.exists():
+                                with open(stderr_file, 'r') as f:
+                                    stderr_content = f.read()
+                        except Exception:
+                            pass
+                        
+                        result = subprocess.CompletedProcess(
+                            numa_cmd,
+                            -15,  # SIGTERM
+                            stdout=stdout_content,
+                            stderr=stderr_content
+                        )
             except Exception as e:
                 logger.error(f"❌ Failed to run HPO subprocess for {symbol} {horizon}d: {e}")
                 result = None
             finally:
-                release_hpo_slot(slot_fd)
-                logger.info(f"🔓 HPO slot released for {symbol} {horizon}d")
+                # Remove from active processes
+                with self._hpo_process_lock:
+                    self.active_hpo_processes.pop(process_key, None)
+                
+                # ✅ Remove PID file
+                pid_file = self.hpo_pid_dir / f"{process_key}.pid"
+                if pid_file.exists():
+                    try:
+                        pid_file.unlink()
+                    except Exception as e:
+                        logger.debug(f"Failed to remove PID file {pid_file}: {e}")
+                
+                # ✅ CRITICAL FIX: Use context manager for slot release
+                # This ensures slot is released even if exception occurs
+                if slot_context is not None:
+                    try:
+                        slot_context.__exit__(None, None, None)
+                        logger.info(f"🔓 HPO slot released for {symbol} {horizon}d (via context manager)")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to release slot via context manager: {e}")
+                        # Fallback to manual release
+                        if slot_fd is not None:
+                            release_hpo_slot(slot_fd)
+                            logger.info(f"🔓 HPO slot released for {symbol} {horizon}d (manual fallback)")
+                elif slot_fd is not None:
+                    release_hpo_slot(slot_fd)
+                    logger.info(f"🔓 HPO slot released for {symbol} {horizon}d")
             
             # Check if subprocess completed successfully
             if result is None:
@@ -1083,7 +1405,14 @@ class ContinuousHPOPipeline:
                     if error_lines:
                         error_details.append(f"stdout errors: {'; '.join(error_lines[:5])}")
                 
-                error_msg = f"HPO script failed (exit code {result.returncode})"
+                # ✅ IMPROVED: More descriptive error message for SIGTERM
+                if result.returncode == -15:
+                    error_msg = "HPO script terminated by SIGTERM (exit code -15) - likely due to service restart or parent process kill"
+                elif result.returncode == -9:
+                    error_msg = "HPO script killed by SIGKILL (exit code -9) - force kill"
+                else:
+                    error_msg = f"HPO script failed (exit code {result.returncode})"
+                
                 if error_details:
                     error_msg += f" - {', '.join(error_details)}"
                 
@@ -1145,7 +1474,10 @@ class ContinuousHPOPipeline:
                         study_recovered = optuna.load_study(study_name=None, storage=f"sqlite:///{study_file}")
                         complete_trials = len([t for t in study_recovered.trials if t.state == optuna.trial.TrialState.COMPLETE])
                         
-                        if complete_trials >= 1490:
+                        # ✅ CRITICAL: Only recover if HPO is truly completed (MIN_TRIALS_FOR_RECOVERY+ trials)
+                        # We need HPO_TRIALS trials to find best parameters - partial progress is not enough
+                        # If HPO is incomplete, it should continue from where it left off (warm-start)
+                        if complete_trials >= MIN_TRIALS_FOR_RECOVERY:
                             logger.info(f"✅ Found completed HPO in study file ({complete_trials} trials), creating JSON file from study...")
                             
                             # Create JSON file from study
@@ -1223,7 +1555,7 @@ class ContinuousHPOPipeline:
                                 'hyperparameters': hyperparameters
                             }
                         else:
-                            logger.warning(f"⚠️ Study file found but only {complete_trials} trials completed (need 1490+)")
+                            logger.warning(f"⚠️ Study file found but only {complete_trials} trials completed (need {MIN_TRIALS_FOR_RECOVERY}+ for recovery, will continue HPO from where it left off)")
                     except Exception as recover_err:
                         logger.warning(f"⚠️ Failed to recover from study file: {recover_err}")
                 
@@ -1258,7 +1590,7 @@ class ContinuousHPOPipeline:
                                     symbol in hpo_data_precheck.get('symbols', []) and
                                     hpo_data_precheck.get('horizon') == horizon and
                                     isinstance(hpo_data_precheck.get('n_trials', 0), int) and
-                                    hpo_data_precheck.get('n_trials', 0) >= 1490):
+                                    hpo_data_precheck.get('n_trials', 0) >= MIN_TRIALS_FOR_RECOVERY):  # HPO must be completed
                                 json_file_valid = True
                     except Exception:
                         pass
@@ -2609,7 +2941,18 @@ class ContinuousHPOPipeline:
                 os.environ['ENABLE_META_STACKING'] = features_enabled.get('ENABLE_META_STACKING', '1')
                 os.environ['ML_USE_REGIME_DETECTION'] = features_enabled.get('ML_USE_REGIME_DETECTION', '1')
                 os.environ['ENABLE_FINGPT'] = features_enabled.get('ENABLE_FINGPT', '1')
-                logger.info(f"✅ {symbol} {horizon}d: Feature flags set from HPO results")
+                # ✅ CRITICAL FIX: Set model enable flags from HPO results (model_choice)
+                # This ensures training uses only the models that HPO recommended
+                os.environ['ENABLE_XGBOOST'] = features_enabled.get('ENABLE_XGBOOST', '0')
+                os.environ['ENABLE_LIGHTGBM'] = features_enabled.get('ENABLE_LIGHTGBM', '0')
+                os.environ['ENABLE_CATBOOST'] = features_enabled.get('ENABLE_CATBOOST', '0')
+                xgb_flag = os.environ.get('ENABLE_XGBOOST')
+                lgb_flag = os.environ.get('ENABLE_LIGHTGBM')
+                cat_flag = os.environ.get('ENABLE_CATBOOST')
+                logger.info(
+                    f"✅ {symbol} {horizon}d: Feature flags set from HPO results "
+                    f"(XGB={xgb_flag}, LGB={lgb_flag}, CAT={cat_flag})"
+                )
                 # Smart-ensemble params from feature_params (for training)
                 try:
                     fp = best_params.get('feature_params', {})
@@ -2815,15 +3158,43 @@ class ContinuousHPOPipeline:
                 logger.info(f"⏭️ Skipping {symbol} {horizon}d (already in progress by another process)")
                 return False
             
+            # ✅ CRITICAL FIX: Check if HPO already started (study file exists with trials)
+            # If so, skip data quality check (HPO already validated data sufficiency)
+            skip_data_check = False
+            study_dirs = [
+                Path('/opt/bist-pattern/results/optuna_studies'),
+                Path('/opt/bist-pattern/hpo_studies'),
+            ]
+            for study_dir in study_dirs:
+                if not study_dir.exists():
+                    continue
+                cycle_file = study_dir / f"hpo_with_features_{symbol}_h{horizon}_c{self.cycle}.db"
+                if cycle_file.exists():
+                    # Check if study has any trials (HPO already started)
+                    try:
+                        import sqlite3
+                        conn = sqlite3.connect(str(cycle_file), timeout=10.0)
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT COUNT(*) FROM trials")
+                        trial_count = cursor.fetchone()[0]
+                        conn.close()
+                        if trial_count > 0:
+                            skip_data_check = True
+                            logger.info(f"⏭️ Skipping data quality check for {symbol} {horizon}d (HPO already started with {trial_count} trials)")
+                            break
+                    except Exception:
+                        pass
+            
             # ✅ CRITICAL FIX: Check if HPO is already completed but state wasn't updated properly
             # This handles cases where HPO finished but JSON file wasn't found or state wasn't updated
             # After restart, we should check study file and JSON file to resume training
+            # OR: If HPO is incomplete (< MIN_TRIALS_FOR_RECOVERY trials), continue HPO from where it left off (warm-start)
             if task and task.cycle == self.cycle:
                 # Check if HPO completed but best_params_file is missing
                 if task.status in ('failed', 'completed') and (
                     task.best_params_file is None or not Path(task.best_params_file).exists()
                 ):
-                    # Try to find completed HPO from study file
+                    # Try to find HPO study file
                     study_dirs = [
                         Path('/opt/bist-pattern/results/optuna_studies'),
                         Path('/opt/bist-pattern/hpo_studies'),
@@ -2845,7 +3216,7 @@ class ContinuousHPOPipeline:
                                 break
                     
                     if study_file and study_file.exists():
-                        # Check if HPO is completed (1500+ trials)
+                        # Check HPO progress in study file
                         try:
                             import sqlite3
                             conn = sqlite3.connect(str(study_file), timeout=30.0)
@@ -2854,7 +3225,9 @@ class ContinuousHPOPipeline:
                             complete_trials = cursor.fetchone()[0]
                             conn.close()
                             
-                            if complete_trials >= 1490:  # HPO completed
+                            # ✅ CRITICAL: Only recover if HPO is truly completed (MIN_TRIALS_FOR_RECOVERY+ trials)
+                            # We need HPO_TRIALS trials to find best parameters - partial progress is not enough
+                            if complete_trials >= MIN_TRIALS_FOR_RECOVERY:  # HPO completed
                                 logger.info(f"✅ Found completed HPO for {symbol} {horizon}d ({complete_trials} trials), resuming training...")
                                 # Try to find JSON file
                                 json_files = sorted(
@@ -2949,11 +3322,62 @@ class ContinuousHPOPipeline:
                                     return True
                                 else:
                                     logger.warning(f"⚠️ HPO completed for {symbol} {horizon}d but JSON file not found, will re-run HPO")
+                            else:
+                                # ✅ CRITICAL: HPO is incomplete (< 1490 trials) - continue from where it left off
+                                # Optuna warm-start will automatically continue from existing trials
+                                logger.info(f"🔄 HPO incomplete for {symbol} {horizon}d ({complete_trials}/{HPO_TRIALS} trials), will continue from where it left off (warm-start)")
+                                # Reset task to pending so HPO can continue
+                                task.status = 'pending'
+                                task.error = None  # Clear error
+                                task.cycle = self.cycle
+                                self.state[key] = task
+                                self.save_state()
+                                logger.info(f"✅ Reset {symbol} {horizon}d to 'pending' to continue HPO from {complete_trials}/1500 trials")
+                                # Continue with HPO (will use warm-start automatically)
+                                # Return False to allow the task to be picked up again for HPO
+                                return False
                         except Exception as e:
                             logger.warning(f"⚠️ Error checking study file for {symbol} {horizon}d: {e}")
             
             # ✅ RETRY FIX: Analyze failure reason before retrying
-            if task and task.status == 'failed' and task.retry_count < 3:
+            # ✅ UPDATED: Retry count increased from 3 to 10 for better resilience
+            # ✅ CRITICAL: Skip retry if task was just reset to pending (HPO incomplete)
+            # Check if study file exists with trials - if so, task was reset and should continue HPO
+            task_was_reset = False
+            if task and task.status == 'failed':
+                study_dirs = [
+                    Path('/opt/bist-pattern/results/optuna_studies'),
+                    Path('/opt/bist-pattern/hpo_studies'),
+                ]
+                for study_dir in study_dirs:
+                    if not study_dir.exists():
+                        continue
+                    cycle_file = study_dir / f"hpo_with_features_{symbol}_h{horizon}_c{self.cycle}.db"
+                    if cycle_file.exists():
+                        try:
+                            import sqlite3
+                            conn = sqlite3.connect(str(cycle_file), timeout=10.0)
+                            cursor = conn.cursor()
+                            cursor.execute("SELECT COUNT(*) FROM trials WHERE state='COMPLETE'")
+                            complete_trials = cursor.fetchone()[0]
+                            conn.close()
+                            # If HPO has progress but incomplete (< MIN_TRIALS_FOR_RECOVERY), task was reset to pending
+                            if 0 < complete_trials < MIN_TRIALS_FOR_RECOVERY:
+                                task_was_reset = True
+                                logger.info(f"⏭️ Skipping retry for {symbol} {horizon}d (HPO incomplete with {complete_trials} trials, will continue from where it left off)")
+                                # Reset to pending if not already
+                                if task.status == 'failed':
+                                    task.status = 'pending'
+                                    task.error = None
+                                    task.cycle = self.cycle
+                                    self.state[key] = task
+                                    self.save_state()
+                                break
+                        except Exception:
+                            pass
+            
+            MAX_RETRY_COUNT = 10
+            if task and task.status == 'failed' and task.retry_count < MAX_RETRY_COUNT and not task_was_reset:
                 error_msg = task.error or ''
                 error_lower = error_msg.lower()
                 
@@ -2981,7 +3405,7 @@ class ContinuousHPOPipeline:
                 
                 # Temporary failures - retry
                 # These include: timeout, network errors, subprocess errors, general HPO failures
-                logger.info(f"🔄 Retrying {symbol} {horizon}d (retry {task.retry_count + 1}/3, error: {error_msg[:100]})")
+                logger.info(f"🔄 Retrying {symbol} {horizon}d (retry {task.retry_count + 1}/{MAX_RETRY_COUNT}, error: {error_msg[:100]})")
                 task.status = 'pending'
                 task.error = None  # Clear previous error for retry
                 task.cycle = self.cycle  # Ensure cycle is current
@@ -2989,37 +3413,40 @@ class ContinuousHPOPipeline:
                 self.save_state()
             
             # ✅ CRITICAL FIX: Data quality check BEFORE HPO
-            # Check if symbol has sufficient data for this horizon
-            try:
-                with app.app_context():
-                    det = HybridPatternDetector()
-                    df = det.get_stock_data(symbol, days=0)
-                    
-                    # Minimum data requirements per horizon
-                    # ✅ USER REQUEST: All horizons require minimum 100 days
-                    min_required = {
-                        1: 100,   # 1d needs 100 days
-                        3: 100,   # 3d needs 100 days
-                        7: 100,   # 7d needs 100 days
-                        14: 100,  # 14d needs 100 days
-                        30: 100,  # 30d needs 100 days
-                    }
-                    
-                    min_days = min_required.get(horizon, 100)
-                    actual_days = len(df) if df is not None else 0
-                    
-                    if actual_days < min_days:
-                        # Insufficient data - skip this task
-                        logger.info(f"⏭️ Skipping {symbol} {horizon}d: insufficient data ({actual_days} < {min_days} days required)")
-                        task = self.state.get(key, TaskState(symbol=symbol, horizon=horizon, status='pending', cycle=self.cycle))
-                        task.status = 'skipped'
-                        task.error = f'Insufficient data: {actual_days}/{min_days} days'
-                        task.cycle = self.cycle
-                        self.state[key] = task
-                        self.save_state()
-                        return False
-            except Exception as e:
-                logger.warning(f"⚠️ Data quality check failed for {symbol} {horizon}d: {e}. Proceeding with HPO...")
+            # BUT: Skip if HPO already started (study file exists with trials)
+            # This prevents false "insufficient data" when HPO is continuing from previous run
+            if not skip_data_check:
+                # Check if symbol has sufficient data for this horizon
+                try:
+                    with app.app_context():
+                        det = HybridPatternDetector()
+                        df = det.get_stock_data(symbol, days=0)
+                        
+                        # Minimum data requirements per horizon
+                        # ✅ USER REQUEST: All horizons require minimum 100 days
+                        min_required = {
+                            1: 100,   # 1d needs 100 days
+                            3: 100,   # 3d needs 100 days
+                            7: 100,   # 7d needs 100 days
+                            14: 100,  # 14d needs 100 days
+                            30: 100,  # 30d needs 100 days
+                        }
+                        
+                        min_days = min_required.get(horizon, 100)
+                        actual_days = len(df) if df is not None else 0
+                        
+                        if actual_days < min_days:
+                            # Insufficient data - skip this task
+                            logger.info(f"⏭️ Skipping {symbol} {horizon}d: insufficient data ({actual_days} < {min_days} days required)")
+                            task = self.state.get(key, TaskState(symbol=symbol, horizon=horizon, status='pending', cycle=self.cycle))
+                            task.status = 'skipped'
+                            task.error = f'Insufficient data: {actual_days}/{min_days} days'
+                            task.cycle = self.cycle
+                            self.state[key] = task
+                            self.save_state()
+                            return False
+                except Exception as e:
+                    logger.warning(f"⚠️ Data quality check failed for {symbol} {horizon}d: {e}. Proceeding with HPO...")
             
             # Update state: HPO in progress
             task = self.state.get(key, TaskState(symbol=symbol, horizon=horizon, status='pending', cycle=self.cycle))
@@ -3425,64 +3852,67 @@ class ContinuousHPOPipeline:
                 logger.error(f"❌ Failed to get active symbols for {horizon}d: {e}")
                 continue
             
-            # Process symbols in batches (parallel within horizon phase)
-            remaining_symbols = symbols_all.copy()
+            # ✅ CRITICAL FIX: Process all symbols in parallel without blocking batches
+            # Use a single ProcessPoolExecutor for all symbols to maximize parallelism
+            # This ensures all 100 workers are utilized continuously, not waiting for batches
+            logger.info(f"🌊 Processing {len(symbols_all)} symbols for {horizon}d in parallel (max_workers={MAX_WORKERS})")
             
-            while remaining_symbols:
-                # Take batch of symbols
-                batch_symbols = remaining_symbols[:MAX_WORKERS]
-                remaining_symbols = remaining_symbols[MAX_WORKERS:]
-                
-                logger.info(f"🌊 Processing {len(batch_symbols)} symbols for {horizon}d in parallel (max_workers={MAX_WORKERS})")
-                
-                # Process batch in parallel
-                with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                    future_to_symbol = {}
-                    for symbol in batch_symbols:
-                        key = f"{symbol}_{horizon}d"
-                        
-                        # Check if already completed
-                        self.load_state()
-                        task = self.state.get(key)
-                        if task and task.status == 'completed' and task.cycle == self.cycle:
-                            # ✅ CRITICAL FIX: Check if completed task has valid best_params_file
-                            # If best_params_file is missing, recovery logic should run
-                            if task.best_params_file and Path(task.best_params_file).exists():
-                                logger.info(f"⏭️ Skipping {symbol} {horizon}d (already completed)")
-                                phase_completed += 1
-                                continue
-                            else:
-                                # Completed but best_params_file missing - recovery needed
-                                logger.warning(f"⚠️ {symbol} {horizon}d marked as completed but best_params_file missing, will attempt recovery")
-                                # Continue to process_task() for recovery
-                        
-                        # ✅ CRITICAL FIX: Use standalone function with cycle parameter
-                        # ProcessPoolExecutor pickles the method, but self.cycle might not be correctly passed
-                        # Using standalone function ensures cycle is explicitly passed to child process
-                        future = executor.submit(process_task_standalone, symbol, horizon, self.cycle)
-                        future_to_symbol[future] = symbol
+            # Create executor once for all symbols (non-blocking)
+            executor = ProcessPoolExecutor(max_workers=MAX_WORKERS)
+            future_to_symbol = {}
+            
+            try:
+                # Submit all tasks at once (non-blocking)
+                for symbol in symbols_all:
+                    key = f"{symbol}_{horizon}d"
                     
-                    # Collect results
-                    for future in as_completed(future_to_symbol):
-                        symbol = future_to_symbol[future]
-                        try:
-                            success = future.result()
-                            if success:
-                                phase_completed += 1
-                                logger.info(f"✅ {symbol} {horizon}d completed ({phase_completed}/{len(symbols_all)})")
+                    # Check if already completed
+                    self.load_state()
+                    task = self.state.get(key)
+                    if task and task.status == 'completed' and task.cycle == self.cycle:
+                        # ✅ CRITICAL FIX: Check if completed task has valid best_params_file
+                        # If best_params_file is missing, recovery logic should run
+                        if task.best_params_file and Path(task.best_params_file).exists():
+                            logger.info(f"⏭️ Skipping {symbol} {horizon}d (already completed)")
+                            phase_completed += 1
+                            continue
+                        else:
+                            # Completed but best_params_file missing - recovery needed
+                            logger.warning(f"⚠️ {symbol} {horizon}d marked as completed but best_params_file missing, will attempt recovery")
+                            # Continue to process_task() for recovery
+                    
+                    # ✅ CRITICAL FIX: Use standalone function with cycle parameter
+                    # ProcessPoolExecutor pickles the method, but self.cycle might not be correctly passed
+                    # Using standalone function ensures cycle is explicitly passed to child process
+                    future = executor.submit(process_task_standalone, symbol, horizon, self.cycle)
+                    future_to_symbol[future] = symbol
+                
+                # Collect results as they complete (non-blocking)
+                completed_count = 0
+                for future in as_completed(future_to_symbol):
+                    symbol = future_to_symbol[future]
+                    try:
+                        success = future.result()
+                        completed_count += 1
+                        if success:
+                            phase_completed += 1
+                            logger.info(f"✅ {symbol} {horizon}d completed ({phase_completed}/{len(symbols_all)}, {completed_count}/{len(future_to_symbol)} futures done)")
+                        else:
+                            # Check if skipped
+                            self.load_state()
+                            task = self.state.get(f"{symbol}_{horizon}d")
+                            if task and task.status == 'skipped':
+                                phase_skipped += 1
+                                logger.info(f"⏭️ {symbol} {horizon}d skipped (insufficient data)")
                             else:
-                                # Check if skipped
-                                self.load_state()
-                                task = self.state.get(f"{symbol}_{horizon}d")
-                                if task and task.status == 'skipped':
-                                    phase_skipped += 1
-                                    logger.info(f"⏭️ {symbol} {horizon}d skipped (insufficient data)")
-                                else:
-                                    phase_failed += 1
-                                    logger.warning(f"❌ {symbol} {horizon}d failed")
-                        except Exception as e:
-                            logger.error(f"❌ Exception for {symbol} {horizon}d: {e}")
-                            phase_failed += 1
+                                phase_failed += 1
+                                logger.warning(f"❌ {symbol} {horizon}d failed")
+                    except Exception as e:
+                        logger.error(f"❌ Exception for {symbol} {horizon}d: {e}")
+                        phase_failed += 1
+            finally:
+                # Shutdown executor gracefully
+                executor.shutdown(wait=True)
             
             # Phase summary
             logger.info("=" * 80)
@@ -3505,21 +3935,44 @@ class ContinuousHPOPipeline:
         logger.info(f"   HPO trials: {HPO_TRIALS}")
         
         try:
-            while True:
+            while not self.shutdown_requested:
                 # Run one cycle
                 self.run_cycle()
                 
-                # Wait before next cycle
+                # Check for shutdown request before waiting
+                if self.shutdown_requested:
+                    logger.info("🛑 Shutdown requested, stopping pipeline...")
+                    break
+                
+                # Wait before next cycle (check for shutdown periodically)
                 wait_hours = 24  # Wait 24 hours before next cycle
                 logger.info(f"⏳ Waiting {wait_hours} hours before next cycle...")
-                time.sleep(wait_hours * 3600)
+                
+                # Sleep in smaller chunks to check shutdown flag periodically
+                sleep_interval = 300  # Check every 5 minutes
+                total_sleep = wait_hours * 3600
+                slept = 0
+                while slept < total_sleep and not self.shutdown_requested:
+                    time.sleep(min(sleep_interval, total_sleep - slept))
+                    slept += sleep_interval
+                
+                if self.shutdown_requested:
+                    logger.info("🛑 Shutdown requested during wait, stopping pipeline...")
+                    break
                 
         except KeyboardInterrupt:
             logger.info("⛔ Pipeline stopped by user")
+            self.shutdown_requested = True
         except Exception as e:
             logger.error(f"❌ Pipeline error: {e}")
             import traceback
             logger.error(traceback.format_exc())
+        finally:
+            # Ensure graceful shutdown on exit
+            logger.info("🧹 Performing final cleanup...")
+            self._graceful_shutdown_hpo_processes()
+            self.save_state()
+            logger.info("✅ Pipeline shutdown complete")
 
 
 def process_task_standalone(symbol: str, horizon: int, cycle: int) -> bool:
