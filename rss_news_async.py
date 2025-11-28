@@ -302,7 +302,6 @@ class AsyncRSSNewsProvider:
                 try:
                     title = ''
                     description = ''
-                    pub_date = ''
                     
                     # Extract title
                     title_elem = item.find('title')
@@ -402,11 +401,14 @@ class AsyncRSSNewsProvider:
                         for news_item in all_news:
                             # ✅ FIX: Filter by lookback_hours (24 hours) based on pub_timestamp
                             pub_timestamp = news_item.get('pub_timestamp')
-                            if pub_timestamp:
-                                age_hours = (time.time() - pub_timestamp) / 3600.0
-                                if age_hours > self.lookback_hours:
-                                    # Skip news older than lookback_hours
-                                    continue
+                            # 🚫 Legacy entries without pub_timestamp must NOT bypass age filtering
+                            if not isinstance(pub_timestamp, (int, float)):
+                                # Skip items with unknown publish time
+                                continue
+                            age_hours = (time.time() - float(pub_timestamp)) / 3600.0
+                            if age_hours > self.lookback_hours:
+                                # Skip news older than lookback_hours
+                                continue
                             
                             text = news_item.get('text', '')
                             if self._is_relevant_news(text, symbol_upper):

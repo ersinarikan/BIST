@@ -1046,10 +1046,23 @@ class HybridPatternDetector:
                         news_texts = []
                     if news_texts:
                         sent_res = self.fingpt.analyze_stock_news(symbol, news_texts)
-                        # Convert sentiment to trading direction
-                        sig = self.fingpt.get_sentiment_signal(sent_res)
-                        conf = float(sent_res.get('confidence', 0.0) or 0.0)
-                        news_count = int(sent_res.get('news_count', 0) or 0)
+                        # ✅ Guard against None/invalid responses from FinGPT
+                        sig = 'NEUTRAL'
+                        conf = 0.0
+                        news_count = 0
+                        if isinstance(sent_res, dict):
+                            # Convert sentiment to trading direction
+                            sig = self.fingpt.get_sentiment_signal(sent_res)
+                            try:
+                                conf = float(sent_res.get('confidence', 0.0) or 0.0)
+                            except Exception:
+                                conf = 0.0
+                            try:
+                                news_count = int(sent_res.get('news_count', 0) or 0)
+                            except Exception:
+                                news_count = 0
+                        else:
+                            logger.debug(f"📰 FinGPT returned invalid result for {symbol}: {type(sent_res)}")
                         if sig in ('BULLISH', 'BEARISH') and conf > 0:
                             logger.info(f"✅ FinGPT sentiment {symbol}: {sig} (conf={conf:.2f}, news={news_count})")
                             # ✅ FIX: Include news texts for tooltip display (limit to 200 chars each)
