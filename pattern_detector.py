@@ -1020,13 +1020,27 @@ class HybridPatternDetector:
             # ✅ FIX: Run FinGPT analysis BEFORE validation pipeline so patterns are available for validation checks
             try:
                 # ✅ FIX: Use ConfigManager for consistent config access
-                # Check if FinGPT is enabled and available
-                enable_fingpt = ConfigManager.get('ENABLE_FINGPT', None)
-                if enable_fingpt is None:
+                # Check if FinGPT is enabled and available (robust bool parsing)
+                raw_flag = ConfigManager.get('ENABLE_FINGPT', None)
+                if raw_flag is None:
                     try:
                         from config import config
-                        enable_fingpt = getattr(config['default'], 'ENABLE_FINGPT', True)
+                        raw_flag = getattr(config['default'], 'ENABLE_FINGPT', True)
                     except Exception:
+                        raw_flag = True
+                # Normalize to boolean
+                if isinstance(raw_flag, bool):
+                    enable_fingpt = raw_flag
+                elif isinstance(raw_flag, (int, float)):
+                    enable_fingpt = bool(int(raw_flag))
+                else:
+                    val = str(raw_flag).strip().lower()
+                    if val in ('1', 'true', 'yes', 'on'):
+                        enable_fingpt = True
+                    elif val in ('0', 'false', 'no', 'off', ''):
+                        enable_fingpt = False
+                    else:
+                        # Default to True to preserve previous behavior if value is ambiguous
                         enable_fingpt = True
                 if enable_fingpt and getattr(self, 'fingpt_available', False) and self.fingpt is not None:
                     news_texts = []
