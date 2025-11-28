@@ -1013,8 +1013,69 @@ class HybridPatternDetector:
             # VALIDATION PIPELINE: Multi-stage pattern validation
             # ==========================================
             patterns = []
-            # ✅ FIX: Initialize FinGPT patterns list before validation (will be populated later)
+            # ✅ FIX: Initialize FinGPT patterns list before validation (will be populated now)
             fingpt_patterns = []
+            
+            # FinGPT sentiment (optional) - integrate as additional signal
+            # ✅ FIX: Run FinGPT analysis BEFORE validation pipeline so patterns are available for validation checks
+            try:
+                # ✅ FIX: Use ConfigManager for consistent config access
+                # Check if FinGPT is enabled and available
+                enable_fingpt = ConfigManager.get('ENABLE_FINGPT', None)
+                if enable_fingpt is None:
+                    try:
+                        from config import config
+                        enable_fingpt = getattr(config['default'], 'ENABLE_FINGPT', True)
+                    except Exception:
+                        enable_fingpt = True
+                if enable_fingpt and getattr(self, 'fingpt_available', False) and self.fingpt is not None:
+                    news_texts = []
+                    try:
+                        # Use async RSS news provider for non-blocking news fetching
+                        if hasattr(self, '_async_rss_provider') and self._async_rss_provider:
+                            news_texts = self._async_rss_provider.get_recent_news_async(symbol) or []
+                            if news_texts:
+                                logger.info(f"📰 Got {len(news_texts)} news items for {symbol}")
+                            else:
+                                # ✅ FIX: Log at INFO level so we can see why no badge appears
+                                logger.info(f"📰 {symbol}: No news items found from RSS (sentiment badge will not appear)")
+                        else:
+                            logger.debug(f"📰 {symbol}: RSS provider not available")
+                    except Exception as e:
+                        logger.warning(f"📰 RSS news fetch failed for {symbol}: {e}")
+                        news_texts = []
+                    if news_texts:
+                        sent_res = self.fingpt.analyze_stock_news(symbol, news_texts)
+                        # Convert sentiment to trading direction
+                        sig = self.fingpt.get_sentiment_signal(sent_res)
+                        conf = float(sent_res.get('confidence', 0.0) or 0.0)
+                        news_count = int(sent_res.get('news_count', 0) or 0)
+                        if sig in ('BULLISH', 'BEARISH') and conf > 0:
+                            logger.info(f"✅ FinGPT sentiment {symbol}: {sig} (conf={conf:.2f}, news={news_count})")
+                            # ✅ FIX: Include news texts for tooltip display (limit to 200 chars each)
+                            news_items_preview = []
+                            for news_text in news_texts[:5]:  # Max 5 news items
+                                preview = str(news_text)[:200]  # Limit to 200 chars
+                                if len(str(news_text)) > 200:
+                                    preview += "..."
+                                news_items_preview.append(preview)
+                            
+                            fingpt_patterns.append({
+                                'pattern': 'FINGPT_SENTIMENT',
+                                'signal': sig,
+                                'confidence': max(0.3, min(0.9, conf)),
+                                'strength': int(max(0.3, min(0.9, conf)) * 100),
+                                'source': 'FINGPT',
+                                'news_count': news_count,
+                                'news_items': news_items_preview  # ✅ FIX: Add news items for tooltip
+                            })
+                        else:
+                            logger.debug(f"📰 FinGPT sentiment {symbol}: {sig} (conf={conf:.2f}, news={news_count}) - below threshold")
+                    else:
+                        logger.debug(f"📰 FinGPT skipped for {symbol}: no news items")
+            except Exception as e:
+                logger.error(f"FinGPT sentiment integration hatası {symbol}: {e}")
+            
             # ✅ Pattern Validation with standalone ADVANCED/YOLO support
             validation_enabled = str(os.getenv('ENABLE_PATTERN_VALIDATION', 'True')).lower() == 'true'
             
@@ -1231,67 +1292,6 @@ class HybridPatternDetector:
                     
             except Exception as e:
                 logger.error(f"Coordinated ML prediction integration hatası {symbol}: {e}")
-
-            # FinGPT sentiment (optional) - integrate as additional signal
-            # ✅ FIX: Store FinGPT patterns separately to add after validation
-            fingpt_patterns = []
-            try:
-                # ✅ FIX: Use ConfigManager for consistent config access
-                # Check if FinGPT is enabled and available
-                enable_fingpt = ConfigManager.get('ENABLE_FINGPT', None)
-                if enable_fingpt is None:
-                    try:
-                        from config import config
-                        enable_fingpt = getattr(config['default'], 'ENABLE_FINGPT', True)
-                    except Exception:
-                        enable_fingpt = True
-                if enable_fingpt and getattr(self, 'fingpt_available', False) and self.fingpt is not None:
-                    news_texts = []
-                    try:
-                        # Use async RSS news provider for non-blocking news fetching
-                        if hasattr(self, '_async_rss_provider') and self._async_rss_provider:
-                            news_texts = self._async_rss_provider.get_recent_news_async(symbol) or []
-                            if news_texts:
-                                logger.info(f"📰 Got {len(news_texts)} news items for {symbol}")
-                            else:
-                                # ✅ FIX: Log at INFO level so we can see why no badge appears
-                                logger.info(f"📰 {symbol}: No news items found from RSS (sentiment badge will not appear)")
-                        else:
-                            logger.debug(f"📰 {symbol}: RSS provider not available")
-                    except Exception as e:
-                        logger.warning(f"📰 RSS news fetch failed for {symbol}: {e}")
-                        news_texts = []
-                    if news_texts:
-                        sent_res = self.fingpt.analyze_stock_news(symbol, news_texts)
-                        # Convert sentiment to trading direction
-                        sig = self.fingpt.get_sentiment_signal(sent_res)
-                        conf = float(sent_res.get('confidence', 0.0) or 0.0)
-                        news_count = int(sent_res.get('news_count', 0) or 0)
-                        if sig in ('BULLISH', 'BEARISH') and conf > 0:
-                            logger.info(f"✅ FinGPT sentiment {symbol}: {sig} (conf={conf:.2f}, news={news_count})")
-                            # ✅ FIX: Include news texts for tooltip display (limit to 200 chars each)
-                            news_items_preview = []
-                            for news_text in news_texts[:5]:  # Max 5 news items
-                                preview = str(news_text)[:200]  # Limit to 200 chars
-                                if len(str(news_text)) > 200:
-                                    preview += "..."
-                                news_items_preview.append(preview)
-                            
-                            fingpt_patterns.append({
-                                'pattern': 'FINGPT_SENTIMENT',
-                                'signal': sig,
-                                'confidence': max(0.3, min(0.9, conf)),
-                                'strength': int(max(0.3, min(0.9, conf)) * 100),
-                                'source': 'FINGPT',
-                                'news_count': news_count,
-                                'news_items': news_items_preview  # ✅ FIX: Add news items for tooltip
-                            })
-                        else:
-                            logger.debug(f"📰 FinGPT sentiment {symbol}: {sig} (conf={conf:.2f}, news={news_count}) - below threshold")
-                    else:
-                        logger.debug(f"📰 FinGPT skipped for {symbol}: no news items")
-            except Exception as e:
-                logger.error(f"FinGPT sentiment integration hatası {symbol}: {e}")
 
             # Overall signal generation
             overall_signal = self.generate_overall_signal(indicators, patterns)
