@@ -1144,13 +1144,13 @@ class HybridPatternDetector:
                     
                 except Exception as e:
                     logger.error(f"Pattern validation error for {symbol}: {e}")
-                    # Fallback: use unvalidated patterns with reduced confidence
-                    # Include FinGPT patterns in the same reduction for consistency
-                    patterns = basic_patterns + advanced_patterns
-                    if fingpt_patterns:
-                        patterns.extend(fingpt_patterns)
+                    # Fallback: use all patterns with reduced confidence (preserve YOLO patterns for graceful degradation)
+                    patterns = basic_patterns + advanced_patterns + yolo_patterns_raw
                     for p in patterns:
                         p['confidence'] = p.get('confidence', 0.5) * 0.8
+                    # ✅ FIX: Add FinGPT patterns even in fallback
+                    if fingpt_patterns:
+                        patterns.extend(fingpt_patterns)
             else:
                 # Validation disabled: use all patterns without filtering
                 patterns = basic_patterns + advanced_patterns + yolo_patterns_raw
