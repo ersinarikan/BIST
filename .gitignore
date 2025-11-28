@@ -77,6 +77,9 @@ log/
 *.db
 *.sqlite
 *.sqlite3
+*.db-shm
+*.db-wal
+*.db-journal
 
 # Machine Learning Models
 *.pkl
@@ -153,3 +156,14 @@ venv.bak/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+# HPO and Result Artifacts
+results/.numa_counter
+results/continuous_hpo_state.json
+results/eval_debug/
+results/hpo_slots/
+results/hpo_pids/
+hpo_studies/*.db-shm
+hpo_studies/*.db-wal
+hpo_studies/*.db-journal
+*.lock
