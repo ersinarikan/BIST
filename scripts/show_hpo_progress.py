@@ -352,7 +352,8 @@ def get_completed_tasks() -> Dict[str, Dict]:
                 'training_dirhit': task.get('training_dirhit'),
                 'adaptive_dirhit': task.get('adaptive_dirhit'),
                 'training_dirhit_wfv': task.get('training_dirhit_wfv'),
-                'training_dirhit_online': task.get('training_dirhit_online')
+                'training_dirhit_online': task.get('training_dirhit_online'),
+                'training_completed_at': task.get('training_completed_at')
             }
     
     # ✅ CRITICAL FIX: Also check study files for HPOs that completed but state file wasn't updated
@@ -861,6 +862,11 @@ def main():
                 line += f" Training DirHit={adaptive_dirhit:.2f}%"
             elif training_dirhit is not None:
                 line += f" Training DirHit={training_dirhit:.2f}%"
+            else:
+                # Check if training was completed but DirHit is None (likely LOW_SUPPORT)
+                training_completed = task.get('training_completed_at')
+                if training_completed:
+                    line += " Training DirHit=LOW_SUPPORT (yetersiz veri)"
             if from_study_file:
                 line += " ⚠️ (State dosyasında 'completed' değil, study dosyasından tespit edildi)"
             print(line)

@@ -116,6 +116,12 @@ root_logger = logging.getLogger()
 root_logger.handlers.clear()  # Clear all root logger handlers
 root_logger.propagate = False  # Prevent propagation
 
+# ✅ CRITICAL FIX: Disable working_automation auto-start in HPO service
+# HPO service runs in separate process and should not start working_automation
+# This prevents log mixing and resource conflicts
+os.environ['AUTO_START_CYCLE'] = 'False'
+os.environ['BIST_PIPELINE_STARTED'] = '1'  # Prevent auto-start
+
 # Import after path setup
 from app import app  # noqa: E402
 
@@ -162,29 +168,33 @@ logger.setLevel(logging.INFO)
 logger.handlers.clear()  # Clear any existing handlers
 logger.propagate = False  # Prevent propagation to root logger (CRITICAL!)
 
-# ✅ CRITICAL FIX: Disable WebSocket pattern_analysis emissions in HPO process
+# ✅ CRITICAL FIX: Disable ALL WebSocket emissions in HPO process
 # HPO service runs in separate process and should not broadcast to clients
-# This prevents data leakage and WebSocket disconnections
+# This prevents log mixing, data leakage and WebSocket disconnections
 try:
     if hasattr(app, 'socketio') and app.socketio is not None:
         _original_hpo_emit = app.socketio.emit
         
         def _hpo_blocked_emit(event, data=None, *args, **kwargs):
-            # Block pattern_analysis events completely in HPO process
-            if event == 'pattern_analysis':
-                logger.debug(f"🚫 HPO: Blocked pattern_analysis emit for {data.get('symbol', 'N/A') if isinstance(data, dict) else 'N/A'}")
-                return  # Block the event
-            # Allow other events (log_update, etc.) but only to admin room
-            # HPO process should not send data to user rooms
-            room = kwargs.get('room') or kwargs.get('to')
-            if room and not room.startswith('admin'):
-                logger.debug(f"🚫 HPO: Blocked emit to non-admin room '{room}'")
-                return  # Block non-admin room broadcasts
-            return _original_hpo_emit(event, data, *args, **kwargs)
+            # ✅ FIX: Block ALL WebSocket events in HPO process to prevent log mixing
+            # HPO logs should only go to log file, not to WebSocket
+            logger.debug(f"🚫 HPO: Blocked WebSocket emit '{event}' (HPO service should not broadcast)")
+            return  # Block all WebSocket events
         app.socketio.emit = _hpo_blocked_emit
-        logger.info("✅ HPO: WebSocket pattern_analysis emissions disabled")
+        logger.info("✅ HPO: All WebSocket emissions disabled (prevents log mixing)")
+    
+    # ✅ FIX: Also disable broadcast_log function to prevent log mixing
+    if hasattr(app, 'broadcast_log'):
+        _original_broadcast_log = app.broadcast_log
+        
+        def _hpo_blocked_broadcast_log(level, message, category='system', service=None):
+            # Block all broadcast_log calls in HPO process
+            logger.debug(f"🚫 HPO: Blocked broadcast_log (level={level}, category={category})")
+            return  # Block all broadcast_log calls
+        app.broadcast_log = _hpo_blocked_broadcast_log
+        logger.info("✅ HPO: broadcast_log disabled (prevents log mixing)")
 except Exception as e:
-    logger.warning(f"⚠️ HPO: Failed to disable WebSocket emissions: {e}")
+    logger.warning(f"⚠️ HPO: Failed to disable WebSocket/broadcast: {e}")
 
 # Create file handler with append mode (only for our logger)
 file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
@@ -1665,7 +1675,7 @@ class ContinuousHPOPipeline:
                     # ✅ CRITICAL FIX: Use best_dirhit if available, otherwise fallback to best_value
                     # Method 2 returns score (DirHit * mask_after_thr / 100), not DirHit
                     best_dirhit = hpo_data.get('best_dirhit')
-                    best_score = hpo_data.get('best_value', 0)
+                    candidate_best_score = hpo_data.get('best_value', 0)  # Renamed to avoid conflict
                     
                     # ✅ FIX: Collect this valid JSON as a candidate (don't return immediately)
                     # We'll select the best one among all candidates
@@ -1673,6 +1683,42 @@ class ContinuousHPOPipeline:
                     best_trial_info = hpo_data.get('best_trial', {})
                     if isinstance(best_trial_info, dict):
                         best_trial_number = best_trial_info.get('number')
+                    
+                    # ✅ CRITICAL FIX: Check LOW SUPPORT for this candidate
+                    # We need to filter out spurious results BEFORE selecting best
+                    has_low_support = False
+                    total_mask_count = 0
+                    avg_mask_pct = 0.0
+                    try:
+                        best_trial_metrics = hpo_data.get('best_trial_metrics', {})
+                        symbol_key_check = f"{symbol}_{horizon}d"
+                        if symbol_key_check in best_trial_metrics:
+                            symbol_metrics = best_trial_metrics[symbol_key_check]
+                            split_metrics = symbol_metrics.get('split_metrics', [])
+                            if split_metrics:
+                                total_mask_count = sum(s.get('mask_count', 0) for s in split_metrics)
+                                mask_pcts = [s.get('mask_pct', 0.0) for s in split_metrics if s.get('mask_pct') is not None]
+                                avg_mask_pct = np.mean(mask_pcts) if mask_pcts else 0.0
+                                
+                                # ✅ FIX: Use same thresholds as HPO (from environment variables)
+                                try:
+                                    _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '10'))  # Default: 10
+                                except Exception:
+                                    _min_mc = 10
+                                try:
+                                    _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '5.0'))  # Default: 5.0
+                                except Exception:
+                                    _min_mp = 5.0
+                                
+                                if total_mask_count < _min_mc or avg_mask_pct < _min_mp:
+                                    has_low_support = True
+                                    logger.debug(
+                                        f"⚠️ {symbol} {horizon}d: Candidate JSON {json_file.name} has LOW SUPPORT "
+                                        f"(mask_count={total_mask_count}, mask_pct={avg_mask_pct:.1f}%), will be deprioritized"
+                                    )
+                    except Exception as e:
+                        # Non-critical check, continue if it fails
+                        logger.debug(f"Could not check low support for candidate {json_file.name}: {e}")
                     
                     valid_json_candidates.append({
                         'json_file': json_file,
@@ -1686,31 +1732,89 @@ class ContinuousHPOPipeline:
                         'features_enabled': hpo_data.get('features_enabled', {}),
                         'feature_params': hpo_data.get('feature_params', {}),
                         'feature_flags': hpo_data.get('feature_flags', {}),
-                        'hyperparameters': hpo_data.get('hyperparameters', {})
+                        'hyperparameters': hpo_data.get('hyperparameters', {}),
+                        'has_low_support': has_low_support,  # ✅ NEW: Track LOW SUPPORT status
+                        'mask_count': total_mask_count,  # ✅ NEW: Track mask_count for logging
+                        'mask_pct': avg_mask_pct  # ✅ NEW: Track mask_pct for logging
                     })
                     
                     if best_dirhit is not None:
-                        logger.debug(f"📋 Candidate JSON for {symbol} {horizon}d: {json_file.name} - DirHit = {best_dirhit:.2f}% (score = {best_score:.2f}, {n_trials} trials)")
+                        logger.debug(f"📋 Candidate JSON for {symbol} {horizon}d: {json_file.name} - DirHit = {best_dirhit:.2f}% (score = {candidate_best_score:.2f}, {n_trials} trials)")
                     else:
-                        logger.debug(f"📋 Candidate JSON for {symbol} {horizon}d: {json_file.name} - Score = {best_score:.2f} (DirHit not available, {n_trials} trials)")
+                        logger.debug(f"📋 Candidate JSON for {symbol} {horizon}d: {json_file.name} - Score = {candidate_best_score:.2f} (DirHit not available, {n_trials} trials)")
                 except Exception as e:
                     logger.warning(f"⚠️ Error reading JSON file {json_file}: {e}")
                     continue
             
             # ✅ FIX: Select the best JSON from all valid candidates
-            # Priority: 1) Highest DirHit, 2) Highest best_value, 3) Most recent
+            # ✅ CRITICAL FIX: Prioritize candidates WITHOUT LOW SUPPORT
+            # Priority: 1) No LOW SUPPORT, 2) Highest DirHit, 3) Highest best_value, 4) Most recent
             if valid_json_candidates:
-                # Sort by: DirHit (desc), then best_value (desc), then mtime (desc)
-                valid_json_candidates.sort(
-                    key=lambda x: (
-                        x['best_dirhit'] if x['best_dirhit'] is not None else -1,  # DirHit (higher is better)
-                        x['best_value'],  # best_value (higher is better)
-                        x['json_mtime']  # Most recent
-                    ),
-                    reverse=True
-                )
+                # First, separate candidates by LOW SUPPORT status
+                candidates_with_support = [c for c in valid_json_candidates if not c.get('has_low_support', False)]
+                candidates_low_support = [c for c in valid_json_candidates if c.get('has_low_support', False)]
                 
-                best_candidate = valid_json_candidates[0]
+                # ✅ CRITICAL: Prefer candidates with sufficient support
+                if candidates_with_support:
+                    # Sort candidates WITH support by: DirHit (desc), then best_value (desc), then mtime (desc)
+                    candidates_with_support.sort(
+                        key=lambda x: (
+                            x['best_dirhit'] if x['best_dirhit'] is not None else -1,  # DirHit (higher is better)
+                            x['best_value'],  # best_value (higher is better)
+                            x['json_mtime']  # Most recent
+                        ),
+                        reverse=True
+                    )
+                    best_candidate = candidates_with_support[0]
+                    
+                    # Log if we're skipping LOW SUPPORT candidates
+                    if candidates_low_support:
+                        logger.info(
+                            f"✅ {symbol} {horizon}d: Filtered out {len(candidates_low_support)} LOW SUPPORT candidate(s), "
+                            f"selected best with sufficient support: {best_candidate['json_file'].name}"
+                        )
+                else:
+                    # ⚠️ FALLBACK: No candidates with sufficient support, but we still want to train the model
+                    # Use best LOW SUPPORT candidate, but mark HPO DirHit as unreliable
+                    # Training DirHit will be more reliable since it uses more data
+                    logger.warning(
+                        f"⚠️ {symbol} {horizon}d: WARNING - No HPO candidates with sufficient support found! "
+                        f"All {len(candidates_low_support)} candidate(s) have LOW SUPPORT. "
+                        f"Falling back to best LOW SUPPORT candidate. "
+                        f"HPO DirHit may be unreliable, but Training DirHit will be more reliable."
+                    )
+                    
+                    # Sort LOW SUPPORT candidates by: DirHit (desc), then best_value (desc), then mtime (desc)
+                    candidates_low_support.sort(
+                        key=lambda x: (
+                            x['best_dirhit'] if x['best_dirhit'] is not None else -1,  # DirHit (higher is better)
+                            x['best_value'],  # best_value (higher is better)
+                            x['json_mtime']  # Most recent
+                        ),
+                        reverse=True
+                    )
+                    best_candidate = candidates_low_support[0]
+                    
+                    # Log details about selected LOW SUPPORT candidate
+                    logger.warning(
+                        f"⚠️ {symbol} {horizon}d: Selected LOW SUPPORT candidate: {best_candidate['json_file'].name} "
+                        f"(mask_count={best_candidate.get('mask_count', 0)}, mask_pct={best_candidate.get('mask_pct', 0.0):.1f}%)"
+                    )
+                    best_dirhit_val = best_candidate.get('best_dirhit')
+                    if best_dirhit_val is not None:
+                        logger.warning(
+                            f"⚠️ {symbol} {horizon}d: HPO DirHit={best_dirhit_val:.2f}% may be unreliable. "
+                            f"Training DirHit will be more reliable."
+                        )
+                    else:
+                        logger.warning(
+                            f"⚠️ {symbol} {horizon}d: HPO DirHit not available (LOW SUPPORT). "
+                            f"Training DirHit will be more reliable."
+                        )
+                    
+                    # Mark this result as having LOW SUPPORT for later reference
+                    # We'll add a flag to the result dict
+                    best_candidate['has_low_support_warning'] = True
                 
                 if len(valid_json_candidates) > 1:
                     logger.info(f"⚠️ Found {len(valid_json_candidates)} valid JSON files for {symbol} {horizon}d, selecting best one:")
@@ -1720,6 +1824,45 @@ class ContinuousHPOPipeline:
                 
                 best_dirhit = best_candidate['best_dirhit']
                 best_score = best_candidate['best_value']
+                
+                # ✅ NEW: Validate low support issue in best_trial_metrics
+                # Check if best_dirhit is spurious due to very few significant predictions
+                try:
+                    json_file_path = best_candidate['json_file']
+                    with open(json_file_path, 'r') as f:
+                        hpo_data_check = json.load(f)
+                    best_trial_metrics = hpo_data_check.get('best_trial_metrics', {})
+                    symbol_key = f"{symbol}_{horizon}d"
+                    if symbol_key in best_trial_metrics:
+                        symbol_metrics = best_trial_metrics[symbol_key]
+                        split_metrics = symbol_metrics.get('split_metrics', [])
+                        if split_metrics:
+                            total_mask_count = sum(s.get('mask_count', 0) for s in split_metrics)
+                            avg_mask_pct = np.mean([s.get('mask_pct', 0.0) for s in split_metrics if s.get('mask_pct') is not None])
+                            
+                            # ✅ FIX: Use same thresholds as HPO (from environment variables)
+                            # This ensures consistency between HPO filtering and validation
+                            try:
+                                _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '10'))  # Default: 10 (same as HPO)
+                            except Exception:
+                                _min_mc = 10
+                            try:
+                                _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '5.0'))  # Default: 5.0 (same as HPO)
+                            except Exception:
+                                _min_mp = 5.0
+                            
+                            # Low support threshold: use same as HPO
+                            if total_mask_count < _min_mc or avg_mask_pct < _min_mp:
+                                logger.warning(
+                                    f"⚠️ {symbol} {horizon}d: LOW SUPPORT detected in best HPO trial! "
+                                    f"DirHit={best_dirhit:.2f}% but mask_count={total_mask_count} (min={_min_mc}), "
+                                    f"mask_pct={avg_mask_pct:.1f}% (min={_min_mp}%). "
+                                    f"This may be a spurious result. Training DirHit will be more reliable."
+                                )
+                except Exception as e:
+                    # Non-critical check, just log warning if it fails
+                    logger.debug(f"Could not validate low support for {symbol} {horizon}d: {e}")
+                
                 if best_dirhit is not None:
                     json_name = best_candidate['json_file'].name
                     logger.info(
@@ -1746,7 +1889,8 @@ class ContinuousHPOPipeline:
                     'features_enabled': best_candidate['features_enabled'],
                     'feature_params': best_candidate['feature_params'],
                     'feature_flags': best_candidate['feature_flags'],
-                    'hyperparameters': best_candidate['hyperparameters']
+                    'hyperparameters': best_candidate['hyperparameters'],
+                    'has_low_support_warning': best_candidate.get('has_low_support_warning', False)  # ✅ NEW: Flag for LOW SUPPORT warning
                 }
             
             logger.warning(f"⚠️ HPO result not found for {symbol} {horizon}d (or insufficient trials)")
@@ -2285,18 +2429,19 @@ class ContinuousHPOPipeline:
                         logger.info(f"🔍 [eval-debug]   Score: {score_val:.2f}")
                         logger.info(f"🔍 [eval-debug]   Seed = {eval_seed} (best_trial={best_trial_number})")
                     
-                    # Low-support gating (same as HPO)
+                    # ✅ FIX: Low-support gating (same as HPO)
+                    # Use same default values as HPO to ensure consistency
                     low_support = False
                     _min_mc = 0
                     _min_mp = 0.0
                     try:
-                        _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))
+                        _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '10'))  # Default: 10 (same as HPO)
                     except Exception:
-                        _min_mc = 0
+                        _min_mc = 10
                     try:
-                        _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '0'))
+                        _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '5.0'))  # Default: 5.0 (same as HPO)
                     except Exception:
-                        _min_mp = 0.0
+                        _min_mp = 5.0
                     if (_min_mc > 0 and mask_count < _min_mc) or (_min_mp > 0.0 and mask_pct < _min_mp):
                         low_support = True
                         logger.info(
@@ -2720,18 +2865,19 @@ class ContinuousHPOPipeline:
                         logger.info(f"🔍 [eval-debug]   Seed = {eval_seed} (best_trial={best_trial_number})")
                         logger.info("🔍 [eval-debug]   Adaptive Learning: OFF (skip_phase2=1, using full train_df - HPO ile tutarlılık)")
                     
-                    # Low-support gating (same as HPO)
+                    # ✅ FIX: Low-support gating (same as HPO)
+                    # Use same default values as HPO to ensure consistency
                     low_support2 = False
                     _min_mc2 = 0
                     _min_mp2 = 0.0
                     try:
-                        _min_mc2 = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))
+                        _min_mc2 = int(os.getenv('HPO_MIN_MASK_COUNT', '10'))  # Default: 10 (same as HPO)
                     except Exception:
-                        _min_mc2 = 0
+                        _min_mc2 = 10
                     try:
-                        _min_mp2 = float(os.getenv('HPO_MIN_MASK_PCT', '0'))
+                        _min_mp2 = float(os.getenv('HPO_MIN_MASK_PCT', '5.0'))  # Default: 5.0 (same as HPO)
                     except Exception:
-                        _min_mp2 = 0.0
+                        _min_mp2 = 5.0
                     if (_min_mc2 > 0 and mask_count2 < _min_mc2) or (_min_mp2 > 0.0 and mask_pct2 < _min_mp2):
                         low_support2 = True
                         logger.info(
@@ -3388,7 +3534,9 @@ class ContinuousHPOPipeline:
                     'symbol not found',
                     'data not available',
                     'delisted',
-                    'inactive'
+                    'inactive',
+                    'no hpo candidates with sufficient support',  # ✅ NEW: LOW SUPPORT failure
+                    'all trials had low support'  # ✅ NEW: Alternative wording
                 ]
                 
                 # Check if this is a permanent failure
