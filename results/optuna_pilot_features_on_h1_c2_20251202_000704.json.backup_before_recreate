@@ -1,0 +1,873 @@
+{
+  "best_value": 51.21814214241959,
+  "best_dirhit": 81.81818181818183,
+  "best_params": {
+    "enable_external_features": false,
+    "enable_fingpt_features": false,
+    "enable_yolo_features": false,
+    "enable_directional_loss": false,
+    "enable_seed_bagging": true,
+    "enable_talib_patterns": false,
+    "enable_smart_ensemble": true,
+    "enable_stacked_short": true,
+    "enable_meta_stacking": false,
+    "enable_regime_detection": true,
+    "enable_fingpt": true,
+    "model_choice": "xgb",
+    "n_seeds": 5,
+    "ml_adaptive_k_1d": 2.126526762344409,
+    "ml_pattern_weight_scale_1d": 0.5018096374525316,
+    "enable_talib_patterns_short": false,
+    "external_min_days": 35,
+    "external_smooth_alpha": 0.225995986811384,
+    "regime_scale_low": 0.8872369968293556,
+    "regime_scale_high": 1.0393821956218918,
+    "smart_consensus_weight": 0.34490306694730477,
+    "smart_performance_weight": 0.25209918748585497,
+    "smart_sigma": 0.003023289798699087,
+    "smart_weight_xgb": 0.9520069479460513,
+    "smart_weight_lgbm": 0.6231191025750671,
+    "smart_weight_cat": 0.9314643506635434,
+    "xgb_n_estimators": 177,
+    "xgb_max_depth": 4,
+    "xgb_learning_rate": 0.043458206674096125,
+    "xgb_subsample": 0.5219240724540245,
+    "xgb_colsample_bytree": 0.5399342214344246,
+    "xgb_reg_alpha": 0.000242915476761139,
+    "xgb_reg_lambda": 3.782267663627302,
+    "xgb_min_child_weight": 7,
+    "xgb_gamma": 0.001412326510567555,
+    "xgb_grow_policy": "lossguide",
+    "xgb_tree_method": "hist",
+    "xgb_max_bin": 379
+  },
+  "best_trial": {
+    "number": 972,
+    "value": 51.21814214241959,
+    "state": "1"
+  },
+  "best_trial_number": 972,
+  "best_trial_seed": 1014,
+  "n_trials": 1437,
+  "pruned_count": 0,
+  "avg_trial_time": 253.5001536951049,
+  "top_k_trials": [
+    {
+      "number": 972,
+      "value": 51.21814214241959,
+      "params": {
+        "enable_external_features": false,
+        "enable_fingpt_features": false,
+        "enable_yolo_features": false,
+        "enable_directional_loss": false,
+        "enable_seed_bagging": true,
+        "enable_talib_patterns": false,
+        "enable_smart_ensemble": true,
+        "enable_stacked_short": true,
+        "enable_meta_stacking": false,
+        "enable_regime_detection": true,
+        "enable_fingpt": true,
+        "model_choice": "xgb",
+        "n_seeds": 5,
+        "ml_adaptive_k_1d": 2.126526762344409,
+        "ml_pattern_weight_scale_1d": 0.5018096374525316,
+        "enable_talib_patterns_short": false,
+        "external_min_days": 35,
+        "external_smooth_alpha": 0.225995986811384,
+        "regime_scale_low": 0.8872369968293556,
+        "regime_scale_high": 1.0393821956218918,
+        "smart_consensus_weight": 0.34490306694730477,
+        "smart_performance_weight": 0.25209918748585497,
+        "smart_sigma": 0.003023289798699087,
+        "smart_weight_xgb": 0.9520069479460513,
+        "smart_weight_lgbm": 0.6231191025750671,
+        "smart_weight_cat": 0.9314643506635434,
+        "xgb_n_estimators": 177,
+        "xgb_max_depth": 4,
+        "xgb_learning_rate": 0.043458206674096125,
+        "xgb_subsample": 0.5219240724540245,
+        "xgb_colsample_bytree": 0.5399342214344246,
+        "xgb_reg_alpha": 0.000242915476761139,
+        "xgb_reg_lambda": 3.782267663627302,
+        "xgb_min_child_weight": 7,
+        "xgb_gamma": 0.001412326510567555,
+        "xgb_grow_policy": "lossguide",
+        "xgb_tree_method": "hist",
+        "xgb_max_bin": 379
+      },
+      "attrs": {
+        "avg_dirhit": 81.81818181818183,
+        "avg_nrmse": 1.0090975217179472,
+        "model_choice": "xgb",
+        "symbol_metrics": {
+          "DARDL_1d": {
+            "symbol": "DARDL",
+            "horizon": 1,
+            "split_metrics": [
+              {
+                "split_index": 1,
+                "train_days": 452,
+                "test_days": 30,
+                "train_end_idx": 452,
+                "test_end_idx": 482,
+                "train_start": "2023-08-21T00:00:00",
+                "train_end": "2025-06-12T00:00:00",
+                "test_start": "2025-06-13T00:00:00",
+                "test_end": "2025-07-25T00:00:00",
+                "valid_predictions": 29,
+                "model_metrics": {
+                  "xgboost": {
+                    "raw_r2": 0.016372017349211825,
+                    "rmse": 0.044407913496741315,
+                    "mape": 1.7002024391173025,
+                    "confidence": 0.6382948407828251
+                  }
+                },
+                "dirhit": 81.81818181818183,
+                "rmse": 0.02352535094387377,
+                "mape": 93.3574621945818,
+                "nrmse": 0.9891596814022826,
+                "mask_count": 11,
+                "mask_pct": 37.93103448275862,
+                "low_support": false,
+                "min_mask_count": 10,
+                "min_mask_pct": 5.0
+              },
+              {
+                "split_index": 2,
+                "train_days": 482,
+                "test_days": 30,
+                "train_end_idx": 482,
+                "test_end_idx": 512,
+                "train_start": "2023-08-21T00:00:00",
+                "train_end": "2025-07-25T00:00:00",
+                "test_start": "2025-07-28T00:00:00",
+                "test_end": "2025-09-05T00:00:00",
+                "valid_predictions": 29,
+                "model_metrics": {
+                  "xgboost": {
+                    "raw_r2": 0.0059118669924967575,
+                    "rmse": 0.04354459191667138,
+                    "mape": 1.7142055559258014,
+                    "confidence": 0.6298030422132708
+                  }
+                },
+                "dirhit": null,
+                "rmse": 0.041815703799918,
+                "mape": 388635.62069166766,
+                "nrmse": 1.041656872831973,
+                "mask_count": 0,
+                "mask_pct": 0.0,
+                "low_support": true,
+                "min_mask_count": 10,
+                "min_mask_pct": 5.0
+              },
+              {
+                "split_index": 3,
+                "train_days": 512,
+                "test_days": 30,
+                "train_end_idx": 512,
+                "test_end_idx": 542,
+                "train_start": "2023-08-21T00:00:00",
+                "train_end": "2025-09-05T00:00:00",
+                "test_start": "2025-09-08T00:00:00",
+                "test_end": "2025-10-17T00:00:00",
+                "valid_predictions": 29,
+                "model_metrics": {
+                  "xgboost": {
+                    "raw_r2": 0.009710569779175282,
+                    "rmse": 0.043153414793541685,
+                    "mape": 1.6352493975837867,
+                    "confidence": 0.632888288365927
+                  }
+                },
+                "dirhit": null,
+                "rmse": 0.03308939352703406,
+                "mape": 3153191.2860460705,
+                "nrmse": 1.001033294352496,
+                "mask_count": 0,
+                "mask_pct": 0.0,
+                "low_support": true,
+                "min_mask_count": 10,
+                "min_mask_pct": 5.0
+              },
+              {
+                "split_index": 4,
+                "train_days": 542,
+                "test_days": 30,
+                "train_end_idx": 542,
+                "test_end_idx": 572,
+                "train_start": "2023-08-21T00:00:00",
+                "train_end": "2025-10-17T00:00:00",
+                "test_start": "2025-10-20T00:00:00",
+                "test_end": "2025-11-28T00:00:00",
+                "valid_predictions": 29,
+                "model_metrics": {
+                  "xgboost": {
+                    "raw_r2": 0.004177769635570853,
+                    "rmse": 0.042935043816091416,
+                    "mape": 1.6754274516561576,
+                    "confidence": 0.6283943144057447
+                  }
+                },
+                "dirhit": null,
+                "rmse": 0.03355851062486275,
+                "mape": 225588.26829910532,
+                "nrmse": 1.004540238285037,
+                "mask_count": 0,
+                "mask_pct": 0.0,
+                "low_support": true,
+                "min_mask_count": 10,
+                "min_mask_pct": 5.0
+              }
+            ],
+            "avg_dirhit": 81.81818181818183,
+            "avg_nrmse": 1.0090975217179472,
+            "split_count": 4,
+            "avg_model_metrics": {
+              "xgboost": {
+                "raw_r2": 0.009043055939113679,
+                "rmse": 0.04351024100576145,
+                "mape": 1.6812712110707622,
+                "confidence": 0.6323451214419419
+              }
+            }
+          }
+        }
+      },
+      "state": "1"
+    },
+    {
+      "number": 922,
+      "value": 51.13565457636935,
+      "params": {
+        "enable_external_features": true,
+        "enable_fingpt_features": false,
+        "enable_yolo_features": false,
+        "enable_directional_loss": false,
+        "enable_seed_bagging": true,
+        "enable_talib_patterns": false,
+        "enable_smart_ensemble": true,
+        "enable_stacked_short": false,
+        "enable_meta_stacking": true,
+        "enable_regime_detection": true,
+        "enable_fingpt": true,
+        "model_choice": "xgb",
+        "n_seeds": 5,
+        "meta_stacking_alpha": 7.195296591288784,
+        "ml_adaptive_k_1d": 1.9635877755728148,
+        "ml_pattern_weight_scale_1d": 0.5304247798312888,
+        "enable_talib_patterns_short": true,
+        "external_min_days": 36,
+        "external_smooth_alpha": 0.23246792964083102,
+        "regime_scale_low": 0.8749321206476857,
+        "regime_scale_high": 1.0268472077947775,
+        "smart_consensus_weight": 0.3449504073708981,
+        "smart_performance_weight": 0.2868585922890562,
+        "smart_sigma": 0.00437519608048188,
+        "smart_weight_xgb": 0.9162846820438254,
+        "smart_weight_lgbm": 0.6976044255819817,
+        "smart_weight_cat": 1.0406056423682066,
+        "xgb_n_estimators": 180,
+        "xgb_max_depth": 4,
+        "xgb_learning_rate": 0.017278993889091987,
+        "xgb_subsample": 0.5070959351522157,
+        "xgb_colsample_bytree": 0.5723762037401905,
+        "xgb_reg_alpha": 0.00011606939554549969,
+        "xgb_reg_lambda": 6.7383576487075265,
+        "xgb_min_child_weight": 6,
+        "xgb_gamma": 0.000833215877159759,
+        "xgb_grow_policy": "lossguide",
+        "xgb_tree_method": "hist",
+        "xgb_max_bin": 386
+      },
+      "attrs": {
+        "avg_dirhit": 81.81818181818183,
+        "avg_nrmse": 1.0228454493929875,
+        "model_choice": "xgb",
+        "symbol_metrics": {
+          "DARDL_1d": {
+            "symbol": "DARDL",
+            "horizon": 1,
+            "split_metrics": [
+              {
+                "split_index": 1,
+                "train_days": 452,
+                "test_days": 30,
+                "train_end_idx": 452,
+                "test_end_idx": 482,
+                "train_start": "2023-08-21T00:00:00",
+                "train_end": "2025-06-12T00:00:00",
+                "test_start": "2025-06-13T00:00:00",
+                "test_end": "2025-07-25T00:00:00",
+                "valid_predictions": 29,
+                "model_metrics": {
+                  "xgboost": {
+                    "raw_r2": 0.010521913638326849,
+                    "rmse": 0.044467853791548134,
+                    "mape": 1.7120410264662798,
+                    "confidence": 0.633547083560992
+                  }
+                },
+                "dirhit": 81.81818181818183,
+                "rmse": 0.02487101795956104,
+                "mape": 91.19132810024584,
+                "nrmse": 1.0457403275183146,
+                "mask_count": 11,
+                "mask_pct": 37.93103448275862,
+                "low_support": false,
+                "min_mask_count": 10,
+                "min_mask_pct": 5.0
+              },
+              {
+                "split_index": 2,
+                "train_days": 482,
+                "test_days": 30,
+                "train_end_idx": 482,
+                "test_end_idx": 512,
+                "train_start": "2023-08-21T00:00:00",
+                "train_end": "2025-07-25T00:00:00",
+                "test_start": "2025-07-28T00:00:00",
+                "test_end": "2025-09-05T00:00:00",
+                "valid_predictions": 29,
+                "model_metrics": {
+                  "xgboost": {
+                    "raw_r2": 0.013376097083114121,
+                    "rmse": 0.04343002918922186,
+                    "mape": 1.7569373966353556,
+                    "confidence": 0.6358640296154612
+                  }
+                },
+                "dirhit": null,
+                "rmse": 0.04217902952335029,
+                "mape": 1101715.4884948307,
+                "nrmse": 1.0507075572040636,
+                "mask_count": 0,
+                "mask_pct": 0.0,
+                "low_support": true,
+                "min_mask_count": 10,
+                "min_mask_pct": 5.0
+              },
+              {
+                "split_index": 3,
+                "train_days": 512,
+                "test_days": 30,
+                "train_end_idx": 512,
+                "test_end_idx": 542,
+                "train_start": "2023-08-21T00:00:00",
+                "train_end": "2025-09-05T00:00:00",
+                "test_start": "2025-09-08T00:00:00",
+                "test_end": "2025-10-17T00:00:00",
+                "valid_predictions": 29,
+                "model_metrics": {
+                  "xgboost": {
+                    "raw_r2": 0.013165930257886704,
+                    "rmse": 0.043053501217635716,
+                    "mape": 1.680649180722394,
+                    "confidence": 0.6356934569004876
+                  }
+                },
+                "dirhit": null,
+                "rmse": 0.033005308744835246,
+                "mape": 3331702.3572981316,
+                "nrmse": 0.9984895285847547,
+                "mask_count": 2,
+                "mask_pct": 6.896551724137931,
+                "low_support": true,
+                "min_mask_count": 10,
+                "min_mask_pct": 5.0
+              },
+              {
+                "split_index": 4,
+                "train_days": 542,
+                "test_days": 30,
+                "train_end_idx": 542,
+                "test_end_idx": 572,
+                "train_start": "2023-08-21T00:00:00",
+                "train_end": "2025-10-17T00:00:00",
+                "test_start": "2025-10-20T00:00:00",
+                "test_end": "2025-11-28T00:00:00",
+                "valid_predictions": 29,
+                "model_metrics": {
+                  "xgboost": {
+                    "raw_r2": 0.007549019987134975,
+                    "rmse": 0.04286653112852308,
+                    "mape": 1.7453841326448576,
+                    "confidence": 0.6311328506379414
+                  }
+                },
+                "dirhit": null,
+                "rmse": 0.033288053760318716,
+                "mape": 599388.6727725473,
+                "nrmse": 0.9964443842648171,
+                "mask_count": 0,
+                "mask_pct": 0.0,
+                "low_support": true,
+                "min_mask_count": 10,
+                "min_mask_pct": 5.0
+              }
+            ],
+            "avg_dirhit": 81.81818181818183,
+            "avg_nrmse": 1.0228454493929875,
+            "split_count": 4,
+            "avg_model_metrics": {
+              "xgboost": {
+                "raw_r2": 0.011153240241615663,
+                "rmse": 0.0434544788317322,
+                "mape": 1.7237529341172217,
+                "confidence": 0.6340593551787206
+              }
+            }
+          }
+        }
+      },
+      "state": "1"
+    },
+    {
+      "number": 281,
+      "value": 51.10718708935386,
+      "params": {
+        "enable_external_features": false,
+        "enable_fingpt_features": false,
+        "enable_yolo_features": false,
+        "enable_directional_loss": false,
+        "enable_seed_bagging": true,
+        "enable_talib_patterns": false,
+        "enable_smart_ensemble": true,
+        "enable_stacked_short": false,
+        "enable_meta_stacking": true,
+        "enable_regime_detection": true,
+        "enable_fingpt": false,
+        "model_choice": "xgb",
+        "n_seeds": 5,
+        "meta_stacking_alpha": 5.670340162995001,
+        "ml_adaptive_k_1d": 2.077740524489107,
+        "ml_pattern_weight_scale_1d": 1.4414390888192732,
+        "enable_talib_patterns_short": false,
+        "external_min_days": 25,
+        "external_smooth_alpha": 0.2621420807264448,
+        "regime_scale_low": 0.850368678254199,
+        "regime_scale_high": 1.0284494992629338,
+        "smart_consensus_weight": 0.33702135450372517,
+        "smart_performance_weight": 0.30937305834871365,
+        "smart_sigma": 0.002568121495190906,
+        "smart_weight_xgb": 1.3555756156362402,
+        "smart_weight_lgbm": 0.7565883282296603,
+        "smart_weight_cat": 1.0095554468128751,
+        "xgb_n_estimators": 174,
+        "xgb_max_depth": 4,
+        "xgb_learning_rate": 0.03536591259635856,
+        "xgb_subsample": 0.5095247001557699,
+        "xgb_colsample_bytree": 0.5298022410201015,
+        "xgb_reg_alpha": 0.0001946964986482173,
+        "xgb_reg_lambda": 22.533921123970416,
+        "xgb_min_child_weight": 8,
+        "xgb_gamma": 0.001191430747723866,
+        "xgb_grow_policy": "lossguide",
+        "xgb_tree_method": "hist",
+        "xgb_max_bin": 372
+      },
+      "attrs": {
+        "avg_dirhit": 81.81818181818183,
+        "avg_nrmse": 1.0275900305622359,
+        "model_choice": "xgb",
+        "symbol_metrics": {
+          "DARDL_1d": {
+            "symbol": "DARDL",
+            "horizon": 1,
+            "split_metrics": [
+              {
+                "split_index": 1,
+                "train_days": 452,
+                "test_days": 30,
+                "train_end_idx": 452,
+                "test_end_idx": 482,
+                "train_start": "2023-08-21T00:00:00",
+                "train_end": "2025-06-12T00:00:00",
+                "test_start": "2025-06-13T00:00:00",
+                "test_end": "2025-07-25T00:00:00",
+                "valid_predictions": 29,
+                "model_metrics": {
+                  "xgboost": {
+                    "raw_r2": 0.0015668530758109478,
+                    "rmse": 0.04459120851826828,
+                    "mape": 1.7276719171174153,
+                    "confidence": 0.6262730616128476
+                  }
+                },
+                "dirhit": 81.81818181818183,
+                "rmse": 0.02503522964701281,
+                "mape": 96.35615731206157,
+                "nrmse": 1.0526448613052855,
+                "mask_count": 11,
+                "mask_pct": 37.93103448275862,
+                "low_support": false,
+                "min_mask_count": 10,
+                "min_mask_pct": 5.0
+              },
+              {
+                "split_index": 2,
+                "train_days": 482,
+                "test_days": 30,
+                "train_end_idx": 482,
+                "test_end_idx": 512,
+                "train_start": "2023-08-21T00:00:00",
+                "train_end": "2025-07-25T00:00:00",
+                "test_start": "2025-07-28T00:00:00",
+                "test_end": "2025-09-05T00:00:00",
+                "valid_predictions": 29,
+                "model_metrics": {
+                  "xgboost": {
+                    "raw_r2": 0.0019524521506627164,
+                    "rmse": 0.04356480466674091,
+                    "mape": 1.7516068784780603,
+                    "confidence": 0.6265863547739032
+                  }
+                },
+                "dirhit": null,
+                "rmse": 0.04217886790842888,
+                "mape": 1117445.4558408973,
+                "nrmse": 1.050703531269347,
+                "mask_count": 0,
+                "mask_pct": 0.0,
+                "low_support": true,
+                "min_mask_count": 10,
+                "min_mask_pct": 5.0
+              },
+              {
+                "split_index": 3,
+                "train_days": 512,
+                "test_days": 30,
+                "train_end_idx": 512,
+                "test_end_idx": 542,
+                "train_start": "2023-08-21T00:00:00",
+                "train_end": "2025-09-05T00:00:00",
+                "test_start": "2025-09-08T00:00:00",
+                "test_end": "2025-10-17T00:00:00",
+                "valid_predictions": 29,
+                "model_metrics": {
+                  "xgboost": {
+                    "raw_r2": 0.0056041807792958824,
+                    "rmse": 0.0431722024704764,
+                    "mape": 1.7274664736581382,
+                    "confidence": 0.6295530989736159
+                  }
+                },
+                "dirhit": null,
+                "rmse": 0.03322504364405718,
+                "mape": 3062881.0475058043,
+                "nrmse": 1.0051370348278847,
+                "mask_count": 0,
+                "mask_pct": 0.0,
+                "low_support": true,
+                "min_mask_count": 10,
+                "min_mask_pct": 5.0
+              },
+              {
+                "split_index": 4,
+                "train_days": 542,
+                "test_days": 30,
+                "train_end_idx": 542,
+                "test_end_idx": 572,
+                "train_start": "2023-08-21T00:00:00",
+                "train_end": "2025-10-17T00:00:00",
+                "test_start": "2025-10-20T00:00:00",
+                "test_end": "2025-11-28T00:00:00",
+                "valid_predictions": 29,
+                "model_metrics": {
+                  "xgboost": {
+                    "raw_r2": 0.0007579201893997597,
+                    "rmse": 0.043031248264224754,
+                    "mape": 1.812325355081656,
+                    "confidence": 0.6256158094169137
+                  }
+                },
+                "dirhit": null,
+                "rmse": 0.03346946325334247,
+                "mape": 410661.4903084101,
+                "nrmse": 1.0018746948464268,
+                "mask_count": 0,
+                "mask_pct": 0.0,
+                "low_support": true,
+                "min_mask_count": 10,
+                "min_mask_pct": 5.0
+              }
+            ],
+            "avg_dirhit": 81.81818181818183,
+            "avg_nrmse": 1.0275900305622359,
+            "split_count": 4,
+            "avg_model_metrics": {
+              "xgboost": {
+                "raw_r2": 0.0024703515487923267,
+                "rmse": 0.04358986597992758,
+                "mape": 1.7547676560838175,
+                "confidence": 0.6270070811943201
+              }
+            }
+          }
+        }
+      },
+      "state": "1"
+    }
+  ],
+  "study_name": "hpo_with_features_DARDL_h1_c2",
+  "symbols": [
+    "DARDL"
+  ],
+  "horizon": 1,
+  "best_model_choice": "xgb",
+  "feature_flags": {
+    "enable_external_features": false,
+    "enable_fingpt_features": false,
+    "enable_yolo_features": false,
+    "enable_directional_loss": false,
+    "enable_seed_bagging": true,
+    "enable_talib_patterns": false,
+    "enable_smart_ensemble": true,
+    "enable_stacked_short": true,
+    "enable_meta_stacking": false,
+    "enable_regime_detection": true,
+    "enable_fingpt": true,
+    "enable_talib_patterns_short": false
+  },
+  "feature_params": {
+    "n_seeds": 5,
+    "ml_adaptive_k_1d": 2.126526762344409,
+    "ml_pattern_weight_scale_1d": 0.5018096374525316,
+    "external_min_days": 35,
+    "external_smooth_alpha": 0.225995986811384,
+    "regime_scale_low": 0.8872369968293556,
+    "regime_scale_high": 1.0393821956218918,
+    "smart_consensus_weight": 0.34490306694730477,
+    "smart_performance_weight": 0.25209918748585497,
+    "smart_sigma": 0.003023289798699087,
+    "smart_weight_xgb": 0.9520069479460513,
+    "smart_weight_lgbm": 0.6231191025750671,
+    "smart_weight_cat": 0.9314643506635434
+  },
+  "hyperparameters": {
+    "model_choice": "xgb",
+    "xgb_n_estimators": 177,
+    "xgb_max_depth": 4,
+    "xgb_learning_rate": 0.043458206674096125,
+    "xgb_subsample": 0.5219240724540245,
+    "xgb_colsample_bytree": 0.5399342214344246,
+    "xgb_reg_alpha": 0.000242915476761139,
+    "xgb_reg_lambda": 3.782267663627302,
+    "xgb_min_child_weight": 7,
+    "xgb_gamma": 0.001412326510567555,
+    "xgb_grow_policy": "lossguide",
+    "xgb_tree_method": "hist",
+    "xgb_max_bin": 379
+  },
+  "features_enabled": {
+    "ENABLE_EXTERNAL_FEATURES": "0",
+    "ENABLE_FINGPT_FEATURES": "0",
+    "ENABLE_YOLO_FEATURES": "0",
+    "ML_USE_DIRECTIONAL_LOSS": "0",
+    "ENABLE_SEED_BAGGING": "1",
+    "ENABLE_TALIB_PATTERNS": "0",
+    "ML_USE_SMART_ENSEMBLE": "1",
+    "ML_USE_STACKED_SHORT": "1",
+    "ENABLE_META_STACKING": "0",
+    "ML_USE_REGIME_DETECTION": "1",
+    "ENABLE_FINGPT": "1",
+    "ML_USE_ADAPTIVE_LEARNING": "0",
+    "ENABLE_XGBOOST": "1",
+    "ENABLE_LIGHTGBM": "0",
+    "ENABLE_CATBOOST": "0"
+  },
+  "best_trial_metrics": {
+    "DARDL_1d": {
+      "symbol": "DARDL",
+      "horizon": 1,
+      "split_metrics": [
+        {
+          "split_index": 1,
+          "train_days": 452,
+          "test_days": 30,
+          "train_end_idx": 452,
+          "test_end_idx": 482,
+          "train_start": "2023-08-21T00:00:00",
+          "train_end": "2025-06-12T00:00:00",
+          "test_start": "2025-06-13T00:00:00",
+          "test_end": "2025-07-25T00:00:00",
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": 0.016372017349211825,
+              "rmse": 0.044407913496741315,
+              "mape": 1.7002024391173025,
+              "confidence": 0.6382948407828251
+            }
+          },
+          "dirhit": 81.81818181818183,
+          "rmse": 0.02352535094387377,
+          "mape": 93.3574621945818,
+          "nrmse": 0.9891596814022826,
+          "mask_count": 11,
+          "mask_pct": 37.93103448275862,
+          "low_support": false,
+          "min_mask_count": 10,
+          "min_mask_pct": 5.0
+        },
+        {
+          "split_index": 2,
+          "train_days": 482,
+          "test_days": 30,
+          "train_end_idx": 482,
+          "test_end_idx": 512,
+          "train_start": "2023-08-21T00:00:00",
+          "train_end": "2025-07-25T00:00:00",
+          "test_start": "2025-07-28T00:00:00",
+          "test_end": "2025-09-05T00:00:00",
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": 0.0059118669924967575,
+              "rmse": 0.04354459191667138,
+              "mape": 1.7142055559258014,
+              "confidence": 0.6298030422132708
+            }
+          },
+          "dirhit": null,
+          "rmse": 0.041815703799918,
+          "mape": 388635.62069166766,
+          "nrmse": 1.041656872831973,
+          "mask_count": 0,
+          "mask_pct": 0.0,
+          "low_support": true,
+          "min_mask_count": 10,
+          "min_mask_pct": 5.0
+        },
+        {
+          "split_index": 3,
+          "train_days": 512,
+          "test_days": 30,
+          "train_end_idx": 512,
+          "test_end_idx": 542,
+          "train_start": "2023-08-21T00:00:00",
+          "train_end": "2025-09-05T00:00:00",
+          "test_start": "2025-09-08T00:00:00",
+          "test_end": "2025-10-17T00:00:00",
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": 0.009710569779175282,
+              "rmse": 0.043153414793541685,
+              "mape": 1.6352493975837867,
+              "confidence": 0.632888288365927
+            }
+          },
+          "dirhit": null,
+          "rmse": 0.03308939352703406,
+          "mape": 3153191.2860460705,
+          "nrmse": 1.001033294352496,
+          "mask_count": 0,
+          "mask_pct": 0.0,
+          "low_support": true,
+          "min_mask_count": 10,
+          "min_mask_pct": 5.0
+        },
+        {
+          "split_index": 4,
+          "train_days": 542,
+          "test_days": 30,
+          "train_end_idx": 542,
+          "test_end_idx": 572,
+          "train_start": "2023-08-21T00:00:00",
+          "train_end": "2025-10-17T00:00:00",
+          "test_start": "2025-10-20T00:00:00",
+          "test_end": "2025-11-28T00:00:00",
+          "valid_predictions": 29,
+          "model_metrics": {
+            "xgboost": {
+              "raw_r2": 0.004177769635570853,
+              "rmse": 0.042935043816091416,
+              "mape": 1.6754274516561576,
+              "confidence": 0.6283943144057447
+            }
+          },
+          "dirhit": null,
+          "rmse": 0.03355851062486275,
+          "mape": 225588.26829910532,
+          "nrmse": 1.004540238285037,
+          "mask_count": 0,
+          "mask_pct": 0.0,
+          "low_support": true,
+          "min_mask_count": 10,
+          "min_mask_pct": 5.0
+        }
+      ],
+      "avg_dirhit": 81.81818181818183,
+      "avg_nrmse": 1.0090975217179472,
+      "split_count": 4,
+      "avg_model_metrics": {
+        "xgboost": {
+          "raw_r2": 0.009043055939113679,
+          "rmse": 0.04351024100576145,
+          "mape": 1.6812712110707622,
+          "confidence": 0.6323451214419419
+        }
+      }
+    }
+  },
+  "evaluation_spec": {
+    "horizon": 1,
+    "dirhit_threshold": 0.005,
+    "min_mask_count": 10,
+    "min_mask_pct": 5.0,
+    "best_trial_number": 972,
+    "best_trial_seed": 1014,
+    "scoring": {
+      "formula": "score = 0.7*avg_dirhit - k*avg_nrmse",
+      "k": 6.0
+    },
+    "split_generation": {
+      "type": "generate_walkforward_splits",
+      "n_splits": 4
+    },
+    "symbol_specs": {
+      "DARDL_1d": {
+        "splits": [
+          {
+            "split_index": 1,
+            "train_end_idx": 452,
+            "test_end_idx": 482,
+            "train_start": "2023-08-21T00:00:00",
+            "train_end": "2025-06-12T00:00:00",
+            "test_start": "2025-06-13T00:00:00",
+            "test_end": "2025-07-25T00:00:00"
+          },
+          {
+            "split_index": 2,
+            "train_end_idx": 482,
+            "test_end_idx": 512,
+            "train_start": "2023-08-21T00:00:00",
+            "train_end": "2025-07-25T00:00:00",
+            "test_start": "2025-07-28T00:00:00",
+            "test_end": "2025-09-05T00:00:00"
+          },
+          {
+            "split_index": 3,
+            "train_end_idx": 512,
+            "test_end_idx": 542,
+            "train_start": "2023-08-21T00:00:00",
+            "train_end": "2025-09-05T00:00:00",
+            "test_start": "2025-09-08T00:00:00",
+            "test_end": "2025-10-17T00:00:00"
+          },
+          {
+            "split_index": 4,
+            "train_end_idx": 542,
+            "test_end_idx": 572,
+            "train_start": "2023-08-21T00:00:00",
+            "train_end": "2025-10-17T00:00:00",
+            "test_start": "2025-10-20T00:00:00",
+            "test_end": "2025-11-28T00:00:00"
+          }
+        ]
+      }
+    }
+  }
+}

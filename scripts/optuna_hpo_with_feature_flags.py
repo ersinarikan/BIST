@@ -872,8 +872,10 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
             symbol_metric_entry['split_metrics'].append(split_entry)
         
         # Average DirHit across all splits
+        # ✅ FIX: Require at least 2 splits for reliable DirHit calculation
+        # Single split DirHit is statistically unreliable
         avg_dirhit_value = None
-        if split_dirhits:
+        if len(split_dirhits) >= 2:
             avg_dirhit_value = float(np.mean(split_dirhits))
             print(
                 f"[hpo] {sym} {horizon}d: Average DirHit across {len(split_dirhits)} splits: {avg_dirhit_value:.2f}% "
@@ -881,8 +883,24 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
                 file=sys.stderr, flush=True
             )
             dirhits.append(avg_dirhit_value)
+        elif len(split_dirhits) == 1:
+            print(f"[hpo] {sym} {horizon}d: Only 1 valid split (DirHit={split_dirhits[0]:.2f}%) - excluded (need at least 2 splits for reliability)", file=sys.stderr, flush=True)
+            # ✅ WARNING: Only 1 split - statistically unreliable
+            print(
+                f"⚠️ WARNING: {sym} {horizon}d: Only 1 split passed filter (min_count={_min_mc}, min_pct={_min_mp}%) - "
+                f"DirHit excluded (need at least 2 splits for statistical reliability)",
+                file=sys.stderr, flush=True
+            )
+            symbol_metric_entry['low_support_warning'] = True
         else:
             print(f"[hpo] {sym} {horizon}d: No valid DirHit from any split", file=sys.stderr, flush=True)
+            # ✅ WARNING: All splits excluded by filter - best params may not be optimal for this symbol
+            print(
+                f"⚠️ WARNING: {sym} {horizon}d: All splits excluded by filter (min_count={_min_mc}, min_pct={_min_mp}%) - "
+                f"best params may not be optimal for this symbol",
+                file=sys.stderr, flush=True
+            )
+            symbol_metric_entry['low_support_warning'] = True
         # Compute per-symbol nRMSE as the average across split nRMSE values
         avg_nrmse_value = None
         if split_nrmses_local:
@@ -1257,6 +1275,22 @@ def main():
     symbol_metrics_best = best_trial.user_attrs.get('symbol_metrics')
     if isinstance(symbol_metrics_best, dict):
         result['best_trial_metrics'] = symbol_metrics_best
+        # ✅ NEW: Check for low_support_warning flags in symbol_metrics
+        low_support_symbols = []
+        for sym_key, sym_metrics in symbol_metrics_best.items():
+            if isinstance(sym_metrics, dict) and sym_metrics.get('low_support_warning'):
+                # Extract symbol and horizon from key (e.g., "ADEL_1d" -> "ADEL", 1)
+                parts = sym_key.rsplit('_', 1)
+                if len(parts) == 2:
+                    sym_name = parts[0]
+                    try:
+                        h = int(parts[1].replace('d', ''))
+                        low_support_symbols.append(f"{sym_name}_{h}d")
+                    except Exception:
+                        pass
+        if low_support_symbols:
+            result['low_support_warnings'] = low_support_symbols
+            print(f"⚠️ WARNING: {len(low_support_symbols)} symbol(s) had all splits excluded by filter: {', '.join(low_support_symbols)}", file=sys.stderr, flush=True)
     
     # ✅ NEW: Write evaluation_spec for exact reproducibility in training
     try:
@@ -1265,14 +1299,29 @@ def main():
             _thr = 0.005
         except Exception:
             _thr = 0.005
+        # ✅ CRITICAL FIX: Get filter values from best_trial's split_metrics (what was actually used during HPO)
+        # Not from environment variables (which may have changed)
+        _min_mc_spec = 0
+        _min_mp_spec = 0.0
         try:
-            _min_mc_spec = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))
+            if isinstance(symbol_metrics_best, dict) and len(symbol_metrics_best) > 0:
+                # Get filter values from first symbol's first split (all should have same filter)
+                first_symbol_metrics = next(iter(symbol_metrics_best.values()))
+                split_metrics = first_symbol_metrics.get('split_metrics', [])
+                if split_metrics:
+                    first_split = split_metrics[0]
+                    _min_mc_spec = int(first_split.get('min_mask_count', 0))
+                    _min_mp_spec = float(first_split.get('min_mask_pct', 0.0))
         except Exception:
-            _min_mc_spec = 0
-        try:
-            _min_mp_spec = float(os.getenv('HPO_MIN_MASK_PCT', '0'))
-        except Exception:
-            _min_mp_spec = 0.0
+            # Fallback to environment variables if split_metrics not available
+            try:
+                _min_mc_spec = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))
+            except Exception:
+                _min_mc_spec = 0
+            try:
+                _min_mp_spec = float(os.getenv('HPO_MIN_MASK_PCT', '0'))
+            except Exception:
+                _min_mp_spec = 0.0
         # Scoring config
         try:
             _k = 6.0 if horizon in (1, 3, 7) else 4.0

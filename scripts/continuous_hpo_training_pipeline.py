@@ -37,6 +37,25 @@ import threading
 import numpy as np
 import pandas as pd
 
+# ✅ FIX: Suppress KeyError from gevent monkey-patched threading module
+# This is a known issue where gevent's monkey-patched threading._delete()
+# tries to delete a thread from _active dict that's already been removed
+# This happens during thread cleanup and doesn't affect functionality
+_original_threading_delete = threading.Thread._delete
+
+
+def _safe_threading_delete(self):
+    """Wrapper to safely handle KeyError in thread cleanup (gevent compatibility)"""
+    try:
+        _original_threading_delete(self)
+    except KeyError:
+        # Thread already removed from _active dict - safe to ignore
+        # This is a harmless race condition in gevent's monkey-patched threading
+        pass
+
+
+threading.Thread._delete = _safe_threading_delete
+
 # Set environment
 sys.path.insert(0, '/opt/bist-pattern')
 os.environ['PYTHONPATH'] = '/opt/bist-pattern'
@@ -1701,14 +1720,15 @@ class ContinuousHPOPipeline:
                                 avg_mask_pct = np.mean(mask_pcts) if mask_pcts else 0.0
                                 
                                 # ✅ FIX: Use same thresholds as HPO (from environment variables)
+                                # Default: 0/0.0 (same as HPO code default) - environment variable will override
                                 try:
-                                    _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '10'))  # Default: 10
+                                    _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))  # Default: 0 (same as HPO)
                                 except Exception:
-                                    _min_mc = 10
+                                    _min_mc = 0
                                 try:
-                                    _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '5.0'))  # Default: 5.0
+                                    _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '0.0'))  # Default: 0.0 (same as HPO)
                                 except Exception:
-                                    _min_mp = 5.0
+                                    _min_mp = 0.0
                                 
                                 if total_mask_count < _min_mc or avg_mask_pct < _min_mp:
                                     has_low_support = True
@@ -1842,14 +1862,15 @@ class ContinuousHPOPipeline:
                             
                             # ✅ FIX: Use same thresholds as HPO (from environment variables)
                             # This ensures consistency between HPO filtering and validation
+                            # Default: 0/0.0 (same as HPO code default) - environment variable will override
                             try:
-                                _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '10'))  # Default: 10 (same as HPO)
+                                _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))  # Default: 0 (same as HPO)
                             except Exception:
-                                _min_mc = 10
+                                _min_mc = 0
                             try:
-                                _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '5.0'))  # Default: 5.0 (same as HPO)
+                                _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '0.0'))  # Default: 0.0 (same as HPO)
                             except Exception:
-                                _min_mp = 5.0
+                                _min_mp = 0.0
                             
                             # Low support threshold: use same as HPO
                             if total_mask_count < _min_mc or avg_mask_pct < _min_mp:
@@ -2431,17 +2452,18 @@ class ContinuousHPOPipeline:
                     
                     # ✅ FIX: Low-support gating (same as HPO)
                     # Use same default values as HPO to ensure consistency
+                    # HPO uses default: 0 (disabled) - see optuna_hpo_with_feature_flags.py:807-813
                     low_support = False
                     _min_mc = 0
                     _min_mp = 0.0
                     try:
-                        _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '10'))  # Default: 10 (same as HPO)
+                        _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))  # Default: 0 (same as HPO)
                     except Exception:
-                        _min_mc = 10
+                        _min_mc = 0
                     try:
-                        _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '5.0'))  # Default: 5.0 (same as HPO)
+                        _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '0.0'))  # Default: 0.0 (same as HPO)
                     except Exception:
-                        _min_mp = 5.0
+                        _min_mp = 0.0
                     if (_min_mc > 0 and mask_count < _min_mc) or (_min_mp > 0.0 and mask_pct < _min_mp):
                         low_support = True
                         logger.info(
@@ -2463,7 +2485,9 @@ class ContinuousHPOPipeline:
                     logger.warning(f"⚠️ {symbol} {horizon}d WFV Split {split_idx}: No valid predictions!")
             
             # Average DirHit, nRMSE, and Score across all splits
-            if split_dirhits:
+            # ✅ FIX: Require at least 2 splits for reliable DirHit calculation (same as HPO)
+            # Single split DirHit is statistically unreliable
+            if len(split_dirhits) >= 2:
                 avg_dirhit = float(np.mean(split_dirhits))
                 avg_nrmse = float(np.mean(split_nrmses)) if split_nrmses else float('inf')
                 avg_score = float(np.mean(split_scores)) if split_scores else 0.0
@@ -2471,11 +2495,61 @@ class ContinuousHPOPipeline:
                 results['wfv'] = avg_dirhit
                 results['wfv_nrmse'] = avg_nrmse
                 results['wfv_score'] = avg_score
-            else:
-                logger.warning(f"⚠️ {symbol} {horizon}d WFV: No valid DirHit from any split")
+            elif len(split_dirhits) == 1:
+                logger.warning(f"⚠️ {symbol} {horizon}d WFV: Only 1 split passed filter (DirHit={split_dirhits[0]:.2f}%) - excluded (need at least 2 splits for reliability)")
+                logger.warning(
+                    f"⚠️ WARNING: {symbol} {horizon}d: Only 1 split passed filter (min_count={_min_mc}, min_pct={_min_mp}%) - "
+                    f"DirHit excluded (need at least 2 splits for statistical reliability)"
+                )
                 results['wfv'] = None
                 results['wfv_nrmse'] = None
                 results['wfv_score'] = None
+                results['low_support_warning'] = True
+            else:
+                logger.warning(f"⚠️ {symbol} {horizon}d WFV: No valid DirHit from any split")
+                # ✅ WARNING: All splits excluded by filter - best params may not be optimal for this symbol
+                logger.warning(
+                    f"⚠️ WARNING: {symbol} {horizon}d: All splits excluded by filter "
+                    f"(min_count={_min_mc}, min_pct={_min_mp}%) - "
+                    f"best params may not be optimal for this symbol"
+                )
+                results['wfv'] = None
+                results['wfv_nrmse'] = None
+                results['wfv_score'] = None
+                results['low_support_warning'] = True
+                
+                # ✅ FALLBACK: Try to find best params with 0/0.0 filter (no filter)
+                # This ensures we have valid params even for low-support symbols
+                if hpo_result and 'json_file' in hpo_result:
+                    try:
+                        from scripts.find_fallback_best_params import find_fallback_best_params
+                        from scripts.retrain_high_discrepancy_symbols import find_study_db
+                        
+                        # Find study DB for fallback
+                        study_db = find_study_db(symbol, horizon)
+                        
+                        if study_db and study_db.exists():
+                            logger.info(f"🔄 {symbol} {horizon}d: Attempting fallback - finding best params with 0/0.0 filter...")
+                            fallback_params = find_fallback_best_params(study_db, symbol, horizon)
+                            
+                            if fallback_params:
+                                logger.info(
+                                    f"✅ {symbol} {horizon}d: Found fallback best params (trial #{fallback_params['best_trial_number']}, "
+                                    f"DirHit: {fallback_params['best_value']:.2f}%)"
+                                )
+                                results['fallback_best_params'] = fallback_params
+                                results['fallback_available'] = True
+                            else:
+                                logger.warning(f"⚠️ {symbol} {horizon}d: No fallback best params found")
+                                results['fallback_available'] = False
+                        else:
+                            logger.debug(f"⚠️ {symbol} {horizon}d: Study DB not found for fallback")
+                            results['fallback_available'] = False
+                    except Exception as fallback_err:
+                        logger.debug(f"⚠️ {symbol} {horizon}d: Fallback mechanism failed: {fallback_err}")
+                        results['fallback_available'] = False
+                else:
+                    results['fallback_available'] = False
         except Exception as e:
             logger.error(f"❌ WFV evaluation error for {symbol} {horizon}d: {e}")
             import traceback
@@ -2871,13 +2945,13 @@ class ContinuousHPOPipeline:
                     _min_mc2 = 0
                     _min_mp2 = 0.0
                     try:
-                        _min_mc2 = int(os.getenv('HPO_MIN_MASK_COUNT', '10'))  # Default: 10 (same as HPO)
+                        _min_mc2 = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))  # Default: 0 (same as HPO)
                     except Exception:
-                        _min_mc2 = 10
+                        _min_mc2 = 0
                     try:
-                        _min_mp2 = float(os.getenv('HPO_MIN_MASK_PCT', '5.0'))  # Default: 5.0 (same as HPO)
+                        _min_mp2 = float(os.getenv('HPO_MIN_MASK_PCT', '0.0'))  # Default: 0.0 (same as HPO)
                     except Exception:
-                        _min_mp2 = 5.0
+                        _min_mp2 = 0.0
                     if (_min_mc2 > 0 and mask_count2 < _min_mc2) or (_min_mp2 > 0.0 and mask_pct2 < _min_mp2):
                         low_support2 = True
                         logger.info(
@@ -3191,7 +3265,24 @@ class ContinuousHPOPipeline:
                 from sqlalchemy import create_engine
                 from scripts.optuna_hpo_with_feature_flags import fetch_prices
                 
-                db_url = os.getenv('DATABASE_URL', 'postgresql://bist_user:5ex5chan5GE5*@127.0.0.1:6432/bist_pattern_db').strip()
+                # ✅ CRITICAL: Always read password from secret file (same as systemd service)
+                # Don't trust environment variable as it may have wrong password
+                secret_file = Path('/opt/bist-pattern/.secrets/db_password')
+                if secret_file.exists():
+                    with open(secret_file, 'r') as f:
+                        db_password = f.read().strip()
+                    db_url = f"postgresql://bist_user:{db_password}@127.0.0.1:6432/bist_pattern_db"
+                else:
+                    # Fallback: try environment variable
+                    db_url = os.getenv('DATABASE_URL', 'postgresql://bist_user:5ex5chan5GE5*@127.0.0.1:6432/bist_pattern_db')
+                    logger.warning(f"⚠️ {symbol} {horizon}d: Secret file not found, using environment variable or fallback")
+                db_url = db_url.strip()
+                # Force PgBouncer port if somehow 5432 got in
+                if ':5432/' in db_url:
+                    db_url = db_url.replace(':5432/', ':6432/')
+                    logger.warning(f"⚠️ {symbol} {horizon}d: Fixed DATABASE_URL port from 5432 to 6432")
+                # Set in environment for downstream use
+                os.environ['DATABASE_URL'] = db_url
                 engine = create_engine(db_url, pool_pre_ping=True, pool_recycle=3600)
                 try:
                     df = fetch_prices(engine, symbol, limit=1200)
@@ -3629,15 +3720,27 @@ class ContinuousHPOPipeline:
             task = self.state.get(key)
             if task:
                 task.hpo_completed_at = datetime.now().isoformat()
-                # ✅ CRITICAL FIX: Use best_dirhit if available, otherwise fallback to best_value
-                # Method 2 returns score (DirHit * mask_after_thr / 100), not DirHit
-                best_dirhit = hpo_result.get('best_dirhit')
-                if best_dirhit is not None:
-                    task.hpo_dirhit = best_dirhit
+                # ✅ CRITICAL FIX: Use symbol-specific avg_dirhit from best_trial_metrics
+                # HPO best trial'ı seçerken tüm sembollerin ortalamasına bakıyor,
+                # ama gösterim sembol bazında olduğu için o sembol için avg_dirhit kullanmalıyız
+                symbol_key = f"{symbol}_{horizon}d"
+                best_trial_metrics = hpo_result.get('best_trial_metrics', {})
+                symbol_metrics = best_trial_metrics.get(symbol_key, {}) if isinstance(best_trial_metrics, dict) else {}
+                symbol_avg_dirhit = symbol_metrics.get('avg_dirhit') if isinstance(symbol_metrics, dict) else None
+                
+                if symbol_avg_dirhit is not None and isinstance(symbol_avg_dirhit, (int, float)):
+                    task.hpo_dirhit = float(symbol_avg_dirhit)
+                    logger.info(f"✅ {symbol} {horizon}d: HPO DirHit from best_trial_metrics: {task.hpo_dirhit:.2f}%")
                 else:
-                    # Fallback: Use best_value (score) but log warning
-                    task.hpo_dirhit = hpo_result.get('best_value', 0)
-                    logger.warning(f"⚠️ {symbol} {horizon}d: HPO DirHit not available, using score instead: {task.hpo_dirhit:.2f}")
+                    # Fallback: Use best_dirhit (tüm sembollerin ortalaması)
+                    best_dirhit = hpo_result.get('best_dirhit')
+                    if best_dirhit is not None:
+                        task.hpo_dirhit = best_dirhit
+                        logger.warning(f"⚠️ {symbol} {horizon}d: Symbol-specific DirHit not found, using best_dirhit (all symbols avg): {task.hpo_dirhit:.2f}%")
+                    else:
+                        # Final fallback: Use best_value (score) but log warning
+                        task.hpo_dirhit = hpo_result.get('best_value', 0)
+                        logger.warning(f"⚠️ {symbol} {horizon}d: HPO DirHit not available, using score instead: {task.hpo_dirhit:.2f}")
                 task.best_params_file = hpo_result['json_file']
                 task.status = 'training_in_progress'
                 self.state[key] = task

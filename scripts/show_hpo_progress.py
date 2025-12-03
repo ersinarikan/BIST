@@ -10,6 +10,7 @@ Gösterir:
 - Tamamlanan semboller ve ufuklar için istatistiksel bilgiler
 """
 import sys
+import os
 import json
 import sqlite3
 import subprocess
@@ -858,7 +859,15 @@ def main():
             line = f"   {symbol}_{horizon}d:"
             if hpo_dirhit is not None:
                 line += f" HPO DirHit={hpo_dirhit:.2f}%"
-            if adaptive_dirhit is not None:
+            # ✅ FIX: Use WFV dirhit for comparison with HPO (HPO also uses WFV methodology)
+            # Priority: training_dirhit_wfv > training_dirhit_online > adaptive_dirhit > training_dirhit
+            training_dirhit_wfv = task.get('training_dirhit_wfv')
+            training_dirhit_online = task.get('training_dirhit_online')
+            if training_dirhit_wfv is not None:
+                line += f" Training DirHit={training_dirhit_wfv:.2f}%"
+            elif training_dirhit_online is not None:
+                line += f" Training DirHit={training_dirhit_online:.2f}%"
+            elif adaptive_dirhit is not None:
                 line += f" Training DirHit={adaptive_dirhit:.2f}%"
             elif training_dirhit is not None:
                 line += f" Training DirHit={training_dirhit:.2f}%"
