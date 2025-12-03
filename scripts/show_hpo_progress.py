@@ -124,8 +124,9 @@ def get_trial_info_from_db(db_file: Path) -> Optional[Dict]:
         complete_trials = cursor.fetchone()[0]
         
         # Get best trial (highest value) - Optuna v3+ uses trial_values table
+        # ✅ FIX: Get both trial_id and number to correctly query user_attrs
         cursor.execute("""
-            SELECT t.number, tv.value, t.state
+            SELECT t.trial_id, t.number, tv.value, t.state
             FROM trials t
             JOIN trial_values tv ON t.trial_id = tv.trial_id
             WHERE t.state='COMPLETE' AND tv.value IS NOT NULL AND tv.value_type='FINITE'
@@ -133,15 +134,17 @@ def get_trial_info_from_db(db_file: Path) -> Optional[Dict]:
             LIMIT 1
         """)
         best_trial_row = cursor.fetchone()
+        best_trial_id = None
         best_trial_number = None
         best_value = None
         if best_trial_row:
-            best_trial_number, best_value, _ = best_trial_row
+            best_trial_id, best_trial_number, best_value, _ = best_trial_row
         
         # Get current trial (last running or last complete)
         # ✅ FIX: Get RUNNING trial first, if none then get last COMPLETE trial
+        # ✅ FIX: Get both trial_id and number to correctly query user_attrs
         cursor.execute("""
-            SELECT t.number, COALESCE(tv.value, NULL), t.state
+            SELECT t.trial_id, t.number, COALESCE(tv.value, NULL), t.state
             FROM trials t
             LEFT JOIN trial_values tv ON t.trial_id = tv.trial_id AND tv.value_type='FINITE'
             WHERE t.state = 'RUNNING'
@@ -153,7 +156,7 @@ def get_trial_info_from_db(db_file: Path) -> Optional[Dict]:
         # If no RUNNING trial, get last COMPLETE trial
         if not current_trial_row:
             cursor.execute("""
-                SELECT t.number, COALESCE(tv.value, NULL), t.state
+                SELECT t.trial_id, t.number, COALESCE(tv.value, NULL), t.state
                 FROM trials t
                 LEFT JOIN trial_values tv ON t.trial_id = tv.trial_id AND tv.value_type='FINITE'
                 WHERE t.state = 'COMPLETE'
@@ -162,22 +165,25 @@ def get_trial_info_from_db(db_file: Path) -> Optional[Dict]:
             """)
             current_trial_row = cursor.fetchone()
         
+        current_trial_id = None
         current_trial_number = None
         current_trial_value = None
         current_trial_state = None
         if current_trial_row:
-            current_trial_number, current_trial_value, current_trial_state = current_trial_row
+            current_trial_id, current_trial_number, current_trial_value, current_trial_state = current_trial_row
         
         # Get DirHit from user_attrs for best trial
+        # ✅ FIX: Use trial_id (not trial.number) and try 'avg_dirhit' first, then 'dirhit'
         best_dirhit = None
-        if best_trial_number is not None:
+        if best_trial_id is not None:
             # Try trial_user_attributes first (newer Optuna versions)
             try:
+                # First try 'avg_dirhit' (per-symbol average)
                 cursor.execute("""
                     SELECT value_json
                     FROM trial_user_attributes
-                    WHERE trial_id = ? AND key = 'dirhit'
-                """, (best_trial_number,))
+                    WHERE trial_id = ? AND key = 'avg_dirhit'
+                """, (best_trial_id,))
                 row = cursor.fetchone()
                 if row:
                     try:
@@ -185,33 +191,64 @@ def get_trial_info_from_db(db_file: Path) -> Optional[Dict]:
                         best_dirhit = float(json.loads(row[0]))
                     except Exception:
                         pass
+                
+                # Fallback to 'dirhit' if avg_dirhit not found
+                if best_dirhit is None:
+                    cursor.execute("""
+                        SELECT value_json
+                        FROM trial_user_attributes
+                        WHERE trial_id = ? AND key = 'dirhit'
+                    """, (best_trial_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        try:
+                            import json
+                            best_dirhit = float(json.loads(row[0]))
+                        except Exception:
+                            pass
             except Exception:
                 # Fallback to trial_user_attrs (older Optuna versions)
                 try:
                     cursor.execute("""
                         SELECT value
                         FROM trial_user_attrs
-                        WHERE trial_id = ? AND key = 'dirhit'
-                    """, (best_trial_number,))
+                        WHERE trial_id = ? AND key = 'avg_dirhit'
+                    """, (best_trial_id,))
                     row = cursor.fetchone()
                     if row:
                         try:
                             best_dirhit = float(row[0])
                         except Exception:
                             pass
+                    
+                    # Fallback to 'dirhit'
+                    if best_dirhit is None:
+                        cursor.execute("""
+                            SELECT value
+                            FROM trial_user_attrs
+                            WHERE trial_id = ? AND key = 'dirhit'
+                        """, (best_trial_id,))
+                        row = cursor.fetchone()
+                        if row:
+                            try:
+                                best_dirhit = float(row[0])
+                            except Exception:
+                                pass
                 except Exception:
                     pass
         
         # Get DirHit from user_attrs for current trial
+        # ✅ FIX: Use trial_id (not trial.number) and try 'avg_dirhit' first, then 'dirhit'
         current_dirhit = None
-        if current_trial_number is not None:
+        if current_trial_id is not None:
             # Try trial_user_attributes first (newer Optuna versions)
             try:
+                # First try 'avg_dirhit' (per-symbol average)
                 cursor.execute("""
                     SELECT value_json
                     FROM trial_user_attributes
-                    WHERE trial_id = ? AND key = 'dirhit'
-                """, (current_trial_number,))
+                    WHERE trial_id = ? AND key = 'avg_dirhit'
+                """, (current_trial_id,))
                 row = cursor.fetchone()
                 if row:
                     try:
@@ -219,20 +256,49 @@ def get_trial_info_from_db(db_file: Path) -> Optional[Dict]:
                         current_dirhit = float(json.loads(row[0]))
                     except Exception:
                         pass
+                
+                # Fallback to 'dirhit' if avg_dirhit not found
+                if current_dirhit is None:
+                    cursor.execute("""
+                        SELECT value_json
+                        FROM trial_user_attributes
+                        WHERE trial_id = ? AND key = 'dirhit'
+                    """, (current_trial_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        try:
+                            import json
+                            current_dirhit = float(json.loads(row[0]))
+                        except Exception:
+                            pass
             except Exception:
                 # Fallback to trial_user_attrs (older Optuna versions)
                 try:
                     cursor.execute("""
                         SELECT value
                         FROM trial_user_attrs
-                        WHERE trial_id = ? AND key = 'dirhit'
-                    """, (current_trial_number,))
+                        WHERE trial_id = ? AND key = 'avg_dirhit'
+                    """, (current_trial_id,))
                     row = cursor.fetchone()
                     if row:
                         try:
                             current_dirhit = float(row[0])
                         except Exception:
                             pass
+                    
+                    # Fallback to 'dirhit'
+                    if current_dirhit is None:
+                        cursor.execute("""
+                            SELECT value
+                            FROM trial_user_attrs
+                            WHERE trial_id = ? AND key = 'dirhit'
+                        """, (current_trial_id,))
+                        row = cursor.fetchone()
+                        if row:
+                            try:
+                                current_dirhit = float(row[0])
+                            except Exception:
+                                pass
                 except Exception:
                     pass
         
