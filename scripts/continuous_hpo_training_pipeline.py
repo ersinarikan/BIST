@@ -720,8 +720,11 @@ class ContinuousHPOPipeline:
             except Exception as e:
                 logger.warning(f"   Failed to terminate {key} (PID: {pid}): {e}")
         
-        # Wait up to 60 seconds for processes to terminate gracefully
-        timeout = 60
+        # ✅ OPTIMIZED: Wait up to 30 seconds for processes to terminate gracefully
+        # Reduced from 60s to 30s for faster shutdown (201 processes can take time)
+        # start_new_session=True processes may not respond to SIGTERM from parent,
+        # so we need to be more aggressive with timeout
+        timeout = 30
         start_time = time.time()
         while time.time() - start_time < timeout:
             remaining = []
