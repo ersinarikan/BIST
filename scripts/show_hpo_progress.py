@@ -101,8 +101,14 @@ def get_active_hpo_processes() -> Dict[str, Dict]:
     return active
 
 
-def get_trial_info_from_db(db_file: Path) -> Optional[Dict]:
-    """Get trial information from Optuna SQLite database"""
+def get_trial_info_from_db(db_file: Path, symbol: Optional[str] = None, horizon: Optional[int] = None) -> Optional[Dict]:
+    """Get trial information from Optuna SQLite database
+    
+    Args:
+        db_file: Path to Optuna study database
+        symbol: Stock symbol (optional, extracted from db_file if not provided)
+        horizon: Prediction horizon (optional, extracted from db_file if not provided)
+    """
     try:
         if not db_file.exists():
             return None
@@ -173,27 +179,85 @@ def get_trial_info_from_db(db_file: Path) -> Optional[Dict]:
             current_trial_id, current_trial_number, current_trial_value, current_trial_state = current_trial_row
         
         # Get DirHit from user_attrs for best trial
-        # ✅ FIX: Use trial_id (not trial.number) and try 'avg_dirhit' first, then 'dirhit'
+        # ✅ CRITICAL FIX: Use symbol_metrics[symbol_key]['avg_dirhit'] for symbol-specific DirHit
+        # avg_dirhit in user_attrs is the average across ALL symbols (if multiple symbols in HPO)
+        # We need the symbol-specific DirHit, which is in symbol_metrics[symbol_key]['avg_dirhit']
         best_dirhit = None
         if best_trial_id is not None:
-            # Try trial_user_attributes first (newer Optuna versions)
-            try:
-                # First try 'avg_dirhit' (per-symbol average)
-                cursor.execute("""
-                    SELECT value_json
-                    FROM trial_user_attributes
-                    WHERE trial_id = ? AND key = 'avg_dirhit'
-                """, (best_trial_id,))
-                row = cursor.fetchone()
-                if row:
-                    try:
-                        import json
-                        best_dirhit = float(json.loads(row[0]))
-                    except Exception:
-                        pass
-                
-                # Fallback to 'dirhit' if avg_dirhit not found
-                if best_dirhit is None:
+            # ✅ PRIORITY 1: Get symbol-specific DirHit from symbol_metrics
+            # This is the correct way - always gives the DirHit for THIS specific symbol
+            if symbol is not None and horizon is not None:
+                try:
+                    cursor.execute("""
+                        SELECT value_json
+                        FROM trial_user_attributes
+                        WHERE trial_id = ? AND key = 'symbol_metrics'
+                    """, (best_trial_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        try:
+                            import json
+                            symbol_metrics = json.loads(row[0])
+                            symbol_key = f"{symbol}_{horizon}d"
+                            if isinstance(symbol_metrics, dict) and symbol_key in symbol_metrics:
+                                symbol_metric = symbol_metrics[symbol_key]
+                                if isinstance(symbol_metric, dict):
+                                    best_dirhit = symbol_metric.get('avg_dirhit')
+                                    if best_dirhit is not None:
+                                        best_dirhit = float(best_dirhit)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            
+            # ✅ PRIORITY 2: Fallback - if symbol/horizon not provided, try single symbol case
+            if best_dirhit is None:
+                try:
+                    cursor.execute("""
+                        SELECT value_json
+                        FROM trial_user_attributes
+                        WHERE trial_id = ? AND key = 'symbol_metrics'
+                    """, (best_trial_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        try:
+                            import json
+                            symbol_metrics = json.loads(row[0])
+                            # If single symbol in symbol_metrics, use its DirHit
+                            if isinstance(symbol_metrics, dict) and len(symbol_metrics) == 1:
+                                symbol_key = list(symbol_metrics.keys())[0]
+                                symbol_metric = symbol_metrics[symbol_key]
+                                if isinstance(symbol_metric, dict):
+                                    best_dirhit = symbol_metric.get('avg_dirhit')
+                                    if best_dirhit is not None:
+                                        best_dirhit = float(best_dirhit)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            
+            # ✅ PRIORITY 3: Fallback to 'avg_dirhit' (only if symbol_metrics not available)
+            # This works for single-symbol HPO, but may be wrong for multi-symbol HPO
+            if best_dirhit is None:
+                try:
+                    cursor.execute("""
+                        SELECT value_json
+                        FROM trial_user_attributes
+                        WHERE trial_id = ? AND key = 'avg_dirhit'
+                    """, (best_trial_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        try:
+                            import json
+                            best_dirhit = float(json.loads(row[0]))
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            
+            # ✅ PRIORITY 4: Fallback to 'dirhit' (legacy)
+            if best_dirhit is None:
+                try:
                     cursor.execute("""
                         SELECT value_json
                         FROM trial_user_attributes
@@ -206,59 +270,85 @@ def get_trial_info_from_db(db_file: Path) -> Optional[Dict]:
                             best_dirhit = float(json.loads(row[0]))
                         except Exception:
                             pass
-            except Exception:
-                # Fallback to trial_user_attrs (older Optuna versions)
-                try:
-                    cursor.execute("""
-                        SELECT value
-                        FROM trial_user_attrs
-                        WHERE trial_id = ? AND key = 'avg_dirhit'
-                    """, (best_trial_id,))
-                    row = cursor.fetchone()
-                    if row:
-                        try:
-                            best_dirhit = float(row[0])
-                        except Exception:
-                            pass
-                    
-                    # Fallback to 'dirhit'
-                    if best_dirhit is None:
-                        cursor.execute("""
-                            SELECT value
-                            FROM trial_user_attrs
-                            WHERE trial_id = ? AND key = 'dirhit'
-                        """, (best_trial_id,))
-                        row = cursor.fetchone()
-                        if row:
-                            try:
-                                best_dirhit = float(row[0])
-                            except Exception:
-                                pass
                 except Exception:
                     pass
         
         # Get DirHit from user_attrs for current trial
-        # ✅ FIX: Use trial_id (not trial.number) and try 'avg_dirhit' first, then 'dirhit'
+        # ✅ CRITICAL FIX: Use symbol_metrics[symbol_key]['avg_dirhit'] for symbol-specific DirHit
         current_dirhit = None
         if current_trial_id is not None:
-            # Try trial_user_attributes first (newer Optuna versions)
-            try:
-                # First try 'avg_dirhit' (per-symbol average)
-                cursor.execute("""
-                    SELECT value_json
-                    FROM trial_user_attributes
-                    WHERE trial_id = ? AND key = 'avg_dirhit'
-                """, (current_trial_id,))
-                row = cursor.fetchone()
-                if row:
-                    try:
-                        import json
-                        current_dirhit = float(json.loads(row[0]))
-                    except Exception:
-                        pass
-                
-                # Fallback to 'dirhit' if avg_dirhit not found
-                if current_dirhit is None:
+            # ✅ PRIORITY 1: Get symbol-specific DirHit from symbol_metrics
+            if symbol is not None and horizon is not None:
+                try:
+                    cursor.execute("""
+                        SELECT value_json
+                        FROM trial_user_attributes
+                        WHERE trial_id = ? AND key = 'symbol_metrics'
+                    """, (current_trial_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        try:
+                            import json
+                            symbol_metrics = json.loads(row[0])
+                            symbol_key = f"{symbol}_{horizon}d"
+                            if isinstance(symbol_metrics, dict) and symbol_key in symbol_metrics:
+                                symbol_metric = symbol_metrics[symbol_key]
+                                if isinstance(symbol_metric, dict):
+                                    current_dirhit = symbol_metric.get('avg_dirhit')
+                                    if current_dirhit is not None:
+                                        current_dirhit = float(current_dirhit)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            
+            # ✅ PRIORITY 2: Fallback - if symbol/horizon not provided, try single symbol case
+            if current_dirhit is None:
+                try:
+                    cursor.execute("""
+                        SELECT value_json
+                        FROM trial_user_attributes
+                        WHERE trial_id = ? AND key = 'symbol_metrics'
+                    """, (current_trial_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        try:
+                            import json
+                            symbol_metrics = json.loads(row[0])
+                            # If single symbol in symbol_metrics, use its DirHit
+                            if isinstance(symbol_metrics, dict) and len(symbol_metrics) == 1:
+                                symbol_key = list(symbol_metrics.keys())[0]
+                                symbol_metric = symbol_metrics[symbol_key]
+                                if isinstance(symbol_metric, dict):
+                                    current_dirhit = symbol_metric.get('avg_dirhit')
+                                    if current_dirhit is not None:
+                                        current_dirhit = float(current_dirhit)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            
+            # ✅ PRIORITY 3: Fallback to 'avg_dirhit' (only if symbol_metrics not available)
+            if current_dirhit is None:
+                try:
+                    cursor.execute("""
+                        SELECT value_json
+                        FROM trial_user_attributes
+                        WHERE trial_id = ? AND key = 'avg_dirhit'
+                    """, (current_trial_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        try:
+                            import json
+                            current_dirhit = float(json.loads(row[0]))
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            
+            # ✅ PRIORITY 4: Fallback to 'dirhit' (legacy)
+            if current_dirhit is None:
+                try:
                     cursor.execute("""
                         SELECT value_json
                         FROM trial_user_attributes
@@ -271,34 +361,6 @@ def get_trial_info_from_db(db_file: Path) -> Optional[Dict]:
                             current_dirhit = float(json.loads(row[0]))
                         except Exception:
                             pass
-            except Exception:
-                # Fallback to trial_user_attrs (older Optuna versions)
-                try:
-                    cursor.execute("""
-                        SELECT value
-                        FROM trial_user_attrs
-                        WHERE trial_id = ? AND key = 'avg_dirhit'
-                    """, (current_trial_id,))
-                    row = cursor.fetchone()
-                    if row:
-                        try:
-                            current_dirhit = float(row[0])
-                        except Exception:
-                            pass
-                    
-                    # Fallback to 'dirhit'
-                    if current_dirhit is None:
-                        cursor.execute("""
-                            SELECT value
-                            FROM trial_user_attrs
-                            WHERE trial_id = ? AND key = 'dirhit'
-                        """, (current_trial_id,))
-                        row = cursor.fetchone()
-                        if row:
-                            try:
-                                current_dirhit = float(row[0])
-                            except Exception:
-                                pass
                 except Exception:
                     pass
         
@@ -679,7 +741,7 @@ def main():
             horizon = task['horizon']
             db_file = find_study_db(symbol, horizon, cycle=current_cycle)
             if db_file and db_file.exists():
-                trial_info = get_trial_info_from_db(db_file)
+                trial_info = get_trial_info_from_db(db_file, symbol=symbol, horizon=horizon)
                 if trial_info and trial_info.get('running_trials', 0) > 0:
                     # HPO is running (has running trials in study file)
                     study_based_active[key] = {
@@ -811,7 +873,7 @@ def main():
             # Check if study file exists (HPO might have started but process died)
             db_file = find_study_db(symbol, horizon, cycle=current_cycle)
             if db_file and db_file.exists():
-                trial_info = get_trial_info_from_db(db_file)
+                trial_info = get_trial_info_from_db(db_file, symbol=symbol, horizon=horizon)
                 if trial_info:
                     total = trial_info['total_trials']
                     complete = trial_info['complete_trials']
@@ -859,7 +921,7 @@ def main():
             # Check if study file exists (might have partial progress)
             db_file = find_study_db(symbol, horizon, cycle=current_cycle)
             if db_file and db_file.exists():
-                trial_info = get_trial_info_from_db(db_file)
+                trial_info = get_trial_info_from_db(db_file, symbol=symbol, horizon=horizon)
                 if trial_info:
                     total = trial_info['total_trials']
                     complete = trial_info['complete_trials']
