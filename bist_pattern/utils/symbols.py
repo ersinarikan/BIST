@@ -29,8 +29,8 @@ def sanitize_symbol(symbol: str) -> str:
     if cleaned != raw:
         try:
             logger.debug("sanitize_symbol: '%s' -> '%s'", symbol, cleaned)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to log sanitize_symbol debug: {e}")
 
     return cleaned
 

@@ -31,34 +31,40 @@ class PatternValidator:
         # Environment-driven thresholds
         try:
             self.min_validation_confidence = float(os.getenv('PATTERN_MIN_VALIDATION_CONF', '0.5'))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get PATTERN_MIN_VALIDATION_CONF, using 0.5: {e}")
             self.min_validation_confidence = 0.5
         
         # Standalone pattern minimum confidence (for ADVANCED/YOLO without BASIC match)
         try:
             self.standalone_min_conf = float(os.getenv('PATTERN_STANDALONE_MIN_CONF', '0.55'))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get PATTERN_STANDALONE_MIN_CONF, using 0.55: {e}")
             self.standalone_min_conf = 0.55
         
         try:
             self.basic_weight = float(os.getenv('PATTERN_BASIC_WEIGHT', '0.3'))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get PATTERN_BASIC_WEIGHT, using 0.3: {e}")
             self.basic_weight = 0.3
             
         try:
             self.advanced_weight = float(os.getenv('PATTERN_ADVANCED_WEIGHT', '0.3'))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get PATTERN_ADVANCED_WEIGHT, using 0.3: {e}")
             self.advanced_weight = 0.3
             
         try:
             self.yolo_weight = float(os.getenv('PATTERN_YOLO_WEIGHT', '0.4'))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get PATTERN_YOLO_WEIGHT, using 0.4: {e}")
             self.yolo_weight = 0.4
         
         # Pattern matching similarity threshold
         try:
             self.pattern_match_threshold = float(os.getenv('PATTERN_MATCH_THRESHOLD', '0.7'))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get PATTERN_MATCH_THRESHOLD, using 0.7: {e}")
             self.pattern_match_threshold = 0.7
         
         logger.info(f"🔍 Pattern Validator initialized: min_conf={self.min_validation_confidence}, standalone={self.standalone_min_conf}")

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def register_all_blueprints(app: Any, csrf: Any) -> None:
@@ -38,10 +41,10 @@ def register_all_blueprints(app: Any, csrf: Any) -> None:
                 app.logger.warning(f"{module_path} blueprint register failed: {e}")
                 try:
                     app.logger.debug(traceback.format_exc())
-                except Exception:
-                    pass
-            except Exception:
-                pass
+                except Exception as e2:
+                    logger.debug(f"Failed to log traceback: {e2}")
+            except Exception as e3:
+                logger.debug(f"Failed to log blueprint registration error: {e3}")
 
     # Core/internal first
     _try_register('bist_pattern.blueprints.api_internal')
@@ -70,10 +73,10 @@ def register_all_blueprints(app: Any, csrf: Any) -> None:
     try:
         if 'api_internal' in app.blueprints:
             csrf.exempt(app.blueprints['api_internal'])
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to exempt api_internal from CSRF: {e}")
     try:
         if 'auth' in app.blueprints:
             csrf.exempt(app.blueprints['auth'])
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to exempt auth from CSRF: {e}")

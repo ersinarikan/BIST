@@ -115,7 +115,8 @@ class WorkingAutomationPipeline:
                         try:
                             from flask import current_app
                             flask_app = current_app._get_current_object()
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to get current_app, trying fallback: {e}")
                             # Fallback: import app instance
                             try:
                                 from app import app as flask_app
@@ -206,8 +207,8 @@ class WorkingAutomationPipeline:
                                         try:
                                             if os.path.exists(temp_file):
                                                 os.remove(temp_file)
-                                        except Exception:
-                                            pass
+                                        except Exception as e:
+                                            logger.debug(f"Failed to remove temp file {temp_file}: {e}")
                                 except Exception as e:
                                     # ✅ FIX: Log exception instead of silent pass
                                     logger.warning(f"_append_history failed: {e}")
@@ -241,8 +242,9 @@ class WorkingAutomationPipeline:
                                         # Only broadcast INFO and above to avoid spam
                                         if record.levelno >= logging.INFO:
                                             self.broadcast_func(level, message, 'working_automation')
-                                    except Exception:
-                                        pass  # Silently fail to avoid recursion
+                                    except Exception as e:
+                                        # Silently fail to avoid recursion, but log at debug level
+                                        logger.debug(f"Log handler emit failed (recursion prevention): {e}")
                             
                             # Add handler to enhanced_ml_system logger
                             enhanced_ml_handler = WorkingAutomationLogHandler(_broadcast)
@@ -275,7 +277,8 @@ class WorkingAutomationPipeline:
                                         return {'sources': 0, 'ok': 0, 'fail': 0}
                                     try:
                                         import feedparser  # type: ignore
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.warning(f"feedparser not available: {e}")
                                         _broadcast('ERROR', '📰 RSS check: feedparser not available', 'news')
                                         return {'sources': len(sources), 'ok': 0, 'fail': len(sources)}
 
@@ -288,7 +291,8 @@ class WorkingAutomationPipeline:
                                                 ok += 1
                                             else:
                                                 fail += 1
-                                        except Exception:
+                                        except Exception as e:
+                                            logger.debug(f"RSS feed parse failed for {url}: {e}")
                                             tested += 1
                                             fail += 1
 
@@ -303,7 +307,8 @@ class WorkingAutomationPipeline:
                                     msg = f"📰 RSS check: sources={len(sources)} tested={tested} ok={ok} fail={fail}"
                                     _broadcast('INFO', msg, 'news')
                                     return {'sources': len(sources), 'tested': tested, 'ok': ok, 'fail': fail}
-                                except Exception:
+                                except Exception as e:
+                                    logger.warning(f"RSS health check failed: {e}")
                                     return {'sources': 0, 'tested': 0, 'ok': 0, 'fail': 0}
 
                             collector = get_unified_collector()
@@ -316,19 +321,22 @@ class WorkingAutomationPipeline:
                             # Cooldown for symbols with no data
                             try:
                                 cooldown_cycles = int(ConfigManager.get('NO_DATA_COOLDOWN_CYCLES', '20'))
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to get NO_DATA_COOLDOWN_CYCLES, using default: {e}")
                                 cooldown_cycles = 20
                             # Symbol sleep per iteration
                             try:
                                 symbol_sleep_seconds = float(ConfigManager.get('SYMBOL_SLEEP_SECONDS', '0.05'))
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to get SYMBOL_SLEEP_SECONDS, using default: {e}")
                                 symbol_sleep_seconds = 0.05
 
                             # 0) RSS health check & cache warm-up
                             try:
                                 rss_res = _rss_health_check()
                                 _append_history('rss_check', 'end', rss_res or {})
-                            except Exception:
+                            except Exception as e:
+                                logger.warning(f"RSS health check failed: {e}")
                                 _append_history('rss_check', 'error', {})
 
                             # SYMBOL_FLOW mode only (CONTINUOUS_FULL removed)
@@ -579,7 +587,8 @@ class WorkingAutomationPipeline:
                                     'analyzed': analyzed,
                                     'timestamp': datetime.now().isoformat(),
                                 }
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to update last_run_stats: {e}")
                                 self.last_run_stats = {'cycle': cycle_count, 'timestamp': datetime.now().isoformat()}
                             # ✅ FIX: Finalize cycle metrics
                             cycle_duration = time.time() - cycle_start_time
@@ -602,7 +611,8 @@ class WorkingAutomationPipeline:
                                     try:
                                         with open(metrics_file, 'r') as f:
                                             existing_metrics = json.load(f) or []
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"Failed to load existing metrics, starting fresh: {e}")
                                         existing_metrics = []
                                 
                                 # Append new metrics (keep last 100 cycles)
@@ -651,7 +661,8 @@ class WorkingAutomationPipeline:
                         # Wait for next cycle (environment-driven)
                         try:
                             sleep_total = int(ConfigManager.get('AUTOMATION_CYCLE_SLEEP_SECONDS', '300'))
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to get AUTOMATION_CYCLE_SLEEP_SECONDS, using default: {e}")
                             sleep_total = 300
                         for _ in range(sleep_total):
                             if self.stop_event.is_set() or not self.is_running:
@@ -663,7 +674,8 @@ class WorkingAutomationPipeline:
                         # Environment-driven error retry delay
                         try:
                             error_retry_delay = int(ConfigManager.get('AUTOMATION_ERROR_RETRY_DELAY', '30'))
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to get AUTOMATION_ERROR_RETRY_DELAY, using 30: {e}")
                             error_retry_delay = 30
                         time.sleep(error_retry_delay)
                 
@@ -690,7 +702,8 @@ class WorkingAutomationPipeline:
             try:
                 import threading as _th
                 current_is_worker = (self.thread is not None and _th.current_thread() is self.thread)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to check if current thread is worker: {e}")
                 current_is_worker = False
             if self.thread and self.thread.is_alive() and not current_is_worker:
                 self.thread.join(timeout=5)
@@ -761,7 +774,8 @@ class WorkingAutomationPipeline:
         """
         try:
             skip_now = sum(1 for _sym, until in self.no_data_backoff.items() if until > self.cycle_count)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to calculate skip_now: {e}")
             skip_now = 0
         return {
             'is_running': self.is_running,
@@ -807,7 +821,8 @@ class WorkingAutomationPipeline:
                     errors = 0
                     try:
                         symbol_sleep_seconds = float(ConfigManager.get('MANUAL_TASK_SYMBOL_SLEEP', '0.01'))  # Faster for manual tasks
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to get MANUAL_TASK_SYMBOL_SLEEP, using 0.01: {e}")
                         symbol_sleep_seconds = 0.01
                     # Manual data collection: Process ALL symbols (no limit)
                     limited_symbols = symbols_list

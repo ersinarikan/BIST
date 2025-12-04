@@ -36,8 +36,26 @@ class Config:
     # Database - PostgreSQL only (no SQLite fallback for production)
     DATABASE_URL = os.getenv('DATABASE_URL')
     if not DATABASE_URL:
-        logger.error("DATABASE_URL environment variable is required!")
-        raise ValueError("DATABASE_URL must be configured for PostgreSQL connection")
+        # ✅ FIX: Try to construct DATABASE_URL from secret file and other env vars
+        # This matches the pattern used in other scripts
+        try:
+            password_file = os.getenv('DB_PASSWORD_FILE', '/opt/bist-pattern/.secrets/db_password')
+            if os.path.exists(password_file):
+                with open(password_file, 'r') as f:
+                    db_password = f.read().strip()
+                # Use PgBouncer port 6432 (standard for production)
+                db_host = os.getenv('DB_HOST', '127.0.0.1')
+                db_port = os.getenv('DB_PORT', '6432')
+                db_name = os.getenv('DB_NAME', 'bist_pattern_db')
+                db_user = os.getenv('DB_USER', 'bist_user')
+                DATABASE_URL = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+                logger.info(f"✅ DATABASE_URL constructed from secret file (port {db_port})")
+            else:
+                logger.error("DATABASE_URL environment variable is required and secret file not found!")
+                raise ValueError("DATABASE_URL must be configured for PostgreSQL connection")
+        except Exception as e:
+            logger.error(f"Failed to construct DATABASE_URL from secret file: {e}")
+            raise ValueError("DATABASE_URL must be configured for PostgreSQL connection")
     SQLALCHEMY_DATABASE_URI = DATABASE_URL
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {
@@ -138,7 +156,8 @@ class Config:
     DB_HOST = os.getenv('DB_HOST')
     try:
         DB_PORT = int(os.getenv('DB_PORT', '5432'))
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to parse DB_PORT, using default 5432: {e}")
         DB_PORT = 5432
     DB_NAME = os.getenv('DB_NAME')
     DB_USER = os.getenv('DB_USER')

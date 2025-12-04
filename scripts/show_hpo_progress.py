@@ -14,12 +14,15 @@ import os
 import json
 import sqlite3
 import subprocess
+import logging
 from pathlib import Path
 # datetime not required currently
 from collections import defaultdict
 from typing import Dict, Optional
 
 sys.path.insert(0, '/opt/bist-pattern')
+
+logger = logging.getLogger(__name__)
 
 # Configuration
 STATE_FILE = Path('/opt/bist-pattern/results/continuous_hpo_state.json')
@@ -29,7 +32,8 @@ HPO_STUDIES_DIR = Path('/opt/bist-pattern/hpo_studies')
 # ✅ CRITICAL FIX: Read TARGET_TRIALS from environment variable (default: 1500)
 try:
     TARGET_TRIALS = int(os.getenv('HPO_TRIALS', '1500'))
-except Exception:
+except Exception as e:
+    logger.debug(f"Failed to get HPO_TRIALS, using 1500: {e}")
     TARGET_TRIALS = 1500  # PRODUCTION default
 
 
@@ -56,7 +60,8 @@ def load_state() -> Dict:
                                 break
                     content = content[start_pos:last_brace+1]
             return json.loads(content)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to load state file: {e}")
         return {}
 
 
@@ -79,13 +84,13 @@ def get_active_hpo_processes() -> Dict[str, Dict]:
                     elif part == '--horizon' and i + 1 < len(parts):
                         try:
                             horizon = int(parts[i + 1])
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to parse horizon from command line: {e}")
                     elif part == '--trials' and i + 1 < len(parts):
                         try:
                             trials = int(parts[i + 1])
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to parse trials from command line: {e}")
                 
                 if symbol and horizon:
                     key = f"{symbol}_{horizon}d"
@@ -95,8 +100,8 @@ def get_active_hpo_processes() -> Dict[str, Dict]:
                         'target_trials': trials,
                         'pid': int(parts[1]) if len(parts) > 1 else None
                     }
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to get active HPO processes: {e}")
     
     return active
 
@@ -205,10 +210,10 @@ def get_trial_info_from_db(db_file: Path, symbol: Optional[str] = None, horizon:
                                     best_dirhit = symbol_metric.get('avg_dirhit')
                                     if best_dirhit is not None:
                                         best_dirhit = float(best_dirhit)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        except Exception as e:
+                            logger.debug(f"Failed to parse best_dirhit from symbol_metrics: {e}")
+                except Exception as e:
+                    logger.debug(f"Failed to get best_dirhit from symbol_metrics: {e}")
             
             # ✅ PRIORITY 2: Fallback - if symbol/horizon not provided, try single symbol case
             if best_dirhit is None:
@@ -231,10 +236,10 @@ def get_trial_info_from_db(db_file: Path, symbol: Optional[str] = None, horizon:
                                     best_dirhit = symbol_metric.get('avg_dirhit')
                                     if best_dirhit is not None:
                                         best_dirhit = float(best_dirhit)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        except Exception as e:
+                            logger.debug(f"Failed to parse best_dirhit from symbol_metrics: {e}")
+                except Exception as e:
+                    logger.debug(f"Failed to get best_dirhit from symbol_metrics: {e}")
             
             # ✅ PRIORITY 3: Fallback to 'avg_dirhit' (only if symbol_metrics not available)
             # This works for single-symbol HPO, but may be wrong for multi-symbol HPO
@@ -250,10 +255,10 @@ def get_trial_info_from_db(db_file: Path, symbol: Optional[str] = None, horizon:
                         try:
                             import json
                             best_dirhit = float(json.loads(row[0]))
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        except Exception as e:
+                            logger.debug(f"Failed to parse best_dirhit from avg_dirhit: {e}")
+                except Exception as e:
+                    logger.debug(f"Failed to get best_dirhit from avg_dirhit: {e}")
             
             # ✅ PRIORITY 4: Fallback to 'dirhit' (legacy)
             if best_dirhit is None:
@@ -268,10 +273,10 @@ def get_trial_info_from_db(db_file: Path, symbol: Optional[str] = None, horizon:
                         try:
                             import json
                             best_dirhit = float(json.loads(row[0]))
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        except Exception as e:
+                            logger.debug(f"Failed to parse best_dirhit from avg_dirhit: {e}")
+                except Exception as e:
+                    logger.debug(f"Failed to get best_dirhit from avg_dirhit: {e}")
         
         # Get DirHit from user_attrs for current trial
         # ✅ CRITICAL FIX: Use symbol_metrics[symbol_key]['avg_dirhit'] for symbol-specific DirHit
@@ -297,10 +302,10 @@ def get_trial_info_from_db(db_file: Path, symbol: Optional[str] = None, horizon:
                                     current_dirhit = symbol_metric.get('avg_dirhit')
                                     if current_dirhit is not None:
                                         current_dirhit = float(current_dirhit)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        except Exception as e:
+                            logger.debug(f"Failed to parse current_dirhit from symbol_metrics: {e}")
+                except Exception as e:
+                    logger.debug(f"Failed to get current_dirhit from symbol_metrics: {e}")
             
             # ✅ PRIORITY 2: Fallback - if symbol/horizon not provided, try single symbol case
             if current_dirhit is None:
@@ -323,10 +328,10 @@ def get_trial_info_from_db(db_file: Path, symbol: Optional[str] = None, horizon:
                                     current_dirhit = symbol_metric.get('avg_dirhit')
                                     if current_dirhit is not None:
                                         current_dirhit = float(current_dirhit)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        except Exception as e:
+                            logger.debug(f"Failed to parse current_dirhit from symbol_metrics: {e}")
+                except Exception as e:
+                    logger.debug(f"Failed to get current_dirhit from symbol_metrics: {e}")
             
             # ✅ PRIORITY 3: Fallback to 'avg_dirhit' (only if symbol_metrics not available)
             if current_dirhit is None:
@@ -341,10 +346,10 @@ def get_trial_info_from_db(db_file: Path, symbol: Optional[str] = None, horizon:
                         try:
                             import json
                             current_dirhit = float(json.loads(row[0]))
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        except Exception as e:
+                            logger.debug(f"Failed to parse current_dirhit from avg_dirhit: {e}")
+                except Exception as e:
+                    logger.debug(f"Failed to get current_dirhit from avg_dirhit: {e}")
             
             # ✅ PRIORITY 4: Fallback to 'dirhit' (legacy)
             if current_dirhit is None:
@@ -359,10 +364,10 @@ def get_trial_info_from_db(db_file: Path, symbol: Optional[str] = None, horizon:
                         try:
                             import json
                             current_dirhit = float(json.loads(row[0]))
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        except Exception as e:
+                            logger.debug(f"Failed to parse current_dirhit from avg_dirhit: {e}")
+                except Exception as e:
+                    logger.debug(f"Failed to get current_dirhit from avg_dirhit: {e}")
         
         conn.close()
         
@@ -558,7 +563,8 @@ def get_completed_tasks() -> Dict[str, Dict]:
                                     }
                         except (ValueError, IndexError):
                             continue
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to process study file {db_file}: {e}")
                 continue
     
     return completed
@@ -820,7 +826,8 @@ def main():
                                             print(f"      📍 Güncel Trial #{current_trial} (Running - hesaplanıyor...), Son Tamamlanan: Trial #{last_complete[0]} Score = {last_complete[1]:.2f}")
                                         else:
                                             print(f"      📍 Güncel Trial #{current_trial} (Running - hesaplanıyor...)")
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"Failed to get last complete trial info: {e}")
                                         print(f"      📍 Güncel Trial #{current_trial} (Running - hesaplanıyor...)")
                                 else:
                                     print(f"      📍 Güncel Trial #{current_trial} (Running - hesaplanıyor...)")

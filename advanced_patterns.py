@@ -148,8 +148,8 @@ class AdvancedPatternDetector:
                                 'source': 'ADVANCED_TA'
                             })
                             break
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"TA-Lib pattern detection failed: {e}")
 
         return patterns
 
@@ -202,8 +202,8 @@ class AdvancedPatternDetector:
                             'source': 'ADVANCED_TA'
                         })
                         break
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Head & Shoulders detection failed: {e}")
         return patterns
             
     def _find_peaks(self, array: np.ndarray, distance: int = 3) -> List[int]:

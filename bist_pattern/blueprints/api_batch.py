@@ -42,7 +42,8 @@ def register(app):
             # Cache helpers
             try:
                 from bist_pattern.core.cache import cache_get as _cache_get  # type: ignore
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to import cache_get: {e}")
                 _cache_get = None  # type: ignore
 
             import os as _os
@@ -52,11 +53,12 @@ def register(app):
             file_cache_dir = '/opt/bist-pattern/logs/pattern_cache'
             try:
                 _os.makedirs(file_cache_dir, exist_ok=True)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to create file cache directory: {e}")
             try:
                 file_ttl = float(_os.getenv('PATTERN_FILE_CACHE_TTL', '300'))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get PATTERN_FILE_CACHE_TTL, using 300: {e}")
                 file_ttl = 300.0
 
             results = {}
@@ -73,7 +75,8 @@ def register(app):
                 try:
                     if callable(_cache_get):
                         result = _cache_get(cache_key)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get cache for {sym}: {e}")
                     result = None
                 # File cache (accept even if stale; mark with stale flag)
                 if not result:
@@ -95,22 +98,23 @@ def register(app):
                                     result.setdefault('status', 'success')
                                     result['stale_seconds'] = float(age)
                                     result['stale'] = bool(age >= file_ttl)
-                            except Exception:
-                                pass
-                    except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to set stale metadata for {sym}: {e}")
+                    except Exception as e:
+                        logger.debug(f"Failed to read file cache for {sym}: {e}")
                         result = None
                 if result:
                     try:
                         result.setdefault('symbol', sym)
                         result.setdefault('status', 'success')
                         result['from_cache'] = True
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to set cache metadata for {sym}: {e}")
                     results[sym] = result
                     try:
                         cache_hits += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to increment cache_hits: {e}")
                 else:
                     results[sym] = {'symbol': sym, 'status': 'pending'}
                     pendings += 1
@@ -170,7 +174,8 @@ def register(app):
                 if os.path.exists(fpath):
                     try:
                         bulk_mtime = float(os.path.getmtime(fpath))
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to get bulk predictions mtime: {e}")
                         bulk_mtime = None
                     with open(fpath, 'r') as rf:
                         data_json = json.load(rf) or {}
@@ -244,7 +249,8 @@ def register(app):
                                             out[conf_key] = float(conf)
                             elif isinstance(v, (int, float)):
                                 out[kk] = float(v)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to normalize prediction data: {e}")
                     return {}
                 return out
 
@@ -268,13 +274,16 @@ def register(app):
                                 else:
                                     m = os.path.getmtime(pc_path)
                                     analysis_ts = datetime.fromtimestamp(m).isoformat()
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to get mtime for pattern cache: {e}")
                                 try:
                                     m = os.path.getmtime(pc_path)
                                     analysis_ts = datetime.fromtimestamp(m).isoformat()
-                                except Exception:
+                                except Exception as e2:
+                                    logger.debug(f"Failed to get mtime (retry): {e2}")
                                     analysis_ts = None
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to get analysis timestamp: {e}")
                         analysis_ts = None
 
                     pred_entry = predictions_map.get(sym)

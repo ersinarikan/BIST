@@ -21,8 +21,8 @@ def register(app):
             if current_user.is_authenticated:
                 target = 'web.dashboard' if _is_admin_user(current_user) else 'web.user_dashboard'
                 return redirect(url_for(target))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to redirect authenticated user: {e}")
         return redirect(url_for('auth.login'))
 
     @bp.route('/favicon.ico')

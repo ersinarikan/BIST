@@ -224,8 +224,8 @@ def register(app):
                 try:
                     successful = len([h for h in recent_history if h.get('status') == 'success'])
                     performance['success_rate'] = (successful / len(recent_history)) * 100
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to calculate success rate: {e}")
             
             return jsonify({
                 'report_date': datetime.now().strftime('%Y-%m-%d'),

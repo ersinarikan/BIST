@@ -1,5 +1,8 @@
+import logging
 from flask import Blueprint, jsonify, request
 from datetime import datetime  # noqa: F401 (kept for consistency)
+
+logger = logging.getLogger(__name__)
 
 bp = Blueprint('api_public', __name__, url_prefix='/api')
 
@@ -7,7 +10,8 @@ bp = Blueprint('api_public', __name__, url_prefix='/api')
 def register(app):
     try:
         from models import db, Stock, StockPrice
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to import models: {e}")
         db = None  # noqa: F841 - kept for conditional branches
         Stock = None
         StockPrice = None
@@ -37,8 +41,8 @@ def register(app):
         except Exception as e:
             try:
                 app.logger.warning(f"/api/stocks error: {e}")
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.debug(f"Failed to log /api/stocks error: {e2}")
             return jsonify({'status': 'success', 'stocks': [], 'error': str(e)})
 
     @bp.route('/stocks/search')
@@ -54,7 +58,8 @@ def register(app):
                 search_pattern = f"%{query.upper()}%"
                 try:
                     from sqlalchemy import or_  # local import for linter/type clarity
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to import sqlalchemy.or_: {e}")
                     or_ = None  # type: ignore[assignment]
                 if or_ is None:
                     return jsonify({'status': 'success', 'query': query, 'stocks': [], 'total': 0})
@@ -108,7 +113,8 @@ def register(app):
         try:
             try:
                 from bist_pattern.core.cache import cache_get as _cache_get
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to import cache_get: {e}")
                 _cache_get = None  # type: ignore
 
             sym = symbol.upper()
@@ -118,7 +124,8 @@ def register(app):
             if callable(_cache_get):
                 try:
                     cached = _cache_get(cache_key)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get cache for {sym}: {e}")
                     cached = None
                 if cached:
                     return jsonify(cached)
@@ -146,8 +153,8 @@ def register(app):
                         file_cache_hit['stale_seconds'] = float(age)
                         file_cache_hit['stale'] = bool(age >= ttl)
                     return jsonify(file_cache_hit)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to read file cache for {sym}: {e}")
 
             # No compute – return pending
             return jsonify({'symbol': sym, 'status': 'pending'})
@@ -216,13 +223,15 @@ def register(app):
                 basic_fn = getattr(detector, 'get_basic_predictions', None)
                 if callable(basic_fn):
                     basic = basic_fn(symbol, stock_data) or {}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get basic predictions for {symbol}: {e}")
                 basic = {}
             try:
                 enhanced_fn = getattr(detector, 'get_enhanced_predictions', None)
                 if callable(enhanced_fn):
                     enhanced = enhanced_fn(symbol, stock_data) or {}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get enhanced predictions for {symbol}: {e}")
                 enhanced = {}
             
             # ✅ FIX: Actually use basic and enhanced predictions!

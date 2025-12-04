@@ -1,8 +1,11 @@
 from flask import Flask
 import os
+import logging
 from .settings import load_settings
 from .extensions import init_extensions
 from .websocket.events import register_socketio_events
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(config_name: str | None = None) -> Flask:
@@ -19,53 +22,53 @@ def create_app(config_name: str | None = None) -> Flask:
     try:
         from .blueprints.api_internal import register as register_internal
         register_internal(app)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to register api_internal blueprint: {e}")
     try:
         from .blueprints.auth import register as register_auth
         register_auth(app)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to register auth blueprint: {e}")
     try:
         from .blueprints.web import register as register_web
         register_web(app)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to register web blueprint: {e}")
     try:
         from .blueprints.api_public import register as register_api
         register_api(app)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to register api_public blueprint: {e}")
     try:
         from .blueprints.api_automation import register as register_auto
         register_auto(app)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to register api_automation blueprint: {e}")
     try:
         from .blueprints.api_simulation import register as register_sim
         register_sim(app)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to register api_simulation blueprint: {e}")
     try:
         from .blueprints.api_watchlist import register as register_watch
         register_watch(app)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to register api_watchlist blueprint: {e}")
     try:
         from .blueprints.api_metrics import register as register_metrics
         register_metrics(app)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to register api_metrics blueprint: {e}")
     try:
         from .blueprints.api_health import register as register_health
         register_health(app)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to register api_health blueprint: {e}")
     try:
         from .blueprints.api_recent import register as register_recent
         register_recent(app)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to register api_recent blueprint: {e}")
 
     register_socketio_events(app)
 
@@ -78,15 +81,16 @@ def create_app(config_name: str | None = None) -> Flask:
             try:
                 from working_automation import get_working_automation_pipeline  # type: ignore
                 pipeline = get_working_automation_pipeline()
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get working_automation pipeline, trying scheduler: {e}")
                 from scheduler import get_automated_pipeline
                 pipeline = get_automated_pipeline()
             if pipeline and not getattr(pipeline, 'is_running', False):
                 started = pipeline.start_scheduler()
                 if started:
                     os.environ['BIST_PIPELINE_STARTED'] = '1'
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to start automation pipeline: {e}")
 
     # Ensure calibration is disabled by default on service start if requested by env
     try:
@@ -106,7 +110,8 @@ def create_app(config_name: str | None = None) -> Flask:
                 if _os.path.exists(_state_path):
                     with open(_state_path, 'r') as rf:
                         cur = _json.load(rf) or {}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to load calibration_state.json: {e}")
                 cur = {}
             cur['bypass'] = True
             # Keep previous penalty_factor if any, else provide conservative default

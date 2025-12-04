@@ -1,3 +1,4 @@
+import logging
 from flask import (
     Blueprint,
     render_template,
@@ -9,6 +10,8 @@ from flask import (
 from flask_login import login_user, logout_user
 from datetime import datetime
 from ..extensions import csrf
+
+logger = logging.getLogger(__name__)
 
 bp = Blueprint('auth', __name__)
 
@@ -22,7 +25,8 @@ def register(app):
         from models import db, User
     try:
         from flask_wtf.csrf import generate_csrf
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to import generate_csrf: {e}")
         def generate_csrf():
             return ''
 
@@ -30,7 +34,8 @@ def register(app):
     try:
         from authlib.integrations.flask_client import OAuth
         oauth = OAuth(app)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to initialize OAuth: {e}")
         oauth = None
 
     @bp.route('/login', methods=['GET', 'POST'])
@@ -58,11 +63,12 @@ def register(app):
                     user.last_login = datetime.now()
                     user.last_login_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
                     db.session.commit()
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to update last_login: {e}")
                     try:
                         db.session.rollback()
-                    except Exception:
-                        pass
+                    except Exception as e2:
+                        logger.debug(f"Failed to rollback session: {e2}")
                 login_user(user)
                 # Role-based redirect: admin -> dashboard, others -> user dashboard
                 try:
@@ -78,12 +84,14 @@ def register(app):
                             admin_email = (current_app.config.get('ADMIN_EMAIL') or '').lower()
                             if admin_email and getattr(u, 'email', '').lower() == admin_email:
                                 return True
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to check admin status: {e}")
                             return False
                         return False
                     target = 'web.dashboard' if _is_admin(user) else 'web.user_dashboard'
                     return redirect(url_for(target))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to determine redirect target: {e}")
                     return redirect(url_for('web.user_dashboard'))
             return render_template(
                 'login.html',
@@ -91,18 +99,20 @@ def register(app):
                 google_enabled=bool(oauth and getattr(oauth, 'google', None)),
                 csrf_token=generate_csrf(),
             )
-        except Exception:
+        except Exception as e:
+            logger.error(f"Login error: {e}")
             try:
                 return render_template('login.html', error='Sistem hatası', csrf_token=generate_csrf()), 500
-            except Exception:
+            except Exception as e2:
+                logger.error(f"Failed to render login template: {e2}")
                 return render_template('login.html', error='Sistem hatası'), 500
 
     @bp.route('/logout')
     def logout():
         try:
             logout_user()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to logout user: {e}")
         return redirect(url_for('auth.login'))
 
     @bp.route('/auth/google')
@@ -149,11 +159,12 @@ def register(app):
                 user.last_login = datetime.now()
                 user.last_login_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
                 db.session.commit()
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to update last_login (Google): {e}")
                 try:
                     db.session.rollback()
-                except Exception:
-                    pass
+                except Exception as e2:
+                    logger.debug(f"Failed to rollback session (Google): {e2}")
             login_user(user)
             # Role-based redirect
             try:
@@ -165,10 +176,11 @@ def register(app):
                 admin_email = (current_app.config.get('ADMIN_EMAIL') or '').lower()
                 if admin_email and getattr(user, 'email', '').lower() == admin_email:
                     return redirect(url_for('web.dashboard'))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to determine redirect target (Google): {e}")
             return redirect(url_for('web.user_dashboard'))
-        except Exception:
+        except Exception as e:
+            logger.error(f"Google OAuth callback error: {e}")
             return redirect(url_for('auth.login'))
 
     @bp.route('/auth/apple')
@@ -215,11 +227,12 @@ def register(app):
                 user.last_login = datetime.now()
                 user.last_login_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
                 db.session.commit()
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to update last_login (Google): {e}")
                 try:
                     db.session.rollback()
-                except Exception:
-                    pass
+                except Exception as e2:
+                    logger.debug(f"Failed to rollback session (Google): {e2}")
             login_user(user)
             # Role-based redirect
             try:
@@ -231,10 +244,11 @@ def register(app):
                 admin_email = (current_app.config.get('ADMIN_EMAIL') or '').lower()
                 if admin_email and getattr(user, 'email', '').lower() == admin_email:
                     return redirect(url_for('web.dashboard'))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to determine redirect target (Apple): {e}")
             return redirect(url_for('web.user_dashboard'))
-        except Exception:
+        except Exception as e:
+            logger.error(f"Apple OAuth callback error: {e}")
             return redirect(url_for('auth.login'))
 
     app.register_blueprint(bp)

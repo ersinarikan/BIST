@@ -206,10 +206,10 @@ class FinGPTAnalyzer:
                     self._broadcast('INFO', f"FinGPT {symbol}: news=0 overall=neutral conf=0.00 (no_news)", 'news')
                     try:
                         logger.info(f"FinGPT {symbol}: news=0 overall=neutral conf=0.00 (no_news)")
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
+                    except Exception as e:
+                        logger.debug(f"Failed to log no_news message: {e}")
+                except Exception as e:
+                    logger.debug(f"Failed to process no_news case: {e}")
                 return {
                     'symbol': symbol,
                     'overall_sentiment': 'neutral',
@@ -278,10 +278,10 @@ class FinGPTAnalyzer:
                     self._broadcast('INFO', _msg, 'news')
                     try:
                         logger.info(_msg)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except Exception as e:
+                        logger.debug(f"Failed to log FinGPT message: {e}")
+            except Exception as e:
+                logger.debug(f"Failed to process FinGPT result: {e}")
 
             return result
             
@@ -313,9 +313,8 @@ class FinGPTAnalyzer:
                         'service': 'working_automation',
                         'timestamp': datetime.now().isoformat(),
                     })
-        except Exception:
-            # Ignore if no app context/socket
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to broadcast FinGPT result (no app context): {e}")
     
     def get_sentiment_signal(self, sentiment_result):
         """Sentiment'den trading sinyal türü belirle"""
@@ -331,7 +330,8 @@ class FinGPTAnalyzer:
         try:
             from bist_pattern.core.config_manager import ConfigManager
             threshold = float(ConfigManager.get('FINGPT_CONFIDENCE_THRESHOLD', '0.3'))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get FINGPT_CONFIDENCE_THRESHOLD, using 0.3: {e}")
             threshold = 0.3  # Default fallback
         
         if confidence < threshold:

@@ -5,7 +5,10 @@ In-memory TTL cache for API responses
 
 import time
 import threading
+import logging
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 # Global cache storage
 API_CACHE: dict[str, dict] = {}
@@ -47,8 +50,8 @@ def cache_clear() -> None:
     try:
         with API_CACHE_LOCK:
             API_CACHE.clear()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to clear cache: {e}")
 
 
 def cache_stats() -> dict:

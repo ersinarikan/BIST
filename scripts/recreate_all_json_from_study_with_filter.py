@@ -9,10 +9,13 @@ import os
 import json
 import argparse
 import shutil
+import logging
 from pathlib import Path
 from typing import Dict, Optional
 from datetime import datetime
 import time
+
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, '/opt/bist-pattern')
 os.environ['PYTHONPATH'] = '/opt/bist-pattern'
@@ -733,8 +736,8 @@ except Exception as e:
                             finally:
                                 try:
                                     os.unlink(fallback_temp)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug(f"Failed to unlink fallback_temp: {e}")
                         else:
                             failed_count += 1
                             print(f"  ❌ Subprocess failed with return code {result.returncode}")
@@ -747,8 +750,8 @@ except Exception as e:
                     # Cleanup temp script
                     try:
                         os.unlink(temp_script)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to unlink temp_script: {e}")
                         
             except Exception as e:
                 print(f"  ❌ Unexpected error processing {symbol}: {e}")

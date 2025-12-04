@@ -21,11 +21,13 @@ def get_pipeline_with_context():
     try:
         from working_automation import get_working_automation_pipeline  # type: ignore
         return get_working_automation_pipeline()
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to get working_automation pipeline, trying scheduler: {e}")
         try:
             from scheduler import get_automated_pipeline  # fallback
             return get_automated_pipeline()
-        except Exception:
+        except Exception as e2:
+            logger.debug(f"Failed to get scheduler pipeline: {e2}")
             return None
 
 
@@ -47,7 +49,8 @@ def automation_status_simple():
         # Get scheduler status
         try:
             status_info = pipeline.get_scheduler_status() or {}
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get scheduler status: {e}")
             status_info = {}
 
         is_running = bool(status_info.get('is_running', False))
@@ -123,7 +126,7 @@ def start_automation():
             with open(started_path, 'w') as f:
                 json.dump({'started_at': datetime.now().isoformat()}, f)
         except Exception as e:
-            current_app.logger.warning(f"Could not write automation_started_at.json: {e}")
+            logger.warning(f"Could not write automation_started_at.json: {e}")
 
         # Fire-and-forget başlatma: HTTP response hemen dön, işlem background'da devam etsin
         def start_pipeline_async(app_instance):
@@ -139,7 +142,7 @@ def start_automation():
                             if hasattr(app_instance, 'broadcast_log'):
                                 app_instance.broadcast_log('SUCCESS', '🚀 Automation started successfully', 'automation')
                     except Exception as e:
-                        logger.warning(f"WebSocket broadcast failed: {e}")
+                        logger.debug(f"WebSocket broadcast failed (start success): {e}")
                 else:
                     logger.error("❌ Pipeline start failed")
                     try:
@@ -147,7 +150,7 @@ def start_automation():
                             if hasattr(app_instance, 'broadcast_log'):
                                 app_instance.broadcast_log('ERROR', '❌ Automation start failed', 'automation')
                     except Exception as e:
-                        logger.warning(f"WebSocket broadcast failed: {e}")
+                        logger.debug(f"WebSocket broadcast failed (start error): {e}")
             except Exception as e:
                 logger.error(f"❌ Background pipeline start error: {e}")
                 try:
@@ -155,7 +158,7 @@ def start_automation():
                         if hasattr(app_instance, 'broadcast_log'):
                             app_instance.broadcast_log('ERROR', f'❌ Automation start error: {str(e)}', 'automation')
                 except Exception as e2:
-                    logger.warning(f"WebSocket broadcast failed: {e2}")
+                    logger.debug(f"WebSocket broadcast failed (start error 2): {e2}")
 
         # Start in background thread with app instance
         import threading
@@ -176,8 +179,8 @@ def start_automation():
         try:
             if hasattr(current_app, 'broadcast_log'):
                 current_app.broadcast_log('ERROR', f'❌ Automation start failed: {str(e)}', 'automation')
-        except Exception:
-            pass
+        except Exception as e2:
+            logger.debug(f"WebSocket broadcast failed (start outer error): {e2}")
 
         return jsonify({
             'status': 'error',
@@ -233,37 +236,42 @@ def stop_automation():
         current_app.logger.info("🔧 Stopping pipeline...")
 
         # Fire-and-forget durdurma: HTTP response hemen dön, işlem background'da devam etsin
-        def stop_pipeline_async():
+        def stop_pipeline_async(app_instance):
+            # Use module logger to avoid context issues
             try:
+                logger.info("🛑 Background thread stopping pipeline...")
                 success = pipeline.stop_scheduler()
                 if success:
-                    current_app.logger.info("✅ Pipeline stopped successfully")
+                    logger.info("✅ Pipeline stopped successfully")
                     _clear_pipeline_history_file()
-                    # Broadcast to WebSocket
+                    # Broadcast to WebSocket with app context
                     try:
-                        if hasattr(current_app, 'broadcast_log'):
-                            current_app.broadcast_log('SUCCESS', '🛑 Automation stopped successfully', 'automation')
-                    except Exception:
-                        pass
+                        with app_instance.app_context():
+                            if hasattr(app_instance, 'broadcast_log'):
+                                app_instance.broadcast_log('SUCCESS', '🛑 Automation stopped successfully', 'automation')
+                    except Exception as e:
+                        logger.debug(f"WebSocket broadcast failed (stop success): {e}")
                 else:
-                    current_app.logger.error("❌ Pipeline stop failed")
+                    logger.error("❌ Pipeline stop failed")
                     _clear_pipeline_history_file()
                     try:
-                        if hasattr(current_app, 'broadcast_log'):
-                            current_app.broadcast_log('ERROR', '❌ Automation stop failed', 'automation')
-                    except Exception:
-                        pass
+                        with app_instance.app_context():
+                            if hasattr(app_instance, 'broadcast_log'):
+                                app_instance.broadcast_log('ERROR', '❌ Automation stop failed', 'automation')
+                    except Exception as e:
+                        logger.debug(f"WebSocket broadcast failed (stop error): {e}")
             except Exception as e:
-                current_app.logger.error(f"❌ Background pipeline stop error: {e}")
+                logger.error(f"❌ Background pipeline stop error: {e}")
                 try:
-                    if hasattr(current_app, 'broadcast_log'):
-                        current_app.broadcast_log('ERROR', f'❌ Automation stop error: {str(e)}', 'automation')
-                except Exception:
-                    pass
+                    with app_instance.app_context():
+                        if hasattr(app_instance, 'broadcast_log'):
+                            app_instance.broadcast_log('ERROR', f'❌ Automation stop error: {str(e)}', 'automation')
+                except Exception as e2:
+                    logger.debug(f"WebSocket broadcast failed (stop error 2): {e2}")
 
-        # Stop in background thread
+        # Stop in background thread with app instance
         import threading
-        thread = threading.Thread(target=stop_pipeline_async, daemon=True)
+        thread = threading.Thread(target=stop_pipeline_async, args=(current_app._get_current_object(),), daemon=True)
         thread.start()
 
         # Immediate response
@@ -279,8 +287,8 @@ def stop_automation():
         try:
             if hasattr(current_app, 'broadcast_log'):
                 current_app.broadcast_log('ERROR', f'❌ Automation stop failed: {str(e)}', 'automation')
-        except Exception:
-            pass
+        except Exception as e2:
+            logger.debug(f"WebSocket broadcast failed (stop outer error): {e2}")
 
         return jsonify({
             'status': 'error',
@@ -331,7 +339,8 @@ def automation_health():
             disk_percent = float(getattr(du, 'percent', 0.0))
             disk_free_gb = float(getattr(du, 'free', 0.0)) / (1024 * 1024 * 1024)
             disk_used_gb = float(getattr(du, 'used', 0.0)) / (1024 * 1024 * 1024)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get system resources (psutil): {e}")
             cpu_percent = None
             mem_percent = None
             mem_total_mb = None
@@ -344,7 +353,8 @@ def automation_health():
             if hasattr(os, 'getloadavg'):
                 la = os.getloadavg()
                 load_avg = [float(la[0]), float(la[1]), float(la[2])]
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get load average: {e}")
             load_avg = None
         health_data['system_resources'] = {
             'cpu_percent': cpu_percent,
@@ -380,7 +390,8 @@ def automation_health():
                 else:
                     overall = 'warning'
             health_data['overall_status'] = overall
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to derive overall_status: {e}")
             # Best-effort; default unknown if derivation fails
             health_data['overall_status'] = 'unknown'
 
@@ -417,7 +428,8 @@ def automation_report():
                 try:
                     with open(started_path, 'r') as f:
                         since_dt = json.load(f).get('started_at')
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to read automation_started_at.json: {e}")
                     since_dt = None
             # Load pipeline history for cycles and analyzed counts
             status_file = os.path.join(log_dir, 'pipeline_status.json')
@@ -445,10 +457,10 @@ def automation_report():
                                 ts = e.get('timestamp')
                                 if ts and (earliest_ts is None or ts < earliest_ts):
                                     earliest_ts = ts
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
+                            except Exception as e:
+                                logger.debug(f"Failed to parse timestamp: {e}")
+                except Exception as e:
+                    logger.debug(f"Failed to read pipeline_status.json: {e}")
             # Load ML model status for training counts
             train_total = 0
             ml_status = os.path.join(log_dir, 'ml_model_status.json')
@@ -460,8 +472,8 @@ def automation_report():
                             ts = v.get('last_training_attempt')
                             if ts and (not since_dt or ts >= since_dt):
                                 train_total += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to read ml_model_status.json: {e}")
             # Load signals snapshot for signal count
             signal_total = 0
             try:
@@ -470,8 +482,8 @@ def automation_report():
                     with open(sig_path, 'r') as f:
                         ss = json.load(f) or {}
                         signal_total = len(ss.keys()) if isinstance(ss, dict) else 0
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to read signals_last.json for signal count: {e}")
             # YOLO/FinGPT breakdown from recent broadcasts (best-effort via signals_last)
             yolo_total = 0
             fingpt_total = 0
@@ -485,16 +497,16 @@ def automation_report():
                                 vis = sv.get('visual') or []
                                 if isinstance(vis, list):
                                     yolo_total += sum(1 for v in vis if str(v.get('source', '')).upper() == 'VISUAL_YOLO') or len(vis)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"Failed to parse YOLO detections: {e}")
                             try:
                                 ev = sv.get('evidence') or []
                                 if isinstance(ev, list):
                                     fingpt_total += sum(1 for e in ev if str(e.get('source', '')).upper() == 'FINGPT')
-                            except Exception:
-                                pass
-            except Exception:
-                pass
+                            except Exception as e:
+                                logger.debug(f"Failed to parse FinGPT detections: {e}")
+            except Exception as e:
+                logger.debug(f"Failed to read signals_last.json for YOLO/FinGPT breakdown: {e}")
             # Attach to report
             report = report or {}
             report['since_started'] = since_dt or earliest_ts or None
@@ -527,8 +539,8 @@ def automation_report():
                     'enhanced_analyses': None,
                     'basic_analyses': None,
                 })
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to set default aggregates: {e}")
         # Enrich report with volume tiers (20-day average volume based)
         try:
             from models import db, Stock, StockPrice  # type: ignore
@@ -558,7 +570,8 @@ def automation_report():
                     d0 = s[f] * (c - k)
                     d1 = s[c] * (k - f)
                     return float(d0 + d1)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to calculate percentile: {e}")
                     return 0.0
             p15 = _pct(vols, 15)
             p40 = _pct(vols, 40)
@@ -577,7 +590,8 @@ def automation_report():
                     if v >= p15:
                         return 'low'
                     return 'very_low'
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to determine tier: {e}")
                     return 'very_low'
             sym_list = []
             summary = {'very_high': 0, 'high': 0, 'medium': 0, 'low': 0, 'very_low': 0}
@@ -630,7 +644,8 @@ def automation_pipeline_history():
                 with open(status_file, 'r') as f:
                     data = json.load(f) or {}
                     history = data.get('history', []) if isinstance(data, dict) else []
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to read pipeline_status.json for history: {e}")
                 history = []
 
         # Recent tasks from automation system
@@ -646,8 +661,8 @@ def automation_pipeline_history():
                             'data': task_data,
                             'timestamp': task_data.get('timestamp', 'Unknown')
                         })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to get last_run_stats: {e}")
 
         resp = jsonify({'status': 'success', 'history': history, 'tasks': tasks})
         resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -700,7 +715,8 @@ def volume_tiers():
                 d0 = s[f] * (c - k)
                 d1 = s[c] * (k - f)
                 return float(d0 + d1)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to calculate percentile in volume_tiers: {e}")
                 return 0.0
 
         p15 = _pct(vols, 15)
@@ -720,7 +736,8 @@ def volume_tiers():
                 if v >= p15:
                     return 'low'
                 return 'very_low'
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to determine tier in volume_tiers: {e}")
                 return 'very_low'
 
         resp = {
@@ -739,7 +756,8 @@ def volume_tiers():
                     .scalar()
                 )
                 sym_avg = float(sym_avg or 0)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get symbol average volume: {e}")
                 sym_avg = 0.0
             resp['symbol'] = sym
             resp['avg_volume'] = sym_avg
@@ -751,8 +769,8 @@ def volume_tiers():
                 for s, avg in rows:
                     t = _tier(float(avg or 0))
                     summary[t] = summary.get(t, 0) + 1
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to calculate volume summary: {e}")
             resp['summary'] = summary
 
         # Disable caching to ensure fresh values in UI

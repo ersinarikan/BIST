@@ -1,9 +1,11 @@
 from flask import Blueprint, jsonify, request
 import os
+import logging
 from datetime import datetime
 from functools import wraps
 
 bp = Blueprint('api_internal', __name__, url_prefix='/api/internal')
+logger = logging.getLogger(__name__)
 
 
 def _allow_or_token(app):
@@ -42,8 +44,8 @@ def register(app):
     from ..extensions import csrf
     try:
         csrf.exempt(bp)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to exempt CSRF for bp: {e}")
 
     @bp.route('/broadcast-log', methods=['POST'])
     @csrf.exempt  # keep CSRF exempt
@@ -59,7 +61,8 @@ def register(app):
                 remote_ip = (request.headers.get('X-Forwarded-For') or request.remote_addr or '').split(',')[0].strip()
                 is_local = remote_ip in ('127.0.0.1', '::1', 'localhost')
                 allow_localhost = str(os.getenv('INTERNAL_ALLOW_LOCALHOST', str(app.config.get('INTERNAL_ALLOW_LOCALHOST', 'True')))).lower() == 'true'
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get remote IP/localhost config: {e}")
                 is_local, allow_localhost = False, True
             if expected:
                 if token != expected and not (allow_localhost and is_local):
@@ -154,7 +157,8 @@ def register(app):
             try:
                 from app import get_pipeline_with_context  # type: ignore
                 pipeline = get_pipeline_with_context()
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get pipeline with context: {e}")
                 pipeline = None
 
             health_data = {'systems': {}}
@@ -191,7 +195,8 @@ def register(app):
                 disk_percent = float(getattr(du, 'percent', 0.0))
                 disk_free_gb = float(getattr(du, 'free', 0.0)) / (1024 * 1024 * 1024)
                 disk_used_gb = float(getattr(du, 'used', 0.0)) / (1024 * 1024 * 1024)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get system stats: {e}")
                 cpu_percent = None
                 mem_percent = None
                 mem_total_mb = None
@@ -206,7 +211,8 @@ def register(app):
                 if hasattr(_os, 'getloadavg'):
                     la = _os.getloadavg()
                     load_avg = [float(la[0]), float(la[1]), float(la[2])]
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get load average: {e}")
                 load_avg = None
 
             health_data['system_resources'] = {
@@ -242,7 +248,8 @@ def register(app):
                         overall = 'warning'
                     else:
                         overall = 'warning'
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to determine overall status: {e}")
                 overall = 'unknown'
             # overall_status is a primitive string value; set directly
             # Assign directly
@@ -269,7 +276,8 @@ def register(app):
                     with open(status_file, 'r') as f:
                         data = _json.load(f) or {}
                         history = data.get('history', []) if isinstance(data, dict) else []
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to load history from file: {e}")
                     history = []
 
             resp = jsonify({'status': 'success', 'history': history, 'tasks': []})
@@ -314,7 +322,8 @@ def register(app):
                     d0 = s[f] * (c - k)
                     d1 = s[c] * (k - f)
                     return float(d0 + d1)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to calculate tier score: {e}")
                     return 0.0
 
             p15 = _pct(vols, 15)
@@ -334,7 +343,8 @@ def register(app):
                     if v >= p15:
                         return 'low'
                     return 'very_low'
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to determine tier: {e}")
                     return 'very_low'
 
             resp = {
@@ -353,7 +363,8 @@ def register(app):
                         .scalar()
                     )
                     sym_avg = float(sym_avg or 0)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to calculate sym_avg: {e}")
                     sym_avg = 0.0
                 resp['symbol'] = sym
                 resp['avg_volume'] = sym_avg
@@ -364,8 +375,8 @@ def register(app):
                     for s, avg in rows:
                         t = _tier(float(avg or 0))
                         summary[t] = summary.get(t, 0) + 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to update summary: {e}")
                 resp['summary'] = summary
 
             out = jsonify(resp)
@@ -398,13 +409,14 @@ def register(app):
                     preds = (data.get('predictions') or {}) if isinstance(data, dict) else {}
                     if isinstance(preds, dict):
                         count = len(preds)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to get predictions count: {e}")
                 try:
                     ttl = int(_os.getenv('BULK_PREDICTIONS_TTL_SECONDS', '7200'))
                     if age_seconds is not None:
                         stale = bool(age_seconds > ttl)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to check stale status: {e}")
                     stale = None
             return jsonify({
                 'status': 'success',
@@ -445,7 +457,8 @@ def register(app):
                             price = float(node['basic']['price'])
                     if isinstance(price, (int, float)):
                         out[h] = {'price': float(price)}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to extract price from predictions: {e}")
                 return {}
             return out
 
@@ -461,7 +474,8 @@ def register(app):
                             out[h] = {'price': float(node['price'])}
                     elif isinstance(node, (int, float)):
                         out[h] = {'price': float(node)}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to extract price from node: {e}")
                 return {}
             return out
 
@@ -483,7 +497,8 @@ def register(app):
                     enriched = _extract_generic(data['predictions'])
                 if enriched:
                     preds_map[sym] = {'enhanced': enriched}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to enrich predictions for {sym}: {e}")
                 continue
 
         obj = {'predictions': preds_map, 'rebuilt_at': _time.time()}
@@ -496,15 +511,15 @@ def register(app):
                 try:
                     wf.flush()
                     _os.fsync(wf.fileno())
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to fsync bulk predictions file: {e}")
             _os.replace(tmp_path, bulk_path)
         finally:
             try:
                 if _os.path.exists(tmp_path):
                     _os.remove(tmp_path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to remove tmp_path: {e}")
 
         return {'path': bulk_path, 'predictions_count': len(preds_map)}
 
@@ -542,7 +557,8 @@ def register(app):
                 try:
                     m = _os.path.getmtime(fp)
                     ages.append(now - m)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get mtime for {fp}: {e}")
                     continue
             avg_age = (sum(ages) / len(ages)) if ages else None
             max_age = max(ages) if ages else None
@@ -634,7 +650,8 @@ def register(app):
                 if exists:
                     try:
                         age = float(now - os.path.getmtime(sp))
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to calculate age for {sp}: {e}")
                         age = None
                 report_items.append({
                     'symbol': sym,
@@ -673,8 +690,8 @@ def register(app):
                 allow_localhost = str(os.getenv('INTERNAL_ALLOW_LOCALHOST', str(app.config.get('INTERNAL_ALLOW_LOCALHOST', 'True')))).lower() == 'true'
                 if expected and token != expected and not (allow_localhost and is_local):
                     return jsonify({'status': 'unauthorized'}), 401
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Auth check failed: {e}")
 
             def _append_status(phase: str, state: str, details: dict | None = None):
                 try:
@@ -687,7 +704,8 @@ def register(app):
                         try:
                             with open(status_file, 'r') as rf:
                                 payload = json.load(rf) or {'history': []}
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to load status file: {e}")
                             payload = {'history': []}
                     entry = {
                         'phase': phase,
@@ -700,16 +718,16 @@ def register(app):
                     with open(status_file, 'w') as wf:
                         import json as _json
                         _json.dump(payload, wf)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to save status file: {e}")
 
             def _broadcast(level, message, category='pipeline'):
                 try:
                     if hasattr(app, 'broadcast_log'):
                         # ✅ FIX: Use specific category to distinguish from HPO logs
                         app.broadcast_log(level, message, category='working_automation')
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to broadcast log: {e}")
 
             def _run_cycle():
                 _append_status('data_collection', 'start', {})
@@ -721,7 +739,8 @@ def register(app):
                         # Primary path (if module present)
                         from advanced_collector import AdvancedBISTCollector  # type: ignore
                         collector = AdvancedBISTCollector()
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to import AdvancedBISTCollector, using fallback: {e}")
                         # Fallback to unified collector (always available)
                         try:
                             from bist_pattern.core.unified_collector import get_unified_collector  # type: ignore
@@ -744,7 +763,8 @@ def register(app):
                             errors = 0
                             try:
                                 symbol_sleep_seconds = float(os.getenv('MANUAL_TASK_SYMBOL_SLEEP', '0.01'))
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to get MANUAL_TASK_SYMBOL_SLEEP, using 0.01: {e}")
                                 symbol_sleep_seconds = 0.01
                             for sym in symbols_list:
                                 try:
@@ -757,14 +777,16 @@ def register(app):
                                         try:
                                             from bist_pattern.core.unified_collector import get_unified_collector  # type: ignore
                                             res = get_unified_collector().collect_single_stock(sym, period='auto')
-                                        except Exception:
+                                        except Exception as e:
+                                            logger.debug(f"Failed to collect data for {sym}: {e}")
                                             res = None
                                     if isinstance(res, dict):
                                         added_total += int(res.get('records', 0))
                                         updated_total += int(res.get('updated', 0))
                                         if not bool(res.get('success')) or (int(res.get('records', 0)) == 0 and int(res.get('updated', 0)) == 0):
                                             no_data += 1
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Failed to process symbol {sym}: {e}")
                                     errors += 1
                                 time.sleep(symbol_sleep_seconds)
                             col_res = {
@@ -797,7 +819,8 @@ def register(app):
                         try:
                             det.analyze_stock(sym)
                             analyzed += 1
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to analyze stock {sym}: {e}")
                             continue
                     _append_status('ai_analysis', 'end', {'analyzed': analyzed, 'total': total})
                 except Exception as e:
@@ -813,8 +836,8 @@ def register(app):
                     try:
                         if isinstance(bulk, dict):
                             count = len(bulk.get('predictions') or {})
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to get bulk predictions count: {e}")
                     _append_status('bulk_predictions', 'end', {'symbols': count})
                 except Exception as e:
                     _append_status('bulk_predictions', 'error', {'error': str(e)})
@@ -884,7 +907,8 @@ def register(app):
 
             try:
                 body = request.get_json() or {}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get JSON body: {e}")
                 body = {}
             symbols = body.get('symbols') or request.args.get('symbols')
             per_symbol_sleep = body.get('per_symbol_sleep') or request.args.get('per_symbol_sleep')
@@ -911,7 +935,8 @@ def register(app):
                             try:
                                 with open(status_file, 'r') as rf:
                                     payload = json.load(rf) or {'history': []}
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to load status file (second attempt): {e}")
                                 payload = {'history': []}
                         from datetime import datetime as _dt
                         entry = {
@@ -924,16 +949,16 @@ def register(app):
                         payload['history'] = payload['history'][-200:]
                         with open(status_file, 'w') as wf:
                             json.dump(payload, wf)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to save status file: {e}")
 
                 # Broadcast helper
                 def _broadcast(level, message, category='pipeline'):
                     try:
                         if hasattr(app, 'broadcast_log'):
                             app.broadcast_log(level, message, category)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to broadcast log: {e}")
 
                 try:
                     from importlib import import_module
@@ -941,7 +966,8 @@ def register(app):
                     get_cycle_runner = getattr(cycle_mod, 'get_cycle_runner', None)
                     if not callable(get_cycle_runner):
                         return jsonify({'status': 'error', 'error': 'cycle_runner unavailable'}), 503
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get cycle_runner: {e}")
                     return jsonify({'status': 'error', 'error': 'cycle_runner unavailable'}), 503
                 runner = get_cycle_runner()
                 if not hasattr(runner, 'run_once'):
@@ -958,7 +984,8 @@ def register(app):
                 processed = 0
                 try:
                     processed = int((result or {}).get('processed') or 0)  # type: ignore[call-arg,operator]
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get processed count: {e}")
                     processed = 0
                 _append_status('incremental_cycle', 'end', {'processed': processed, 'duration_s': duration_s})
                 _broadcast('SUCCESS', f'✅ Manual incremental cycle finished ({processed} symbols, {duration_s}s)', 'pipeline')
@@ -989,7 +1016,8 @@ def register(app):
                 get_cycle_runner = getattr(cycle_mod, 'get_cycle_runner', None)
                 if not callable(get_cycle_runner):
                     return jsonify({'status': 'error', 'error': 'cycle_runner unavailable'}), 503
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get cycle_runner: {e}")
                 return jsonify({'status': 'error', 'error': 'cycle_runner unavailable'}), 503
             runner = get_cycle_runner()
             status_fn = getattr(runner, 'status', None)
@@ -1052,7 +1080,8 @@ def register(app):
         try:
             try:
                 body = request.get_json() or {}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get JSON body: {e}")
                 body = {}
             # Determine period preference
             period = body.get('period') or request.args.get('period') or 'auto'
@@ -1086,11 +1115,13 @@ def register(app):
             # Thresholds
             try:
                 min_total = int(_os.getenv('MIN_OUTCOMES_PER_HORIZON', '250'))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get MIN_OUTCOMES_PER_HORIZON, using 250: {e}")
                 min_total = 250
             try:
                 min_per_decile = int(_os.getenv('MIN_SAMPLES_PER_DECILE', '50'))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get MIN_SAMPLES_PER_DECILE, using 50: {e}")
                 min_per_decile = 50
             needed = max(min_total, min_per_decile * 10)
 
@@ -1130,8 +1161,8 @@ def register(app):
                 fpath = _os.path.join(base_dir, 'calibration_readiness.json')
                 with open(fpath, 'w') as wf:
                     _json.dump(payload, wf)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to save file {fpath}: {e}")
 
             return jsonify(payload)
         except Exception as e:
@@ -1169,7 +1200,8 @@ def register(app):
                 q = _req.args.get('limit', '')
                 if q:
                     limit = max(1, min(2000, int(q)))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to parse limit query param, using 100: {e}")
                 limit = 100
             base_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
             fpath = _os.path.join(base_dir, 'metrics_horizon.json')
@@ -1178,7 +1210,8 @@ def register(app):
                 try:
                     with open(fpath, 'r') as rf:
                         rows = _json.load(rf) or []
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to load rows from {fpath}: {e}")
                     rows = []
             if isinstance(rows, list) and len(rows) > limit:
                 rows = rows[-limit:]
@@ -1210,7 +1243,8 @@ def register(app):
                 non_empty = [p for p in candidates if _os.path.exists(p) and _os.path.getsize(p) > 0]
                 if non_empty:
                     latest_log = max(non_empty, key=lambda p: _os.path.getmtime(p))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to find latest log: {e}")
                 latest_log = None
 
             ok_cnt = None
@@ -1233,7 +1267,8 @@ def register(app):
                                     ok_cnt = int(obj.get('ok')) if obj.get('ok') is not None else ok_cnt
                                     fail_cnt = int(obj.get('fail')) if obj.get('fail') is not None else fail_cnt
                                     break
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to parse JSON from log line, trying regex: {e}")
                                 # Not strict JSON; best-effort regex fallback
                                 try:
                                     m_ok = _re.search(r'"ok"\s*:\s*(\d+)', ln)
@@ -1243,8 +1278,8 @@ def register(app):
                                     if m_fail:
                                         fail_cnt = int(m_fail.group(1))
                                         break
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug(f"Failed to parse regex from log line: {e}")
                     # Collect nRMSE and Hit values across lines
                     for ln in lines:
                         try:
@@ -1267,15 +1302,17 @@ def register(app):
                                     hit_vals.append(v)
                                     if htok and htok in by_h:
                                         by_h[htok]['hit'].append(v)
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to process hit value: {e}")
                             continue
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to process log line: {e}")
 
             def _avg(xs: list[float]) -> float | None:
                 try:
                     return (sum(xs) / len(xs)) if xs else None
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to calculate average: {e}")
                     return None
 
             # Optional: metrics_horizon.json aggregation (best-effort)
@@ -1303,8 +1340,8 @@ def register(app):
                                                 htok = raw
                                             else:
                                                 htok = f"{int(float(raw))}d"
-                                        except Exception:
-                                            pass
+                                        except Exception as e:
+                                            logger.debug(f"Failed to parse horizon token: {e}")
                                         break
                                 for k, v in it.items():
                                     kl = str(k).strip().lower()
@@ -1315,8 +1352,8 @@ def register(app):
                                                 mh_nrmse.append(vv)
                                                 if htok in mh_by_h:
                                                     mh_by_h[htok]['nrmse'].append(vv)
-                                        except Exception:
-                                            pass
+                                        except Exception as e:
+                                            logger.debug(f"Failed to append nrmse: {e}")
                                     if kl in ('hit_rate', 'hitrate', 'hit-rate'):
                                         try:
                                             vv = float(v)
@@ -1324,10 +1361,10 @@ def register(app):
                                                 mh_hit.append(vv)
                                                 if htok in mh_by_h:
                                                     mh_by_h[htok]['hit'].append(vv)
-                                        except Exception:
-                                            pass
-                except Exception:
-                    pass
+                                        except Exception as e:
+                                            logger.debug(f"Failed to append hit: {e}")
+                except Exception as e:
+                    logger.debug(f"Failed to process metrics_horizon.json: {e}")
 
             out = {
                 'status': 'success',
@@ -1407,17 +1444,19 @@ def register(app):
                                 'penalty_factor': pf,
                                 'source': 'file'
                             }
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to load calibration state: {e}")
                 try:
                     _raw = str(_os.getenv('BYPASS_ISOTONIC_CALIBRATION', '1')).strip().lower()
                     _bypass = _raw in ('1', 'true', 'yes', 'on')
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get BYPASS_ISOTONIC_CALIBRATION, using True: {e}")
                     _bypass = True
                 try:
                     _pf_env = _os.getenv('THRESHOLD_PENALTY_FACTOR', '')
                     _penalty = float(_pf_env) if (_pf_env is not None and str(_pf_env).strip() != '') else None
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get THRESHOLD_PENALTY_FACTOR: {e}")
                     _penalty = None
                 return {
                     'bypass': bool(_bypass),
@@ -1433,7 +1472,8 @@ def register(app):
                 try:
                     with open(ppath, 'r') as rf:
                         pstore = _json.load(rf) or {}
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to load parameter store: {e}")
                     pstore = {}
 
             # Helper to aggregate metrics for the last N days
@@ -1490,7 +1530,8 @@ def register(app):
                         pv = str(getattr(p, 'param_version', '') or '')
                         grp = 'chall' if 'ab:chall' in pv else 'prod'
                         tmp[h][grp].append(1.0 if bool(getattr(o, 'dir_hit')) else 0.0)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to process outcome: {e}")
                         continue
                 for h in hkeys:
                     for grp in ('prod', 'chall'):
@@ -1498,7 +1539,8 @@ def register(app):
                         n = len(vals)
                         ab_7d[h][grp]['n'] = n
                         ab_7d[h][grp]['acc'] = (sum(vals) / n) if n else None
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to calculate A/B test 7d: {e}")
                 ab_7d = {}
 
             # ⚡ NEW: Calculate magnitude-based metrics for A/B test
@@ -1543,7 +1585,8 @@ def register(app):
                         else:
                             mag_hit = 0.0
                         tmp2[h2][grp2].append(mag_hit)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to process magnitude outcome: {e}")
                         continue
                 for h2 in hkeys2:
                     for grp2 in ('prod', 'chall'):
@@ -1551,7 +1594,8 @@ def register(app):
                         n2 = len(vals2)
                         ab_7d_magnitude[h2][grp2]['n'] = n2
                         ab_7d_magnitude[h2][grp2]['acc'] = (sum(vals2) / n2) if n2 else None
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to calculate A/B test 7d magnitude: {e}")
                 ab_7d_magnitude = {}
 
             calibration_state = _load_calibration_state()
@@ -1585,7 +1629,8 @@ def register(app):
                         'has_data': has_data,
                         'reason': skipped_map.get(h, None) if not has_data else None
                     }
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get online adjustment config: {e}")
                 global_online_adj_enabled = False
                 online_adj_min_samples = 10
                 online_adj_window_days = 45
@@ -1652,10 +1697,11 @@ def register(app):
                         try:
                             conf = float(sv.get('confidence') or 0.0)
                             conf_map[str(sym).upper()] = conf
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to extract confidence for {sym}: {e}")
                             continue
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to process signals_last.json: {e}")
 
             # Aggregate metrics by horizon (best-effort)
             # Expect a list of rows with keys like horizon, hit_rate, nrmse
@@ -1673,11 +1719,13 @@ def register(app):
                                 continue
                             try:
                                 hr = float(it.get('hit_rate')) if it.get('hit_rate') is not None else None
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to get hit_rate: {e}")
                                 hr = None
                             try:
                                 nr = float(it.get('nrmse')) if it.get('nrmse') is not None else None
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to get nrmse: {e}")
                                 nr = None
                             if hk not in metrics:
                                 metrics[hk] = {'hit_rate': hr or 0.0, 'nrmse': nr or 0.0}
@@ -1685,7 +1733,8 @@ def register(app):
                                 # Keep last value (already ordered) or average; here we keep last
                                 metrics[hk]['hit_rate'] = hr or metrics[hk]['hit_rate']
                                 metrics[hk]['nrmse'] = nr or metrics[hk]['nrmse']
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to process metrics: {e}")
                     metrics = {}
 
             # Choose target horizon thresholds
@@ -1709,7 +1758,8 @@ def register(app):
                     .all()
                 )
                 vols = {str(s).upper(): float(v or 0) for s, v in rows}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get volumes from DB: {e}")
                 vols = {}
 
             # Build candidates: use signals confidence as tie-breaker; thresholds from horizon metrics
@@ -1761,7 +1811,8 @@ def register(app):
                     if _os.path.exists(snap_path):
                         with open(snap_path, 'r') as rf:
                             snap = _json.load(rf) or {}
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to load snapshot from {snap_path}: {e}")
                     snap = {}
                 visual_evidence = []
                 try:
@@ -1773,7 +1824,8 @@ def register(app):
                             'source': 'VISUAL_YOLO'
                         }
                         visual_evidence.append(v)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to process visual evidence: {e}")
                     visual_evidence = []
                 if sym in snap:
                     snap[sym]['visual'] = visual_evidence
@@ -1787,8 +1839,8 @@ def register(app):
                     }
                 with open(snap_path, 'w') as wf:
                     _json.dump(snap, wf)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to save snapshot to {snap_path}: {e}")
             return jsonify({'status': 'success', 'result': res})
         except Exception as e:
             app.logger.error(f"internal_visual_analysis error: {e}")
@@ -1804,7 +1856,8 @@ def register(app):
             from datetime import datetime as _dt
             try:
                 body = request.get_json(force=True) or {}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get JSON body (force): {e}")
                 body = {}
             base_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
             _os.makedirs(base_dir, exist_ok=True)
@@ -1815,7 +1868,8 @@ def register(app):
                 try:
                     with open(cpath, 'r') as cf:
                         cur = _json.load(cf) or {}
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to load calibration state: {e}")
                     cur = {}
             # Determine new state
             desired = body.get('bypass', None)
@@ -1829,7 +1883,8 @@ def register(app):
             try:
                 pf = body.get('penalty_factor', None)
                 pf = float(pf) if (pf is not None and str(pf).strip() != '') else None
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to parse penalty_factor: {e}")
                 pf = None
             # If penalty not provided, pick defaults
             if pf is None:
@@ -1842,7 +1897,8 @@ def register(app):
             # Persist atomically with file lock
             try:
                 from bist_pattern.utils.param_store_lock import file_lock  # type: ignore
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to import file_lock: {e}")
                 file_lock = None  # type: ignore
             tmp_path = cpath + '.tmp'
             content = _json.dumps(new_state, ensure_ascii=False, indent=2)

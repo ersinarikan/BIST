@@ -13,6 +13,7 @@ import os
 import sys
 import json
 import argparse
+import logging
 from datetime import datetime
 import math
 from typing import Any, Dict, List, Optional, cast
@@ -27,6 +28,8 @@ from pathlib import Path
 sys.path.insert(0, '/opt/bist-pattern')
 from bist_pattern.core.config_manager import ConfigManager  # noqa: E402
 from enhanced_ml_system import EnhancedMLSystem  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 # Check model availability
 try:
@@ -101,11 +104,12 @@ def fetch_prices(engine, symbol: str, limit: int = 1200) -> pd.DataFrame | None:
     # ✅ Ensure datetime index (prevents macro merge fallback and TZ mismatches)
     try:
         df.index = pd.to_datetime(df.index).tz_localize(None)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to parse datetime index, trying coerce: {e}")
         try:
             df.index = pd.to_datetime(df.index, errors='coerce').tz_localize(None)
-        except Exception:
-            pass
+        except Exception as e2:
+            logger.warning(f"Failed to parse datetime index even with coerce: {e2}")
     df = df.sort_index()
     
     # ✅ HİBRİT YAKLAŞIM: Duplicate date kontrolü (aynı tarihli kayıtlar varsa temizle)
@@ -598,11 +602,13 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
         _min_mp = 0.0
         try:
             _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))
-        except Exception:
+        except Exception as e:
+            print(f"[hpo] Failed to parse HPO_MIN_MASK_COUNT, using 0: {e}", file=sys.stderr)
             _min_mc = 0
         try:
             _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '0'))
-        except Exception:
+        except Exception as e:
+            print(f"[hpo] Failed to parse HPO_MIN_MASK_PCT, using 0.0: {e}", file=sys.stderr)
             _min_mp = 0.0
         print(f"[hpo] Trial {trial.number}: Fetching prices for {sym}...", file=sys.stderr, flush=True)
         df = fetch_prices(engine, sym)
@@ -811,8 +817,8 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
                     if std_y > 0:
                         nrmse_val = float(rmse / std_y)
                         split_nrmses_local.append(nrmse_val)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to calculate NRMSE for split: {e}")
                 # ✅ NEW: Low-support guard to prevent spurious 100% DirHit on tiny masks
                 # Configure via environment:
                 #  - HPO_MIN_MASK_COUNT (int, default 0 → disabled)
@@ -872,8 +878,8 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
                 split_entry['low_support'] = bool(low_support)
                 split_entry['min_mask_count'] = int(_min_mc)
                 split_entry['min_mask_pct'] = float(_min_mp)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to set split_entry metadata: {e}")
             if split_ensemble_debug:
                 split_entry['ensemble_debug'] = split_ensemble_debug
             symbol_metric_entry['split_metrics'].append(split_entry)
@@ -915,8 +921,8 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
                 avg_nrmse_local = float(np.mean(split_nrmses_local))
                 nrmses.append(avg_nrmse_local)
                 avg_nrmse_value = avg_nrmse_local
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to calculate avg_nrmse_local: {e}")
         symbol_metric_entry['avg_dirhit'] = avg_dirhit_value
         symbol_metric_entry['avg_nrmse'] = avg_nrmse_value
         symbol_metric_entry['split_count'] = len(symbol_metric_entry['split_metrics'])
@@ -1041,7 +1047,8 @@ def main():
         try:
             df_est = fetch_prices(engine, sym, limit=1200)
             return int(len(df_est)) if df_est is not None else 0
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to estimate days for {sym}: {e}")
             return 0
     total_days_list = [_estimate_days(s) for s in symbols]
     min_days = min(total_days_list) if total_days_list else 0
@@ -1051,7 +1058,8 @@ def main():
     # ✅ CRITICAL FIX: Read target_trials from environment variable (default: 1500)
     try:
         target_trials = int(os.getenv('HPO_TRIALS', '1500'))
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to get HPO_TRIALS, using 1500: {e}")
         target_trials = 1500  # Fallback to default
     target_timeout = 72 * 3600  # 72h for all
     
@@ -1137,8 +1145,8 @@ def main():
                         study.enqueue_trial(bp)
                         enqueued += 1
                         print(f"↪️ Warm-start: enqueued params from {os.path.basename(jf)}", flush=True)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Warm-start enqueue failed: {e}")
     
     # ✅ FIX: Check existing trials before optimizing to prevent exceeding n_trials limit
     # When multiple processes write to the same study, each process may try to add n_trials,
@@ -1192,7 +1200,8 @@ def main():
     try:
         from optuna.trial import TrialState
         pruned_count = sum(1 for t in study.trials if t.state == TrialState.PRUNED)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to count pruned trials: {e}")
         pruned_count = 0
     try:
         durations: list[float] = []
@@ -1202,7 +1211,8 @@ def main():
             if start is not None and end is not None:
                 durations.append(float((end - start).total_seconds()))
         avg_trial_time = float(np.mean(durations)) if durations else 0.0
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to calculate avg_trial_time: {e}")
         avg_trial_time = 0.0
     
     # Best dirhit from trial user attrs if available (objective returns combined score)
@@ -1213,7 +1223,8 @@ def main():
             best_dirhit = float(_val)
         else:
             best_dirhit = None
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to get best_dirhit from trial: {e}")
         best_dirhit = None
     if best_dirhit is None or not np.isfinite(best_dirhit):
         best_dirhit = best_value  # fallback
@@ -1234,7 +1245,8 @@ def main():
                 'attrs': getattr(t, 'user_attrs', {}),
                 'state': str(t.state),
             })
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to build topk trials: {e}")
         topk = []
     
     result = {
@@ -1293,8 +1305,8 @@ def main():
                     try:
                         h = int(parts[1].replace('d', ''))
                         low_support_symbols.append(f"{sym_name}_{h}d")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to parse horizon from {parts[1]}: {e}")
         if low_support_symbols:
             result['low_support_warnings'] = low_support_symbols
             print(f"⚠️ WARNING: {len(low_support_symbols)} symbol(s) had all splits excluded by filter: {', '.join(low_support_symbols)}", file=sys.stderr, flush=True)
@@ -1304,7 +1316,8 @@ def main():
         # Threshold and support config
         try:
             _thr = 0.005
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to set threshold, using 0.005: {e}")
             _thr = 0.005
         # ✅ CRITICAL FIX: Get filter values from best_trial's split_metrics (what was actually used during HPO)
         # Not from environment variables (which may have changed)
@@ -1319,25 +1332,28 @@ def main():
                     first_split = split_metrics[0]
                     _min_mc_spec = int(first_split.get('min_mask_count', 0))
                     _min_mp_spec = float(first_split.get('min_mask_pct', 0.0))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get filter values from split_metrics: {e}")
             # Fallback to environment variables if split_metrics not available
-            pass
         
         # If not set from split_metrics, try environment variables
         if _min_mc_spec == 0:
             try:
                 _min_mc_spec = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get HPO_MIN_MASK_COUNT, using 0: {e}")
                 _min_mc_spec = 0
         if _min_mp_spec == 0.0:
             try:
                 _min_mp_spec = float(os.getenv('HPO_MIN_MASK_PCT', '0'))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get HPO_MIN_MASK_PCT, using 0.0: {e}")
                 _min_mp_spec = 0.0
         # Scoring config
         try:
             _k = 6.0 if horizon in (1, 3, 7) else 4.0
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to set scoring config, using 6.0: {e}")
             _k = 6.0
         # Build symbol_specs with splits
         symbol_specs = {}
@@ -1374,9 +1390,9 @@ def main():
             },
             'symbol_specs': symbol_specs
         }
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to construct evaluation_spec: {e}")
         # Do not fail HPO save if evaluation_spec construction has issues
-        pass
     
     # ✅ CRITICAL FIX: Atomic JSON file write (prevents corrupt files)
     # Write to temp file first, then atomic rename to prevent partial writes
@@ -1391,8 +1407,8 @@ def main():
                 f.flush()
                 try:
                     os.fsync(f.fileno())  # Force write to disk
-                except Exception:
-                    pass  # fsync may not be available on all systems
+                except Exception as e:
+                    logger.debug(f"fsync failed (may not be available): {e}")
             
             # Atomic rename (this is atomic on POSIX systems)
             os.replace(tmp_file, output_file)
@@ -1403,8 +1419,8 @@ def main():
             try:
                 if os.path.exists(tmp_file):
                     os.remove(tmp_file)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to remove tmp_file: {e}")
             raise tmp_err  # Re-raise to be caught by outer except
     except Exception as json_err:
         print(f"❌ ERROR: Failed to save JSON file {output_file}: {json_err}", file=sys.stderr, flush=True)
@@ -1428,8 +1444,8 @@ def main():
                     f.flush()
                     try:
                         os.fsync(f.fileno())
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"fsync failed (may not be available): {e}")
                 os.replace(tmp_file_recovered, output_file_recovered)
                 print(f"✅ Recovered JSON file saved to: {output_file_recovered}", flush=True)
                 output_file = output_file_recovered
@@ -1439,8 +1455,8 @@ def main():
                 try:
                     if os.path.exists(tmp_file_recovered):
                         os.remove(tmp_file_recovered)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to remove tmp_file_recovered: {e}")
                 raise recover_write_err
         except Exception as recover_err:
             print(f"❌ ERROR: Failed to recover JSON file: {recover_err}", file=sys.stderr, flush=True)

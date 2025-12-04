@@ -10,15 +10,16 @@ logger = logging.getLogger(__name__)
 def _in_training_context() -> bool:
     try:
         argv = ' '.join(sys.argv) if hasattr(sys, 'argv') else ''
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to get sys.argv: {e}")
         argv = ''
     if 'bulk_train_all.py' in argv:
         return True
     try:
         if os.getenv('DISABLE_LIVE_BROADCAST', '0').lower() in ('1', 'true', 'yes', 'on'):
             return True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to check DISABLE_LIVE_BROADCAST: {e}")
     return False
 
 
@@ -57,8 +58,9 @@ def _sanitize_json_value(value, context=None):
             return _sanitize_json_value(value.item(), context=context)
     except ImportError:
         pass  # numpy not installed, skip
-    except Exception:
-        pass  # any other error, skip and try standard handling
+    except Exception as e:
+        logger.debug(f"Failed to use numpy for sanitization: {e}")
+        # any other error, skip and try standard handling
     
     if isinstance(value, float):
         if math.isnan(value):
@@ -159,8 +161,8 @@ def _find_problematic_values(obj, path="", max_depth=5):
             for i, v in enumerate(obj):
                 new_path = f"{path}[{i}]"
                 problematic.extend(_find_problematic_values(v, new_path, max_depth - 1))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to find problematic values at {path}: {e}")
     return problematic
 
 

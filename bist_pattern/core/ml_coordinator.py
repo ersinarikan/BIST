@@ -38,28 +38,33 @@ class MLCoordinator:
         
         try:
             self.max_model_age_days = int(os.getenv('ML_MAX_MODEL_AGE_DAYS', '10'))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get ML_MAX_MODEL_AGE_DAYS, using 10: {e}")
             self.max_model_age_days = 10
             
         try:
             # Align with enhanced_ml_system default: prefer ML_MIN_DATA_DAYS (fallback ML_MIN_DAYS), default 50
             self.min_data_days = int(os.getenv('ML_MIN_DATA_DAYS', os.getenv('ML_MIN_DAYS', '50')))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get ML_MIN_DATA_DAYS, using 50: {e}")
             self.min_data_days = 50
             
         try:
             self.training_cooldown_hours = int(os.getenv('ML_TRAINING_COOLDOWN_HOURS', '6'))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get ML_TRAINING_COOLDOWN_HOURS, using 6: {e}")
             self.training_cooldown_hours = 6
         # Round-robin configuration (environment-driven)
         try:
             self.candidate_cooldown_hours = int(os.getenv('ML_CANDIDATE_COOLDOWN_HOURS', '2'))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get ML_CANDIDATE_COOLDOWN_HOURS, using 2: {e}")
             self.candidate_cooldown_hours = 2
             
         try:
             self.top_pool_size = int(os.getenv('ML_TOP_POOL_SIZE', '20'))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get ML_TOP_POOL_SIZE, using 20: {e}")
             self.top_pool_size = 20
         
         # ML system instances
@@ -99,8 +104,8 @@ class MLCoordinator:
             try:
                 with open(self.global_lock_file, 'a') as f:
                     f.write(f"\n{requester}|{os.getpid()}|{time.time()}\n")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to write lock metadata: {e}")
             
             # Also update in-memory status for single-process queries
             _global_training_status.update({
@@ -159,8 +164,8 @@ class MLCoordinator:
             # Release threading lock if it was acquired
             try:
                 _global_training_lock.release()
-            except Exception:
-                pass  # May not have been acquired
+            except Exception as e:
+                logger.debug(f"Failed to release global training lock (may not have been acquired): {e}")
                 
         except Exception as e:
             logger.warning(f"⚠️ Global ML training lock release error: {e}")
@@ -198,7 +203,8 @@ class MLCoordinator:
     def _get_meta(self, key: str, default=None):
         try:
             return (self.model_status.get('__meta__') or {}).get(key, default)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get meta key '{key}': {e}")
             return default
 
     def _set_meta(self, key: str, value) -> None:
@@ -207,8 +213,8 @@ class MLCoordinator:
                 self.model_status['__meta__'] = {}
             self.model_status['__meta__'][key] = value
             self._save_model_status()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to set meta key '{key}': {e}")
     
     def _get_basic_ml(self):
         """Basic ML system lazy loading"""
@@ -249,11 +255,13 @@ class MLCoordinator:
                 if not has_any:
                     missing.append(h)
             return (len(missing) == 0, missing)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to check complete models for {symbol}: {e}")
             # Güvenli varsayım: eksik kabul et (tüm ufuklar)
             try:
                 horizons = list(getattr(enhanced_ml, 'prediction_horizons', [1, 3, 7, 14, 30]))
-            except Exception:
+            except Exception as e2:
+                logger.debug(f"Failed to get prediction_horizons, using default: {e2}")
                 horizons = [1, 3, 7, 14, 30]
             return (False, horizons)
     
@@ -277,7 +285,8 @@ class MLCoordinator:
             complete, _missing = self._has_complete_models(enhanced_ml, symbol)
             if not complete:
                 return True
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to check complete models in should_train_enhanced_model: {e}")
             # Belirsizlikte eğitimi tercih et
             return True
         
@@ -286,7 +295,8 @@ class MLCoordinator:
             last_trained = datetime.fromisoformat(symbol_status['enhanced_trained_at'])
             if (datetime.now() - last_trained).days > self.max_model_age_days:
                 return True
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to check model age: {e}")
             return True
         
         # 4) Cooldown aktifse bekle
@@ -294,8 +304,8 @@ class MLCoordinator:
             last_attempt = datetime.fromisoformat(symbol_status.get('last_training_attempt', '1970-01-01'))
             if (datetime.now() - last_attempt).total_seconds() < self.training_cooldown_hours * 3600:
                 return False
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to check training cooldown: {e}")
         
         # 5) Tüm ufuklar mevcut ve taze → eğitime gerek yok
         return False
@@ -318,15 +328,16 @@ class MLCoordinator:
                 if ts:
                     last_trained = datetime.fromisoformat(ts)
                     is_recent_model = (datetime.now() - last_trained).days <= self.max_model_age_days
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to check if model is recent: {e}")
                 is_recent_model = False
             # Ufuk seti eksikse eğitime izin ver (tazelikten bağımsız)
             try:
                 complete, _ = self._has_complete_models(enhanced_ml, symbol)
                 if not complete:
                     return True, 'ok'
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to check complete models in evaluate_training_gate: {e}")
             if is_recent_model:
                 return False, 'model_fresh_or_exists'
             # Cooldown kontrolü
@@ -334,10 +345,11 @@ class MLCoordinator:
                 last_attempt = datetime.fromisoformat(symbol_status.get('last_training_attempt', '1970-01-01'))
                 if (datetime.now() - last_attempt).total_seconds() < self.training_cooldown_hours * 3600:
                     return False, 'cooldown_active'
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to check cooldown in evaluate_training_gate: {e}")
             return True, 'ok'
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to evaluate training gate: {e}")
             return False, 'unknown'
     
     def predict_with_coordination(self, symbol: str, data, sentiment_score: Optional[float] = None) -> Dict[str, Any]:
@@ -416,7 +428,8 @@ class MLCoordinator:
             # File-based lock to avoid cross-process conflicts
             try:
                 from bist_pattern.utils.param_store_lock import file_lock  # reuse helper
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to import file_lock: {e}")
                 file_lock = None  # type: ignore
 
             models_root = getattr(enhanced_ml, 'model_directory', '/opt/bist-pattern/.cache/enhanced_ml_models')
@@ -428,8 +441,8 @@ class MLCoordinator:
                 if training_result:
                     try:
                         enhanced_ml.save_enhanced_models(symbol)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to save enhanced models for {symbol}: {e}")
                     # Başarılı eğitim kaydı
                     self._update_model_status(symbol, 'enhanced_trained_at', datetime.now().isoformat())
                     self._update_model_status(symbol, 'data_length_at_training', data_length)
@@ -476,7 +489,8 @@ class MLCoordinator:
         if last_sym in ordered:
             try:
                 start_idx = (ordered.index(last_sym) + 1) % len(ordered)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to calculate start_idx for round-robin: {e}")
                 start_idx = 0
 
         picked: List[str] = []
@@ -493,8 +507,8 @@ class MLCoordinator:
                 last_attempt = datetime.fromisoformat(symbol_status.get('last_training_attempt', '1970-01-01'))
                 if (now - last_attempt).total_seconds() < self.training_cooldown_hours * 3600:
                     skip = True
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to check cooldown for {sym}: {e}")
 
             if not skip:
                 picked.append(sym)

@@ -262,8 +262,8 @@ def train_symbol_with_all_horizons_best_params(symbol: str, all_horizon_params: 
                     # Also remove ML_HORIZONS from cache specifically (in case clear_cache doesn't work)
                     if hasattr(ConfigManager, '_cache') and 'ML_HORIZONS' in ConfigManager._cache:
                         del ConfigManager._cache['ML_HORIZONS']
-                except Exception:
-                    pass  # Fallback if ConfigManager not available
+                except Exception as e:
+                    logger.debug(f"Failed to clear ML_HORIZONS cache (fallback): {e}")
                 
                 # ⚡ CRITICAL: Reset singleton instance to read new ML_HORIZONS
                 # Singleton instance's prediction_horizons is set in __init__ based on ML_HORIZONS
@@ -305,8 +305,8 @@ def train_symbol_with_all_horizons_best_params(symbol: str, all_horizon_params: 
                 ConfigManager.clear_cache()
                 if hasattr(ConfigManager, '_cache') and 'ML_HORIZONS' in ConfigManager._cache:
                     del ConfigManager._cache['ML_HORIZONS']
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to clear ML_HORIZONS cache: {e}")
             
             # ✅ CRITICAL FIX: Clear singleton using thread-safe function
             from enhanced_ml_system import clear_enhanced_ml_system

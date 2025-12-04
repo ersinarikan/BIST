@@ -65,8 +65,8 @@ class ConfigManager:
             except RuntimeError:
                 # No app context, skip Flask config
                 pass
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to get Flask config for {key}: {e}")
         
         # 3. Check config.py Config class (fallback)
         try:
@@ -77,8 +77,8 @@ class ConfigManager:
                 if cache:
                     cls._cache[key] = value
                 return value
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to get config.py value for {key}: {e}")
         
         # 4. Return default
         return default

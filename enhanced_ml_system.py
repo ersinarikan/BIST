@@ -210,8 +210,8 @@ def _atomic_write_json(file_path: str, data: any, indent: int = 2) -> None:
             f.flush()
             try:
                 os.fsync(f.fileno())  # Force write to disk
-            except Exception:
-                pass  # fsync may not be available on all systems
+            except Exception as e:
+                logger.debug(f"fsync failed (may not be available on all systems): {e}")
         
         # Atomic rename (this is atomic on POSIX systems)
         os.replace(tmp_path, file_path)
@@ -220,8 +220,8 @@ def _atomic_write_json(file_path: str, data: any, indent: int = 2) -> None:
         try:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
-        except Exception:
-            pass
+        except Exception as cleanup_e:
+            logger.debug(f"Failed to remove temp file {tmp_path} during error cleanup: {cleanup_e}")
         raise e
 
 
@@ -247,8 +247,8 @@ def _atomic_write_pickle(file_path: str, data: any) -> None:
         try:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
-        except Exception:
-            pass
+        except Exception as cleanup_e:
+            logger.debug(f"Failed to remove temp file {tmp_path} during error cleanup: {cleanup_e}")
         raise e
 
 
@@ -279,8 +279,8 @@ def _atomic_read_modify_write_json(file_path: str, modify_func, default_data: Op
         # Acquire exclusive lock - will be held until explicitly released
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        except Exception:
-            pass  # Lock acquisition failed, continue anyway (best effort)
+        except Exception as e:
+            logger.debug(f"Lock acquisition failed (best effort): {e}")
         
         # Read existing data from the actual data file (with lock held)
         existing_data = default_data.copy()
@@ -288,8 +288,8 @@ def _atomic_read_modify_write_json(file_path: str, modify_func, default_data: Op
             try:
                 with open(file_path, 'r') as f:
                     existing_data = json.load(f)
-            except Exception:
-                pass  # File is empty or corrupt, use default_data
+            except Exception as e:
+                logger.debug(f"Failed to load existing data from {file_path}, using default: {e}")
         
         # Modify data (lock still held)
         modified_data = modify_func(existing_data)
@@ -302,8 +302,8 @@ def _atomic_read_modify_write_json(file_path: str, modify_func, default_data: Op
                 f.flush()
                 try:
                     os.fsync(f.fileno())
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"fsync failed: {e}")
             
             # Atomic rename (lock still held on separate lock file, preventing concurrent writes)
             # The lock file is separate, so it's not affected by the rename operation
@@ -313,19 +313,19 @@ def _atomic_read_modify_write_json(file_path: str, modify_func, default_data: Op
             if os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to remove temp file {tmp_path}: {e}")
     finally:
         # Release lock and close file descriptor
         if lock_fd is not None:
             try:
                 fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to unlock: {e}")
             try:
                 os.close(lock_fd)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to close lock file descriptor: {e}")
 
 
 class EnhancedMLSystem:
@@ -504,25 +504,27 @@ class EnhancedMLSystem:
             # ✅ FIX: Use ConfigManager for consistent config access
             self.catboost_train_dir = ConfigManager.get('CATBOOST_TRAIN_DIR', '/opt/bist-pattern/.cache/catboost')
             os.makedirs(self.catboost_train_dir, exist_ok=True)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to create catboost_train_dir from config, using /tmp: {e}")
             # Son çare: tmp dizini
             self.catboost_train_dir = '/tmp/catboost_info'
             try:
                 os.makedirs(self.catboost_train_dir, exist_ok=True)
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.error(f"Failed to create /tmp/catboost_info: {e2}")
 
         # Model kayıt dizini (yazılabilir)
         try:
             # ✅ FIX: Use ConfigManager for consistent config access
             self.model_directory = ConfigManager.get('ML_MODEL_PATH', '/opt/bist-pattern/.cache/enhanced_ml_models')
             os.makedirs(self.model_directory, exist_ok=True)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to create model_directory from config, using fallback: {e}")
             try:
                 self.model_directory = 'enhanced_ml_models'
                 os.makedirs(self.model_directory, exist_ok=True)
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.error(f"Failed to create fallback model_directory: {e2}")
 
         logger.info("🧠 Enhanced ML System başlatıldı")
         logger.info(f"📊 XGBoost: {XGBOOST_AVAILABLE}")
@@ -536,7 +538,8 @@ class EnhancedMLSystem:
             y_pred_arr = np.asarray(y_pred, dtype=float)
             denom = np.abs(y_true_arr) + np.abs(y_pred_arr) + eps
             return float(np.mean(2.0 * np.abs(y_pred_arr - y_true_arr) / denom))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"SMAPE calculation failed: {e}")
             return float('nan')
     
     @staticmethod
@@ -557,7 +560,8 @@ class EnhancedMLSystem:
             k = 6.0 if horizon in (1, 3, 7) else 4.0
             score = 0.7 * dirhit - k * (nrmse if np.isfinite(nrmse) else 3.0)
             return float(score)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Score calculation failed: {e}")
             return float('nan')
     
     @staticmethod
@@ -581,7 +585,8 @@ class EnhancedMLSystem:
             confidence = 0.3 + (0.65 / (1.0 + np.exp(exponent)))
             # Clamp to [0.2, 0.95] for safety
             return float(np.clip(confidence, 0.2, 0.95))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"R2 to confidence conversion failed: {e}")
             return 0.5  # Fallback
 
     def create_advanced_features(self, data, symbol: str | None = None, horizon: int | None = None):
@@ -672,7 +677,8 @@ class EnhancedMLSystem:
                         _df[c] = 0.0
             try:
                 import talib  # type: ignore
-            except Exception:
+            except Exception as e:
+                logger.debug(f"TA-Lib import failed, skipping candlestick features: {e}")
                 _ensure_pat_cols(df)
                 return
             if not all(c in df.columns for c in ('open', 'high', 'low', 'close')):
@@ -687,24 +693,24 @@ class EnhancedMLSystem:
             pat_series = []
             try:
                 pat_series.append(talib.CDLENGULFING(op, hi, lo, cl))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"TA-Lib CDLENGULFING failed: {e}")
             try:
                 pat_series.append(talib.CDLHAMMER(op, hi, lo, cl))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"TA-Lib CDLHAMMER failed: {e}")
             try:
                 pat_series.append(talib.CDLSHOOTINGSTAR(op, hi, lo, cl))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"TA-Lib CDLSHOOTINGSTAR failed: {e}")
             try:
                 pat_series.append(talib.CDLHARAMI(op, hi, lo, cl))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"TA-Lib CDLHARAMI failed: {e}")
             try:
                 pat_series.append(talib.CDLDOJI(op, hi, lo, cl))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"TA-Lib CDLDOJI failed: {e}")
 
             if not pat_series:
                 _ensure_pat_cols(df)
@@ -717,7 +723,8 @@ class EnhancedMLSystem:
                 # Ensure pandas Series
                 if not hasattr(pats, 'tail'):
                     pats = _pd.Series(pats, index=df.index)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Pattern series creation failed: {e}")
                 return
 
             # ⚡ Enhanced: Pattern strength and confidence features (gürültüyü önlemek için)
@@ -821,7 +828,8 @@ class EnhancedMLSystem:
                         df['pat_conf10'] = np.clip(df['pat_conf10'] * yolo_confirm_mult_10, 0.0, 1.0).astype(float)
                     except Exception as _yolo_e:
                         logger.debug(f"YOLO confirmation boost failed: {_yolo_e}")
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Candlestick features failed, skipping: {e}")
                 # If any issue occurs, skip silently to avoid breaking pipeline
                 _ensure_pat_cols(df)
         except Exception as e:
@@ -862,11 +870,13 @@ class EnhancedMLSystem:
             # Read external feature knobs
             try:
                 min_days_required = int(ConfigManager.get('EXTERNAL_MIN_DAYS', '0') or '0')
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get EXTERNAL_MIN_DAYS, using 0: {e}")
                 min_days_required = 0
             try:
                 smooth_alpha = float(ConfigManager.get('EXTERNAL_SMOOTH_ALPHA', '0') or '0')
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get EXTERNAL_SMOOTH_ALPHA, using 0.0: {e}")
                 smooth_alpha = 0.0
             use_smoothing = smooth_alpha > 0.0 and smooth_alpha < 1.0
             
@@ -1051,7 +1061,8 @@ class EnhancedMLSystem:
                             af = min(af + 0.02, 0.2)
                 
                 df['sar'] = sar
-            except Exception:
+            except Exception as e:
+                logger.debug(f"SAR calculation failed, using EMA fallback: {e}")
                 # Fallback: simple EMA if SAR fails
                 df['sar'] = df['close'].ewm(span=20).mean()
             
@@ -1407,8 +1418,8 @@ class EnhancedMLSystem:
                 # ✅ CRITICAL FIX: Dispose engine in finally block to ensure cleanup
                 try:
                     engine.dispose()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to dispose macro engine: {e}")
             macro_data = pd.DataFrame(rows, columns=['date', 'usdtry', 'cds', 'rate'])
             
             if len(macro_data) > 0:
@@ -1515,7 +1526,8 @@ class EnhancedMLSystem:
         """Eğitim sırasında dıştan durdurma talebi var mı kontrol et"""
         try:
             return bool(self.stop_file_path and os.path.exists(self.stop_file_path))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"_should_halt check failed: {e}")
             return False
 
     def train_enhanced_models(self, symbol, data):
@@ -1652,14 +1664,16 @@ class EnhancedMLSystem:
             try:
                 from bist_pattern.features.cleaning import clean_dataframe as _clean_df
                 df_features = _clean_df(df_features)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"External clean_dataframe failed, using internal: {e}")
                 df_features = self._clean_data(df_features)
             
             try:
                 # Read minimum data days from environment; default 50 for HPO compatibility
                 # ✅ FIX: Use ConfigManager for consistent config access
                 min_days = int(ConfigManager.get('ML_MIN_DATA_DAYS', ConfigManager.get('ML_MIN_DAYS', '50')))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get ML_MIN_DATA_DAYS, using 50: {e}")
                 min_days = 50
             if len(df_features) < min_days:
                 logger.warning(f"{symbol} için yeterli veri yok (Enhanced ML için {min_days}+ gün gerekli, sadece {len(df_features)} mevcut)")
@@ -1683,7 +1697,8 @@ class EnhancedMLSystem:
                 regime_score = float(v20_last / v60_last) if v60_last > 1e-10 else 0.5
                 regime_score = max(0.0, min(1.0, regime_score))  # Clamp to [0, 1]
                 logger.info(f"📊 Market regime score: {regime_score:.3f} (0=calm, 1=volatile)")
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Regime score calculation failed, using 0.5: {e}")
                 regime_score = 0.5  # Neutral fallback
             
             results = {}
@@ -1694,11 +1709,13 @@ class EnhancedMLSystem:
                 # Note: XGBoost availability is checked via XGBOOST_AVAILABLE flag
                 try:
                     enable_lgb = str(ConfigManager.get('ENABLE_LIGHTGBM', '1')).lower() in ('1', 'true', 'yes', 'on')
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get ENABLE_LIGHTGBM, defaulting to True: {e}")
                     enable_lgb = True
                 try:
                     enable_cat = str(ConfigManager.get('ENABLE_CATBOOST', '1')).lower() in ('1', 'true', 'yes', 'on')
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get ENABLE_CATBOOST, defaulting to True: {e}")
                     enable_cat = True
                 # Graceful stop kontrolü
                 if self._should_halt():
@@ -1734,8 +1751,8 @@ class EnhancedMLSystem:
                         logger.info(
                             f"🎯 Target audit {symbol} {horizon}d: samples={_n}, mean_abs_diff={_mdiff:.6f}, |ret|_p95={_p95:.3f}"
                         )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Target audit failed: {e}")
                 
                 # Remove last horizon rows FIRST (before feature selection)
                 df_model = df_features[:-horizon].copy()
@@ -1744,15 +1761,16 @@ class EnhancedMLSystem:
                 try:
                     # ✅ FIX: Use ConfigManager for consistent config access
                     cap_perc = float(ConfigManager.get('TRAIN_CAP_PERCENTILE', '95'))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get TRAIN_CAP_PERCENTILE, using 95.0: {e}")
                     cap_perc = 95.0
                 try:
                     cap_val = float(np.nanpercentile(np.abs(df_model[target].values), cap_perc))
                     # Store in memory for manifest and later inference preference
                     self.models[f"{symbol}_{horizon}d_cap"] = float(max(0.0, min(0.90, cap_val)))
                     logger.info(f"📏 Empirical cap {symbol} {horizon}d: P{cap_perc:.0f}(|ret|)={cap_val:.3f}")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to calculate cap_val: {e}")
                 
                 # ⚡ FEATURE REDUCTION: Reduce from 107 → ~50-60 features
                 # Strategy: Remove low-variance and highly-correlated features
@@ -2094,8 +2112,8 @@ class EnhancedMLSystem:
                                 patt_ev7 = np.nan_to_num(patt_ev7, nan=0.0)
                                 w = w * (1.0 + 0.10 * patt_ev7)
                             w = w * (1.05)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Pattern weight boost failed: {e}")
 
                     # Optional: global pattern weight scale per horizon (env override)
                     try:
@@ -2108,12 +2126,13 @@ class EnhancedMLSystem:
                             30: float(ConfigManager.get('ML_PATTERN_WEIGHT_SCALE_30D', '1.0')),
                         }
                         w = w * float(scale_map.get(horizon, 1.0))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Pattern weight scale failed: {e}")
 
                     # Clip weights to avoid instability
                     w = np.asarray(np.clip(w, 0.5, 5.0), dtype=float)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Weight calculation failed, using uniform weights: {e}")
                     w = np.ones(len(df_model), dtype=float)
                 
                 # ✅ FIX: Final validation before creating X
@@ -2250,7 +2269,8 @@ class EnhancedMLSystem:
                                 gamma_override = float(_env_gamma)
                             else:
                                 gamma_override = None
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"XGBoost param override parsing failed: {e}")
                             sub_override = None
                             col_override = None
                             mcw_override = None
@@ -2284,20 +2304,20 @@ class EnhancedMLSystem:
                             _tm = ConfigManager.get('OPTUNA_XGB_TREE_METHOD')
                             if _tm not in (None, ''):
                                 xgb_params['tree_method'] = str(_tm)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to get OPTUNA_XGB_TREE_METHOD: {e}")
                         try:
                             _gp = ConfigManager.get('OPTUNA_XGB_GROW_POLICY')
                             if _gp not in (None, ''):
                                 xgb_params['grow_policy'] = str(_gp)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to get OPTUNA_XGB_GROW_POLICY: {e}")
                         try:
                             _mb = ConfigManager.get('OPTUNA_XGB_MAX_BIN')
                             if _mb not in (None, ''):
                                 xgb_params['max_bin'] = int(float(_mb))
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to get OPTUNA_XGB_MAX_BIN: {e}")
                         
                         # Short-horizon deadband: zero out tiny moves for training (reduces noise)
                         # Supports fixed thresholds via env and optional adaptive (std/ATR) overrides
@@ -2336,8 +2356,8 @@ class EnhancedMLSystem:
                                 scale = float(np.nanstd(y))
                                 if scale > 0.0 and k_val > 0.0:
                                     deadband_thr = float(k_val * scale)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Adaptive deadband calculation failed: {e}")
 
                         try:
                             y_db_full = np.asarray(y, dtype=float).copy()
@@ -2346,7 +2366,8 @@ class EnhancedMLSystem:
                                 y_db_full[mask_db] = 0.0
                             else:
                                 y_db_full = y_db_full
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Deadband calculation failed, using original y: {e}")
                             y_db_full = y
                         
                         # Cross-validation (on returns) + OOF collection for meta-learner
@@ -2401,7 +2422,8 @@ class EnhancedMLSystem:
                                             early_stopping_rounds=self.early_stop_rounds,
                                     verbose=False
                                 )
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"XGBoost fit with sample_weight failed, retrying without: {e}")
                                         xgb_model_fold.fit(
                                             X_train, y_train_db,
                                             eval_set=[(X_val, y_val)],
@@ -2413,8 +2435,8 @@ class EnhancedMLSystem:
                                         best_iter = getattr(xgb_model_fold, 'best_iteration', None)
                                         if best_iter is not None:
                                             logger.info(f"XGB sklearn fold {fold}: best_iteration={best_iter}")
-                                    except Exception:
-                                        pass
+                                    except Exception as e:
+                                        logger.debug(f"Failed to get best_iteration: {e}")
                                 
                                 # Optional: horizon-wise cap using percentile of training labels (avoid leakage)
                                 try:
@@ -2433,8 +2455,8 @@ class EnhancedMLSystem:
                                         cap_abs = float(np.percentile(np.abs(y_train), p)) if len(y_train) > 0 else float('nan')
                                         if cap_abs == cap_abs and cap_abs > 0.0:  # not NaN
                                             pred = np.asarray(np.clip(pred, -cap_abs, cap_abs), dtype=float)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug(f"Prediction cap calculation failed: {e}")
 
                                 xgb_oof_preds[val_idx] = pred  # ⚡ Save OOF predictions!
                                 score = r2_score(y_val, pred)
@@ -2444,7 +2466,8 @@ class EnhancedMLSystem:
                                 try:
                                     # ✅ FIX: Use ConfigManager for consistent config access
                                     base_threshold_eval = float(ConfigManager.get('ML_LOSS_THRESHOLD', '0.005'))
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Failed to get ML_LOSS_THRESHOLD, using 0.005: {e}")
                                     base_threshold_eval = 0.005
                                 # Directional evaluation threshold: independent override via env, else fallback
                                 thr_eval = base_threshold_eval
@@ -2464,8 +2487,8 @@ class EnhancedMLSystem:
                                         # Fallback: use larger of base threshold and training deadband for short horizons
                                         if horizon in (1, 3, 7):
                                             thr_eval = max(base_threshold_eval, float(deadband_thr))
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug(f"Dir eval threshold calculation failed: {e}")
                                 # Original (flat-to-zero) method
                                 y_val_dir = np.where(np.abs(y_val) < thr_eval, 0, np.sign(y_val))
                                 pred_dir = np.where(np.abs(pred) < thr_eval, 0, np.sign(pred))
@@ -2479,7 +2502,8 @@ class EnhancedMLSystem:
                                         )
                                     else:
                                         dir_hit_fold_masked = float('nan')
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Dir hit masked calculation failed: {e}")
                                     dir_hit_fold_masked = float('nan')
                                 logger.info(
                                     f"XGBoost fold {fold}: R²={score:.3f}, DirHit(all)={dir_hit_fold:.1f}%"
@@ -2507,7 +2531,8 @@ class EnhancedMLSystem:
                                     try:
                                         # ✅ FIX: Use ConfigManager for consistent config access
                                         base_threshold_eval = float(ConfigManager.get('ML_LOSS_THRESHOLD', '0.005'))
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"Failed to get ML_LOSS_THRESHOLD, using 0.005: {e}")
                                         base_threshold_eval = 0.005
                                     thr_eval = base_threshold_eval
                                     try:
@@ -2525,8 +2550,8 @@ class EnhancedMLSystem:
                                         else:
                                             if horizon in (1, 3, 7):
                                                 thr_eval = max(base_threshold_eval, float(deadband_thr))
-                                    except Exception:
-                                        pass
+                                    except Exception as e:
+                                        logger.debug(f"Dir eval threshold override failed: {e}")
                                     # Original (flat-to-zero) dirhit (fraction 0-1)
                                     y_dir_oof = np.where(np.abs(y_mask) < thr_eval, 0, np.sign(y_mask))
                                     pred_dir_oof = np.where(np.abs(pred_mask) < thr_eval, 0, np.sign(pred_mask))
@@ -2540,7 +2565,8 @@ class EnhancedMLSystem:
                                             )
                                         else:
                                             dir_hit_masked = float('nan')
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"OOF dir hit masked calculation failed: {e}")
                                         dir_hit_masked = float('nan')
                                     
                                     # ⚡ DIAGNOSTIC: Log feature impact summary
@@ -2556,7 +2582,8 @@ class EnhancedMLSystem:
                                         f"MetaStacking={self.enable_meta_stacking}, "
                                         f"RegimeDetection={self.use_regime_detection}]"
                                     )
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"NRMSE/dir hit calculation failed: {e}")
                                     nrmse = float('nan')
                                     dir_hit = float('nan')
                                     dir_hit_masked = float('nan')
@@ -2566,7 +2593,8 @@ class EnhancedMLSystem:
                                 nrmse = float('nan')
                                 dir_hit = float('nan')
                                 dir_hit_masked = float('nan')
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"XGBoost OOF metrics calculation failed: {e}")
                             xgb_rmse_oof = float('nan')
                             xgb_mape_oof = float('nan')
                             nrmse = float('nan')
@@ -2695,8 +2723,8 @@ class EnhancedMLSystem:
                                 # HPO-style masked dirhit (percentage)
                                 'dir_hit_pct_masked': float(dir_hit_masked * 100.0) if (dir_hit_masked == dir_hit_masked) else None,
                             }
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"XGBoost results dict creation failed: {e}")
 
                         # ⚡ REMOVED: Stacked approach (direction classifier + isotonic calibration)
                         # REASON: Kullanılmıyor (sadece metrics için), HPO optimize ettiği şey değil
@@ -2795,7 +2823,8 @@ class EnhancedMLSystem:
                             _env_rl_lgb = ConfigManager.get('OPTUNA_LGB_REG_LAMBDA')
                             if _env_rl_lgb not in (None, ''):
                                 reg_l_lgb = float(_env_rl_lgb)
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"LightGBM param override parsing failed: {e}")
                             sub_override_lgb = None
                             col_override_lgb = None
                         
@@ -2823,26 +2852,26 @@ class EnhancedMLSystem:
                             _minleaf = ConfigManager.get('OPTUNA_LGB_MIN_DATA_IN_LEAF')
                             if _minleaf not in (None, ''):
                                 lgb_model.set_params(min_data_in_leaf=int(float(_minleaf)))
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to set OPTUNA_LGB_MIN_DATA_IN_LEAF: {e}")
                         try:
                             _ffbn = ConfigManager.get('OPTUNA_LGB_FEATURE_FRACTION_BY_NODE')
                             if _ffbn not in (None, ''):
                                 lgb_model.set_params(feature_fraction_bynode=float(_ffbn))
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to set OPTUNA_LGB_FEATURE_FRACTION_BY_NODE: {e}")
                         try:
                             _bf = ConfigManager.get('OPTUNA_LGB_BAGGING_FREQ')
                             if _bf not in (None, ''):
                                 lgb_model.set_params(bagging_freq=int(float(_bf)))
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to set OPTUNA_LGB_BAGGING_FREQ: {e}")
                         try:
                             _mgs = ConfigManager.get('OPTUNA_LGB_MIN_GAIN_TO_SPLIT')
                             if _mgs not in (None, ''):
                                 lgb_model.set_params(min_split_gain=float(_mgs))
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to set OPTUNA_LGB_MIN_GAIN_TO_SPLIT: {e}")
                         
                         # Cross-validation (on returns) + OOF
                         lgb_scores = []
@@ -2882,7 +2911,8 @@ class EnhancedMLSystem:
                             else:
                                 lgb_rmse_oof = float('nan')
                                 lgb_mape_oof = float('nan')
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"LightGBM OOF metrics calculation failed: {e}")
                             lgb_rmse_oof = float('nan')
                             lgb_mape_oof = float('nan')
 
@@ -3007,7 +3037,8 @@ class EnhancedMLSystem:
                             sub_override_cat = float(_env_sub_cat) if _env_sub_cat not in (None, '') else None
                             _env_rsm_cat = ConfigManager.get('OPTUNA_CAT_RSM')
                             rsm_override_cat = float(_env_rsm_cat) if _env_rsm_cat not in (None, '') else None
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"CatBoost param override parsing failed: {e}")
                             sub_override_cat = None
                             rsm_override_cat = None
                         
@@ -3033,7 +3064,8 @@ class EnhancedMLSystem:
                                     'no': 'No',
                                 }
                                 bootstrap_type_norm = _bt_map.get(_raw_bt.lower(), None)
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"CatBoost bootstrap_type parsing failed: {e}")
                             bootstrap_type_norm = None
                         
                         cat_init_params = {
@@ -3066,20 +3098,20 @@ class EnhancedMLSystem:
                             _bc = ConfigManager.get('OPTUNA_CAT_BORDER_COUNT')
                             if _bc not in (None, ''):
                                 cat_model.set_params(border_count=int(float(_bc)))
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to set OPTUNA_CAT_BORDER_COUNT: {e}")
                         try:
                             _rs = ConfigManager.get('OPTUNA_CAT_RANDOM_STRENGTH')
                             if _rs not in (None, ''):
                                 cat_model.set_params(random_strength=float(_rs))
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to set OPTUNA_CAT_RANDOM_STRENGTH: {e}")
                         try:
                             _lei = ConfigManager.get('OPTUNA_CAT_LEAF_ESTIMATION_ITERATIONS')
                             if _lei not in (None, ''):
                                 cat_model.set_params(leaf_estimation_iterations=int(float(_lei)))
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to set OPTUNA_CAT_LEAF_ESTIMATION_ITERATIONS: {e}")
                         try:
                             _bt = ConfigManager.get('OPTUNA_CAT_BOOTSTRAP_TYPE')
                             if _bt not in (None, ''):
@@ -3108,8 +3140,8 @@ class EnhancedMLSystem:
                                             model_params = cat_model.get_params()
                                             if 'subsample' in model_params and model_params['subsample'] is not None:
                                                 cat_model.set_params(subsample=None)
-                                        except Exception:
-                                            pass
+                                        except Exception as e:
+                                            logger.debug(f"Failed to clear subsample param: {e}")
                                     cat_model.set_params(bootstrap_type=norm)
                                 elif norm is None and raw.lower() == 'none':
                                     # Explicitly skip when None-like provided
@@ -3117,10 +3149,10 @@ class EnhancedMLSystem:
                                 else:
                                     try:
                                         logger.warning(f"Invalid OPTUNA_CAT_BOOTSTRAP_TYPE='{raw}', skipping (allowed: Poisson,Bayesian,Bernoulli,MVS,No)")
-                                    except Exception:
-                                        pass
-                        except Exception:
-                            pass
+                                    except Exception as e:
+                                        logger.debug(f"Failed to log bootstrap_type warning: {e}")
+                        except Exception as e:
+                            logger.debug(f"CatBoost bootstrap_type setup failed: {e}")
                         
                         # Cross-validation (on returns) + OOF
                         cat_scores = []
@@ -3190,7 +3222,8 @@ class EnhancedMLSystem:
                             else:
                                 cat_rmse_oof = float('nan')
                                 cat_mape_oof = float('nan')
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"CatBoost OOF metrics calculation failed: {e}")
                             cat_rmse_oof = float('nan')
                             cat_mape_oof = float('nan')
 
@@ -3270,7 +3303,8 @@ class EnhancedMLSystem:
                             # Filter rows where all models have valid OOF preds
                             try:
                                 _valid_mask = ~np.any(np.isnan(meta_X), axis=1)
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Meta X validation mask creation failed: {e}")
                                 _valid_mask = np.ones(meta_X.shape[0], dtype=bool)
                             meta_X = meta_X[_valid_mask]
                             meta_y = y[_valid_mask]  # True targets are returns
@@ -3514,7 +3548,8 @@ class EnhancedMLSystem:
                     try:
                         from bist_pattern.features.cleaning import clean_dataframe as _clean_df
                         df_test_features = _clean_df(df_test_features)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"External clean_dataframe failed for test, using internal: {e}")
                         df_test_features = self._clean_data(df_test_features)
                     
                     # Incremental learning for each horizon
@@ -3594,7 +3629,8 @@ class EnhancedMLSystem:
                                         import xgboost as _xgb_local  # avoid shadowing module-level 'xgb'
                                         dtest = _xgb_local.DMatrix(X_test, feature_names=feature_cols)
                                         y_pred_before = phase1_model.predict(dtest)
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"DMatrix prediction failed, using numpy array fallback: {e}")
                                         # Fallback: try numpy array anyway
                                         y_pred_before = phase1_model.predict(X_test)
                                 
@@ -3693,8 +3729,8 @@ class EnhancedMLSystem:
                                                 f"DirAccuracy: {dir_accuracy_before:.2f}% → {dir_accuracy_after:.2f}% "
                                                 f"({dir_accuracy_after-dir_accuracy_before:+.2f}%)"
                                             )
-                                        except Exception:
-                                            pass
+                                        except Exception as e:
+                                            logger.debug(f"Failed to log phase2 metrics: {e}")
                                     
                                     logger.info(f"   ✅ {h}d GERÇEK incremental learning (sklearn): +{len(X_test)} test samples, +{n_rounds} rounds")
                                     logger.info(f"   📈 {h}d Phase 2: Model adapted with {len(X_test)} test samples, {n_rounds} additional rounds")
@@ -3749,8 +3785,8 @@ class EnhancedMLSystem:
                                                 f"DirAccuracy: {dir_accuracy_before:.2f}% → {dir_accuracy_after:.2f}% "
                                                 f"({dir_accuracy_after-dir_accuracy_before:+.2f}%)"
                                             )
-                                        except Exception:
-                                            pass
+                                        except Exception as e:
+                                            logger.debug(f"Failed to log phase2 metrics: {e}")
                                     
                                     logger.info(f"   ✅ {h}d GERÇEK incremental learning (booster): +{len(X_test)} test samples, +{n_rounds} rounds")
                                     logger.info(f"   📈 {h}d Phase 2: Model adapted with {len(X_test)} test samples, {n_rounds} additional rounds")
@@ -3791,7 +3827,8 @@ class EnhancedMLSystem:
                             try:
                                 from bist_pattern.features.cleaning import clean_dataframe as _clean_df
                                 df_train_features_phase16 = _clean_df(df_train_features_phase16)
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"External clean_dataframe failed for phase16, using internal: {e}")
                                 df_train_features_phase16 = self._clean_data(df_train_features_phase16)
                             
                             # Incremental learning on train_data for each horizon
@@ -3860,8 +3897,8 @@ class EnhancedMLSystem:
                                             )
                                             try:
                                                 phase15_model._Booster = adapted_booster_phase16  # type: ignore[attr-defined]
-                                            except Exception:
-                                                pass
+                                            except Exception as e:
+                                                logger.debug(f"Failed to set phase15_model._Booster: {e}")
                                             if isinstance(xgb_entry, dict) and 'model' in xgb_entry:
                                                 xgb_entry['model'] = phase15_model
                                                 horizon_models['xgboost'] = xgb_entry
@@ -3931,7 +3968,8 @@ class EnhancedMLSystem:
                             try:
                                 from bist_pattern.features.cleaning import clean_dataframe as _clean_df
                                 df_full_features = _clean_df(df_full_features)
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"External clean_dataframe failed for full, using internal: {e}")
                                 df_full_features = self._clean_data(df_full_features)
                             
                             # Incremental learning on full data for each horizon
@@ -4000,8 +4038,8 @@ class EnhancedMLSystem:
                                             )
                                             try:
                                                 phase16_model._Booster = adapted_booster_full  # type: ignore[attr-defined]
-                                            except Exception:
-                                                pass
+                                            except Exception as e:
+                                                logger.debug(f"Failed to set phase16_model._Booster: {e}")
                                             if isinstance(xgb_entry, dict) and 'model' in xgb_entry:
                                                 xgb_entry['model'] = phase16_model
                                                 horizon_models['xgboost'] = xgb_entry
@@ -4202,8 +4240,8 @@ class EnhancedMLSystem:
                     for col in allowed_missing:
                         try:
                             df_features[col] = 0.0
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to set missing feature {col} to 0.0: {e}")
                     # Confidence penalty proportional to missing ratio (capped)
                     penalty = min(self.guard_penalty_max, missing_ratio * 2.0)
                     confidence_scale = max(0.5, 1.0 - penalty)
@@ -4303,11 +4341,11 @@ class EnhancedMLSystem:
                                                 _names = getattr(_m, 'feature_names', None)
                                                 if isinstance(_names, (list, tuple)) and len(_names) == expected_n:
                                                     expected_names = list(_names)
-                                            except Exception:
-                                                pass
+                                            except Exception as e:
+                                                logger.debug(f"Failed to get feature names from XGBoost Booster: {e}")
                                             break
-                                    except Exception:
-                                        pass
+                                    except Exception as e:
+                                        logger.debug(f"Failed to get num_features from XGBoost Booster: {e}")
                                     try:
                                         # XGBRegressor style
                                         if hasattr(_m, 'get_booster'):
@@ -4318,11 +4356,11 @@ class EnhancedMLSystem:
                                                     _names = getattr(_b, 'feature_names', None)
                                                     if isinstance(_names, (list, tuple)) and len(_names) == expected_n:
                                                         expected_names = list(_names)
-                                                except Exception:
-                                                    pass
+                                                except Exception as e:
+                                                    logger.debug(f"Failed to get feature names from XGBRegressor: {e}")
                                                 break
-                                    except Exception:
-                                        pass
+                                    except Exception as e:
+                                        logger.debug(f"Failed to get num_features from XGBRegressor: {e}")
                                     try:
                                         # LightGBM Booster
                                         if hasattr(_m, 'booster_') and hasattr(_m.booster_, 'num_feature'):
@@ -4331,14 +4369,14 @@ class EnhancedMLSystem:
                                                 _names = _m.booster_.feature_name()
                                                 if isinstance(_names, (list, tuple)) and len(_names) == expected_n:
                                                     expected_names = list(_names)
-                                            except Exception:
-                                                pass
+                                            except Exception as e:
+                                                logger.debug(f"Failed to get feature names from LightGBM: {e}")
                                             break
                                         if hasattr(_m, 'num_feature') and callable(getattr(_m, 'num_feature')):
                                             expected_n = int(_m.num_feature())
                                             break
-                                    except Exception:
-                                        pass
+                                    except Exception as e:
+                                        logger.debug(f"Failed to get num_feature from LightGBM: {e}")
                                     try:
                                         # Generic sklearn models
                                         if hasattr(_m, 'n_features_in_'):
@@ -4347,12 +4385,12 @@ class EnhancedMLSystem:
                                                 _names = getattr(_m, 'feature_names_in_', None)
                                                 if isinstance(_names, (list, tuple, np.ndarray)) and len(_names) == expected_n:
                                                     expected_names = list(_names)
-                                            except Exception:
-                                                pass
+                                            except Exception as e:
+                                                logger.debug(f"Failed to get feature_names_in_ from sklearn model: {e}")
                                             if expected_n > 0:
                                                 break
-                                    except Exception:
-                                        pass
+                                    except Exception as e:
+                                        logger.debug(f"Failed to get n_features_in_ from sklearn model: {e}")
                                 if expected_n is not None:
                                     break
 
@@ -4364,8 +4402,8 @@ class EnhancedMLSystem:
                                         if _c not in df_features.columns:
                                             try:
                                                 df_features[_c] = 0.0
-                                            except Exception:
-                                                pass
+                                            except Exception as e:
+                                                logger.debug(f"Failed to set missing feature {_c} to 0.0: {e}")
                                     # Keep model's order exactly
                                     horizon_feature_cols = [c for c in expected_names if c in df_features.columns]
                                     logger.warning(
@@ -4377,8 +4415,8 @@ class EnhancedMLSystem:
                                     logger.warning(
                                         f"Aligned fallback features to model dims: {expected_n}"
                                     )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Feature alignment failed: {e}")
                     
                     # Extract features for this horizon
                     # Defensive: ensure horizon_feature_cols is a list-like of column names
@@ -4389,7 +4427,8 @@ class EnhancedMLSystem:
                         # Any other unexpected type → fall back to all columns
                         try:
                             horizon_feature_cols = list(horizon_feature_cols)
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to convert horizon_feature_cols to list: {e}")
                             horizon_feature_cols = list(df_features.columns)
                     # Filter to existing columns only
                     horizon_feature_cols = [c for c in horizon_feature_cols if c in df_features.columns]
@@ -4438,8 +4477,8 @@ class EnhancedMLSystem:
                                     if not allow:
                                         logger.debug("Skipping CatBoost prediction due to ENABLE_CATBOOST=0")
                                         continue
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"Model enable check failed: {e}")
                             # ✅ FIX: Validate model_info is dict and has 'model' key
                             if not isinstance(model_info, dict):
                                 logger.error(f"model_info is not dict for {symbol} {horizon}d {model_name}! Skipping.")
@@ -5015,7 +5054,8 @@ class EnhancedMLSystem:
                                                     overridden.append(float(historical_r2[idx]))
                                             historical_r2 = np.array(overridden, dtype=float)
                                             historical_r2_source = 'reference'
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"Failed to load reference historical R2, using model: {e}")
                                         historical_r2_source = 'model'
                                     
                                     historical_r2_map = {
@@ -5033,15 +5073,18 @@ class EnhancedMLSystem:
                                     # Optional: fixed prior weights per model (from HPO)
                                     try:
                                         w_xgb = float(ConfigManager.get('ML_SMART_WEIGHT_XGB', '1.0'))
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"Failed to get ML_SMART_WEIGHT_XGB, using 1.0: {e}")
                                         w_xgb = 1.0
                                     try:
                                         w_lgb = float(ConfigManager.get('ML_SMART_WEIGHT_LGB', '1.0'))
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"Failed to get ML_SMART_WEIGHT_LGB, using 1.0: {e}")
                                         w_lgb = 1.0
                                     try:
                                         w_cat = float(ConfigManager.get('ML_SMART_WEIGHT_CAT', '1.0'))
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"Failed to get ML_SMART_WEIGHT_CAT, using 1.0: {e}")
                                         w_cat = 1.0
                                     # Map in the same order as model_predictions
                                     prior_map = {
@@ -5067,7 +5110,8 @@ class EnhancedMLSystem:
                                             model_name: float(final_weights[idx])
                                             for idx, model_name in enumerate(model_predictions.keys())
                                         }
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"Failed to create ensemble_weights_map: {e}")
                                         ensemble_weights_map = None
                                     
                                     # Disagreement penalty (if models diverge)
@@ -5175,13 +5219,15 @@ class EnhancedMLSystem:
                                 regime = 'LOW'
                                 try:
                                     regime_scale = float(ConfigManager.get('REGIME_SCALE_LOW', '0.85'))
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Failed to get REGIME_SCALE_LOW, using 0.85: {e}")
                                     regime_scale = 0.85  # Low volatility → reduce prediction magnitude (more conservative)
                             elif vol_20 > vol_p67:
                                 regime = 'HIGH'
                                 try:
                                     regime_scale = float(ConfigManager.get('REGIME_SCALE_HIGH', '1.15'))
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Failed to get REGIME_SCALE_HIGH, using 1.15: {e}")
                                     regime_scale = 1.15  # High volatility → increase prediction magnitude (more aggressive)
                             else:
                                 regime = 'MEDIUM'
@@ -5226,7 +5272,8 @@ class EnhancedMLSystem:
                             continue
                         k, v = part.split(':', 1)
                         cap_map[k.strip()] = float(v)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to parse EMPIRICAL_HORIZON_CAPS, using defaults: {e}")
                     cap_map = {
                         '1d': 0.30,
                         '3d': 0.60,
@@ -5245,7 +5292,8 @@ class EnhancedMLSystem:
                             _h = int(h_key.replace('d', ''))
                             cap_key = f"{symbol}_{_h}d_cap"
                             cap_train = float(self.models.get(cap_key, float('nan')))
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to get training cap for {cap_key}: {e}")
                             cap_train = float('nan')
                         cap_env = float(cap_map.get(h_key, cap_map.get(str(h_key), 0.30)))
                         cap = float(cap_train) if (cap_train == cap_train) else cap_env  # use train cap if not NaN
@@ -5401,7 +5449,8 @@ class EnhancedMLSystem:
                             'guard_scale': float(predictions[hk].get('guard', {}).get('confidence_scale', 1.0)) if isinstance(predictions[hk].get('guard'), dict) else 1.0,
                             'inconsistency': bool(predictions[hk].get('inconsistency_flag', False)),
                         })
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to append prediction entry for {hk}: {e}")
                         continue
 
                 # Append mode with rolling limit
@@ -5410,7 +5459,8 @@ class EnhancedMLSystem:
                     if os.path.exists(fpath):
                         with open(fpath, 'r') as rf:
                             data_obj = _json.load(rf) or []
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to load prediction history from {fpath}: {e}")
                     data_obj = []
                 data_obj.append(entry)
                 # keep last 2000 entries to bound file size
@@ -5477,14 +5527,15 @@ class EnhancedMLSystem:
                                     'mape': float(info.get('mape', 0.0)),
                                     'raw_r2': float(info.get('raw_r2', 0.0)),
                                 }
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to create metrics entry for {m}: {e}")
                                 continue
                         metrics[f"{h}d"] = entry
                 metrics_file = f"{self.model_directory}/{symbol}_metrics.json"
                 # ✅ CRITICAL FIX: Atomic write to prevent corrupt metrics file
                 _atomic_write_json(metrics_file, metrics)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to save metrics to {metrics_file}: {e}")
 
             # Feature importance kaydet
             importance_file = f"{self.model_directory}/{symbol}_feature_importance.pkl"
@@ -5521,8 +5572,8 @@ class EnhancedMLSystem:
                 cols_file = f"{self.model_directory}/{symbol}_feature_columns.json"
                 # ✅ CRITICAL FIX: Atomic write to prevent corrupt feature columns file
                 _atomic_write_json(cols_file, list(self.feature_columns or []))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to save feature columns to {cols_file}: {e}")
             
             # ⚡ CRITICAL FIX: Save horizon-specific feature columns!
             # Each horizon uses different features after reduction (40 features per horizon)
@@ -5561,8 +5612,8 @@ class EnhancedMLSystem:
                         with open(horizon_cols_file, 'r') as rf:
                             final_horizon_features = json.load(rf) or {}
                         logger.debug(f"Horizon-specific features saved: {len(final_horizon_features)} horizons ({list(final_horizon_features.keys())})")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to read back horizon features: {e}")
             except Exception as e:
                 logger.warning(f"Failed to save horizon-specific features: {e}")
 
@@ -5604,8 +5655,8 @@ class EnhancedMLSystem:
                         cap_val = self.models.get(f"{symbol}_{h}d_cap", np.nan)
                         try:
                             cur_hcaps[hk] = float(cap_val)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to get cap value for {hk}: {e}")
                     
                     # Merge
                     new_enabled = dict(ex_enabled)
@@ -5619,13 +5670,14 @@ class EnhancedMLSystem:
                         try:
                             if np.isfinite(v):  # type: ignore[attr-defined]
                                 new_hcaps[k] = float(v)
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to check if cap value is finite for {k}: {e}")
                             # If numpy not available in this code path, accept any float-like value
                             try:
                                 fv = float(v)
                                 new_hcaps[k] = fv
-                            except Exception:
-                                pass
+                            except Exception as e2:
+                                logger.debug(f"Failed to convert cap value to float: {e2}")
                     
                     # ✅ FIX: Merge meta-learner model orders
                     ex_meta_order = existing.get('meta_model_orders', {}) or {}
@@ -5654,8 +5706,8 @@ class EnhancedMLSystem:
                         final_manifest = json.load(rf) or {}
                     all_horizons = final_manifest.get('horizons', [])
                     logger.debug(f"Model manifest merged & written: {manifest_path} (horizons={all_horizons})")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to read back manifest: {e}")
             except Exception as e:
                 logger.warning(f"Failed to write model manifest for {symbol}: {e}")
 
@@ -5685,8 +5737,8 @@ class EnhancedMLSystem:
                 }
                 with open(os.path.join(meta_dir, f"{symbol}.json"), 'w') as wf:
                     json.dump(meta, wf)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to save training metadata for {symbol}: {e}")
 
             logger.info(f"💾 {symbol} enhanced modelleri kaydedildi")
             
@@ -5841,10 +5893,11 @@ class EnhancedMLSystem:
                                         self.models[key][m]['mape'] = float(vals.get('mape', 0.0))
                                         if 'raw_r2' in vals:
                                             self.models[key][m]['raw_r2'] = float(vals.get('raw_r2', 0.0))
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Failed to load metrics for {key}/{m}: {e}")
                                     continue
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to load metrics file: {e}")
 
             # ✅ AŞAMA 3: Feature Columns Yüklenemiyor Kontrolü
             # Feature columns: JSON → fallback importance → fallback empty
@@ -5869,7 +5922,8 @@ class EnhancedMLSystem:
                         for _k, _v in (imp.items() if isinstance(imp, dict) else []):
                             try:
                                 keys.update(list(_v.keys()))
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to update keys from feature importance: {e}")
                                 continue
                         cols = sorted(keys)
                         if cols:
@@ -5934,7 +5988,8 @@ class EnhancedMLSystem:
                         try:
                             h_int = int(str(hk).replace('d', '').strip())
                             self.models[f"{symbol}_{h_int}d_cap"] = float(cap_val)
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to parse horizon cap for {hk}: {e}")
                             continue
                     if hcaps:
                         logger.debug(f"Loaded horizon caps from manifest: {len(hcaps)} entries")
@@ -6011,7 +6066,8 @@ class EnhancedMLSystem:
                 logger.debug(f"Horizon-specific features load failed: {e}")
             
             return loaded_any
-        except Exception:
+        except Exception as e:
+            logger.warning(f"load_trained_models failed for {symbol}: {e}")
             return False
     
     def get_top_features(self, symbol, model_type='xgboost', top_n=20):

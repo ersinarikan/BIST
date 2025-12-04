@@ -1,7 +1,11 @@
 from __future__ import annotations
 import os
 import time
+import logging
 from contextlib import contextmanager
+
+logger = logging.getLogger(__name__)
+
 try:
     import fcntl  # type: ignore
 except Exception:  # pragma: no cover
@@ -37,5 +41,5 @@ def file_lock(target_path: str, timeout_seconds: float = 10.0):
             if acquired:
                 try:
                     fcntl.flock(lf, fcntl.LOCK_UN)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to unlock file: {e}")

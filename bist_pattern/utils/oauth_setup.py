@@ -1,5 +1,8 @@
 from __future__ import annotations
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def setup_oauth(app: Any) -> Any | None:
@@ -24,8 +27,8 @@ def setup_oauth(app: Any) -> Any | None:
                     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
                     client_kwargs={'scope': 'openid email profile'},
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to register Google OAuth: {e}")
 
         apple_id = app.config.get('APPLE_CLIENT_ID')
         apple_secret = app.config.get('APPLE_CLIENT_SECRET')
@@ -38,9 +41,10 @@ def setup_oauth(app: Any) -> Any | None:
                     server_metadata_url='https://appleid.apple.com/.well-known/openid-configuration',
                     client_kwargs={'scope': 'name email'},
                 )
-            except Exception:
-                pass
-    except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to register Apple OAuth: {e}")
+    except Exception as e:
+        logger.debug(f"Failed to setup OAuth: {e}")
         return None
 
     return oauth

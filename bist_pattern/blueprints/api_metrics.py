@@ -1,7 +1,10 @@
+import logging
 from flask import Blueprint, jsonify
 from datetime import datetime
 
 from ..extensions import csrf
+
+logger = logging.getLogger(__name__)
 
 bp = Blueprint('api_metrics', __name__, url_prefix='/api')
 
@@ -124,15 +127,15 @@ def register(app):
             out['base_ml_available'] = bool(info.get('base_ml_available'))  # type: ignore[index]
             out['enhanced_models_trained'] = int(info.get('models_trained', 0))  # type: ignore[index]
             out['prediction_horizons'] = info.get('prediction_horizons')  # type: ignore[index]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to get enhanced ML system info: {e}")
         # YOLO (use async visual system for accurate runtime status)
         try:
             from visual_pattern_async import get_async_visual_pattern_system  # type: ignore
             y = get_async_visual_pattern_system().get_system_info()
             out['yolo'] = y  # type: ignore[index]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to get YOLO system info: {e}")
         # Scheduler status via working_automation (fallback to legacy)
         try:
             from working_automation import get_working_automation_pipeline  # type: ignore
@@ -143,8 +146,8 @@ def register(app):
                 from scheduler import get_automated_pipeline  # type: ignore
                 s = get_automated_pipeline().get_scheduler_status()
                 out['scheduler'] = s  # type: ignore[index]
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.debug(f"Failed to get scheduler status (fallback): {e2}")
         return jsonify({'status': 'success', 'system_ml_info': out, 'timestamp': datetime.now().isoformat()})
 
     @bp.route('/analysis/summary-24h')

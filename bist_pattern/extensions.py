@@ -75,6 +75,7 @@ def init_extensions(app):
     try:
         if hasattr(app, "view_functions") and "socketio" in app.view_functions:
             csrf.exempt(app.view_functions["socketio"])
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).debug(f"Failed to exempt socketio from CSRF: {e}")
     limiter.init_app(app)

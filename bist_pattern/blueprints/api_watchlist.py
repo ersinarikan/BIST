@@ -1,7 +1,10 @@
+import logging
 from flask import Blueprint, jsonify, request
 from flask_login import login_required, current_user
 
 from ..extensions import csrf
+
+logger = logging.getLogger(__name__)
 
 bp = Blueprint('api_watchlist', __name__, url_prefix='/api')
 
@@ -14,14 +17,15 @@ def register(app):
             from flask_login import current_user
             if current_user.is_authenticated:
                 return current_user
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to get current_user: {e}")
         try:
             if app.config.get('DEV_AUTH_BYPASS'):
                 user_id_header = request.headers.get('X-User-Id')
                 user_id = int(user_id_header) if user_id_header else 1
                 return User.query.get(user_id)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get user from DEV_AUTH_BYPASS: {e}")
             return None
         return None
 
@@ -73,15 +77,15 @@ def register(app):
                     buy_val = data.get('alert_threshold_buy')
                     if isinstance(buy_val, (int, float, str)) and str(buy_val).strip() != '':
                         item.alert_threshold_buy = float(buy_val)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to parse alert_threshold_buy: {e}")
             if 'alert_threshold_sell' in data and data.get('alert_threshold_sell') is not None:
                 try:
                     sell_val = data.get('alert_threshold_sell')
                     if isinstance(sell_val, (int, float, str)) and str(sell_val).strip() != '':
                         item.alert_threshold_sell = float(sell_val)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to parse alert_threshold_sell: {e}")
             db.session.commit()
             # ✅ FIX: Disabled pattern_analysis broadcast - user dashboard reads from batch API cache
             # No need to broadcast when adding to watchlist, client will load from cache on next refresh
@@ -99,8 +103,8 @@ def register(app):
             app.logger.error(f"Watchlist add error: {e}")
             try:
                 db.session.rollback()
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.debug(f"Failed to rollback session: {e2}")
             return jsonify({'status': 'error', 'error': str(e)}), 500
 
     @bp.route('/watchlist/<symbol>', methods=['DELETE'])
@@ -126,8 +130,8 @@ def register(app):
             app.logger.error(f"Watchlist delete error: {e}")
             try:
                 db.session.rollback()
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.debug(f"Failed to rollback session: {e2}")
             return jsonify({'status': 'error', 'error': str(e)}), 500
 
     @bp.route('/watchlist/predictions')
@@ -146,8 +150,8 @@ def register(app):
                     hit = cached(cache_key)
                     if hit:
                         return jsonify(hit)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to get cache for watchlist predictions: {e}")
 
             # Watchlist sembollerini al
             from models import StockPrice  # local import
@@ -165,7 +169,8 @@ def register(app):
                     with open(fpath, 'r') as rf:
                         data = _json.load(rf) or {}
                         predictions_map = (data.get('predictions') or {}) if isinstance(data, dict) else {}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to read ml_bulk_predictions.json: {e}")
                 predictions_map = {}
 
             # Last signal snapshot dosyası
@@ -178,7 +183,8 @@ def register(app):
                 if _os.path.exists(snap_path):
                     with open(snap_path, 'r') as rf:
                         last_signal_map = _json.load(rf) or {}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to read signals_last.json: {e}")
                 last_signal_map = {}
 
             def _normalize(raw):
@@ -212,7 +218,8 @@ def register(app):
                                             out[conf_key] = float(conf)
                             elif isinstance(v, (int, float)):
                                 out[kk] = float(v)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to normalize prediction data: {e}")
                     return {}
                 return out
 
@@ -258,8 +265,8 @@ def register(app):
                             continue
                         days_count_by_symbol[sym] = int(cnt or 0)
                         last_date_by_symbol[sym] = str(maxd) if maxd else None
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to query stock price stats: {e}")
 
             response_items = []
             for sym in symbols:
@@ -293,8 +300,8 @@ def register(app):
                     import os as _os
                     ck = locals().get('cache_key') or f"watchlist_predictions:{getattr(current_user, 'id', 'anon')}"
                     setter(ck, payload, ttl_seconds=float(_os.getenv('API_CACHE_TTL_WATCHLIST', '5')))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to set cache for watchlist predictions: {e}")
             return jsonify(payload)
         except Exception as e:
             app.logger.error(f"Watchlist predictions error: {e}")
@@ -336,7 +343,8 @@ def register(app):
                         data = _sanitize_json_value(data)
                         predictions_map = (data.get('predictions') or {}) if isinstance(data, dict) else {}
                 bulk_mtime = os.path.getmtime(fpath) if os.path.exists(fpath) else None
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to read ml_bulk_predictions.json for cache report: {e}")
                 predictions_map = {}
                 bulk_mtime = None
 
@@ -347,8 +355,8 @@ def register(app):
             pat_dir = os.path.join(log_dir, 'pattern_cache')
             try:
                 os.makedirs(pat_dir, exist_ok=True)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to create pattern cache directory: {e}")
             now = time.time()
 
             report_items = []
@@ -360,7 +368,8 @@ def register(app):
                 if exists:
                     try:
                         age = float(now - os.path.getmtime(p))
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to get mtime for pattern cache file {p}: {e}")
                         age = None
                 report_items.append({
                     'symbol': sym,

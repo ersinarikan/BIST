@@ -149,8 +149,9 @@ class EnhancedYahooFinanceWrapper:
             from bist_pattern.utils.symbols import sanitize_symbol, to_yf_symbol
             symbol_clean = sanitize_symbol(symbol)
             yf_symbol = to_yf_symbol(symbol_clean)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to sanitize/convert symbol {symbol}: {e}")
+            yf_symbol = symbol  # Fallback to original
         
         start_time = time.time()
         

@@ -1,6 +1,9 @@
+import logging
 from datetime import datetime
 from flask import current_app, request
 from flask_socketio import emit, join_room, leave_room
+
+logger = logging.getLogger(__name__)
 
 
 def register_socketio_events(app):
@@ -34,8 +37,8 @@ def register_socketio_events(app):
             # Fallback: send minimal status
             try:
                 emit('status', {'message': 'Connected', 'timestamp': datetime.now().isoformat()})
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.debug(f"Failed to emit fallback status: {e2}")
 
     def _on_disconnect():
         if current_app and current_app.logger:
@@ -63,8 +66,8 @@ def register_socketio_events(app):
             # Fallback: send minimal data
             try:
                 emit('room_joined', {'room': 'admin'})
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.debug(f"Failed to emit fallback room_joined (admin): {e2}")
 
     def _on_join_user(data):
         user_id = data.get('user_id', 'anonymous')
@@ -87,8 +90,8 @@ def register_socketio_events(app):
             # Fallback: send minimal data
             try:
                 emit('room_joined', {'room': f'user_{user_id}'})
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.debug(f"Failed to emit fallback room_joined (user): {e2}")
 
     def _on_subscribe_stock(data):
         symbol = data.get('symbol', '').upper()
@@ -112,8 +115,8 @@ def register_socketio_events(app):
                 # Fallback: send minimal data
                 try:
                     emit('subscription_confirmed', {'symbol': symbol})
-                except Exception:
-                    pass
+                except Exception as e2:
+                    logger.debug(f"Failed to emit fallback subscription_confirmed: {e2}")
 
     def _on_unsubscribe_stock(data):
         symbol = data.get('symbol', '').upper()
@@ -137,8 +140,8 @@ def register_socketio_events(app):
                 # Fallback: send minimal data
                 try:
                     emit('subscription_removed', {'symbol': symbol})
-                except Exception:
-                    pass
+                except Exception as e2:
+                    logger.debug(f"Failed to emit fallback subscription_removed: {e2}")
 
     def _on_request_pattern_analysis(data):
         # ✅ CRITICAL FIX: DISABLED - User dashboard reads from batch API cache

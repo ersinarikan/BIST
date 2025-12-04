@@ -2,8 +2,11 @@ from __future__ import annotations
 import os
 import time
 import threading
+import logging
 from datetime import datetime
 from typing import Any, Iterable
+
+logger = logging.getLogger(__name__)
 
 
 def start_gunicorn_log_tailer(app: Any, socketio: Any) -> None:
@@ -50,14 +53,14 @@ def start_gunicorn_log_tailer(app: Any, socketio: Any) -> None:
                             json.dumps(sanitized_payload)  # Test serialization
                             # ✅ FIX: Only send to admin room, use 'room' parameter not 'to'
                             socketio.emit('log_update', sanitized_payload, room='admin')
-                        except Exception:
-                            # Silently ignore - log tailer is best-effort
-                            pass
-            except Exception:
-                pass
+                        except Exception as e:
+                            logger.debug(f"Failed to emit log update: {e}")
+                            # Log tailer is best-effort
+            except Exception as e:
+                logger.debug(f"Failed to tail log file {path}: {e}")
 
         for fpath in files:
             t = threading.Thread(target=_tail, args=(fpath, 'gunicorn'), daemon=True)
             t.start()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to start gunicorn log tailer: {e}")

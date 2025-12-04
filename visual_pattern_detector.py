@@ -8,6 +8,9 @@ Visual Pattern Detector
 
 from datetime import datetime
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class _VisualPatternSystem:
@@ -21,7 +24,8 @@ class _VisualPatternSystem:
         self._enable_yolo = str(os.getenv('ENABLE_YOLO', 'true')).lower() in ('1', 'true', 'yes')
         try:
             self._min_conf = float(os.getenv('YOLO_MIN_CONF', '0.33'))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get YOLO_MIN_CONF, using 0.33: {e}")
             self._min_conf = 0.33
         # Ensure YOLO config dir is writable
         os.environ.setdefault('YOLO_CONFIG_DIR', '/tmp/ultralytics')
@@ -34,7 +38,8 @@ class _VisualPatternSystem:
             self._YOLO = YOLO
             self.backend = 'ultralytics'
             self.yolo_available = True
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to import ultralytics YOLO: {e}")
             self._YOLO = None
             self.backend = None
             self.yolo_available = False
@@ -87,10 +92,12 @@ class _VisualPatternSystem:
                 if vals.size == 0:
                     return None
                 return vals
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to sanitize close with numpy: {e}")
                 try:
                     return series.astype(float).dropna().values  # type: ignore
-                except Exception:
+                except Exception as e2:
+                    logger.debug(f"Failed to sanitize close with pandas: {e2}")
                     return None
         # Prefer Matplotlib if available
         img = None
@@ -126,7 +133,8 @@ class _VisualPatternSystem:
             buf = np.frombuffer(to_rgb(), dtype=np.uint8)
             img = buf.reshape((h, w, 3))
             plt.close(fig)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to render chart with matplotlib: {e}")
             img = None
 
         # Fallback: NumPy rasterization (no Matplotlib required)
@@ -165,7 +173,8 @@ class _VisualPatternSystem:
                             img[y, x, :] = [31, 119, 180]  # line color
                             if y + 1 < H:
                                 img[y + 1, x, :] = [31, 119, 180]
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to render chart with numpy fallback: {e}")
                 img = None
         return img
 

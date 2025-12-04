@@ -226,8 +226,8 @@ class PatternDetectionCoordinator:
                             except Exception:
                                 chg_val = None
                     self._update_stock_importance(symbol, volume=vol_val, price_change=chg_val)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to update stock importance for {symbol}: {e}")
                 mode = self._determine_detection_mode(symbol, len(data) if data is not None else 0)
             
             # Check cache first

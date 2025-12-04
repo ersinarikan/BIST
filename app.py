@@ -92,8 +92,8 @@ def create_app(config_name='default'):
         # ✅ FIX: Use ConfigManager for consistent config access
         app.config['INTERNAL_API_TOKEN'] = ConfigManager.get('INTERNAL_API_TOKEN', app.config.get('INTERNAL_API_TOKEN'))
     except Exception as e:
-        ErrorHandler.handle(e, 'app_init_internal_token', level='debug')
-        pass
+        ErrorHandler.handle(e, 'app_init_internal_token', level='warning')
+        logger.warning(f"Failed to set INTERNAL_API_TOKEN: {e}")
 
     # Initialize extensions with app
     db.init_app(app)
@@ -133,8 +133,8 @@ def create_app(config_name='default'):
     try:
         app.config['TEMPLATES_AUTO_RELOAD'] = True
         app.jinja_env.auto_reload = True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Template auto-reload configuration failed: {e}")
 
     # ✅ ENABLED LOG BROADCAST (Sanitized)
     def broadcast_log(level, message, category='system', service=None):
@@ -160,8 +160,8 @@ def create_app(config_name='default'):
             # Verify serialization to prevent disconnects
             json.dumps(clean_payload)
             socketio.emit('log_update', clean_payload, room='admin')  # type: ignore
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Broadcast log failed: {e}")
     
     # Store broadcast_log on app early to avoid race condition with log tailer threads
     app.broadcast_log = broadcast_log
@@ -195,16 +195,16 @@ def create_app(config_name='default'):
                                 # ✅ FIX: Check if broadcast_log exists before calling (defensive)
                                 if hasattr(app, 'broadcast_log'):
                                     app.broadcast_log('INFO', line.strip(), category)
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
+                            except Exception as e:
+                                logger.debug(f"Log tail broadcast failed for {category}: {e}")
+                except Exception as e:
+                    logger.warning(f"Log tailing failed for {path}: {e}")
 
             for fpath in files:
                 t = threading.Thread(target=_tail, args=(fpath, 'gunicorn'), daemon=True)
                 t.start()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to start log tailer: {e}")
 
     _start_log_tailer()
 
@@ -317,7 +317,8 @@ def create_app(config_name='default'):
                 return True
             admin_email = app.config.get('ADMIN_EMAIL')
             return bool(user and (getattr(user, 'username', None) == 'systemadmin' or (admin_email and getattr(user, 'email', None) == admin_email)))
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Admin check failed: {e}")
             return False
 
     from functools import wraps
@@ -328,8 +329,8 @@ def create_app(config_name='default'):
             try:
                 if current_user.is_authenticated and is_admin(current_user):
                     return fn(*args, **kwargs)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Admin required check failed: {e}")
             if request.path.startswith('/api/'):
                 return jsonify({'status': 'unauthorized'}), 401
             return redirect(url_for('login'))
@@ -393,19 +394,19 @@ def create_app(config_name='default'):
                 # Fallback: localhost-only if allowed
                 if allow_localhost and is_local:
                     return f(*args, **kwargs)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Internal route auth check failed: {e}")
             return jsonify({'status': 'forbidden'}), 403
 
         # Exempt from CSRF and rate limit after wrapping
         try:
             limiter.exempt(wrapper)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Rate limiter exempt failed: {e}")
         try:
             csrf.exempt(wrapper)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"CSRF exempt failed: {e}")
         return wrapper
 
     try:
@@ -484,8 +485,8 @@ def create_app(config_name='default'):
             # Fallback: send minimal status
             try:
                 emit('status', {'message': 'Connected', 'timestamp': datetime.now().isoformat()})
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Fallback status emit failed: {e}")
     
     @socketio.on('disconnect')
     def handle_disconnect():
@@ -508,8 +509,8 @@ def create_app(config_name='default'):
             # Fallback: send minimal data
             try:
                 emit('room_joined', {'room': 'admin'})
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Fallback room_joined emit failed: {e}")
     
     @socketio.on('join_user')
     def handle_join_user(data):
@@ -529,8 +530,8 @@ def create_app(config_name='default'):
             # Fallback: send minimal data
             try:
                 emit('room_joined', {'room': f'user_{user_id}'})
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Fallback room_joined emit failed for user {user_id}: {e}")
     
     @socketio.on('subscribe_stock')
     def handle_subscribe_stock(data):
@@ -551,8 +552,8 @@ def create_app(config_name='default'):
                 # Fallback: send minimal data
                 try:
                     emit('subscription_confirmed', {'symbol': symbol})
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Fallback subscription_confirmed emit failed for {symbol}: {e}")
     
     @socketio.on('unsubscribe_stock')
     def handle_unsubscribe_stock(data):
@@ -573,8 +574,8 @@ def create_app(config_name='default'):
                 # Fallback: send minimal data
                 try:
                     emit('subscription_removed', {'symbol': symbol})
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Fallback subscription_removed emit failed for {symbol}: {e}")
     
     # ✅ CRITICAL FIX: DISABLED request_pattern_analysis handler - use batch API instead
     # @socketio.on('request_pattern_analysis')
@@ -622,7 +623,8 @@ def create_app(config_name='default'):
                 if os.path.exists(_state_path):
                     with open(_state_path, 'r') as rf:
                         cur = _json.load(rf) or {}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to load calibration_state.json: {e}")
                 cur = {}
             cur['bypass'] = True
             # Keep previous penalty_factor if any, else provide conservative default

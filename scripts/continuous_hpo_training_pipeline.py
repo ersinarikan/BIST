@@ -328,7 +328,8 @@ def _get_numa_node_and_cpus() -> Tuple[int, str]:
             cpu_end = cpu_start + CPUS_PER_NODE - 1
             cpu_list = f"{cpu_start}-{cpu_end}"
             return numa_node, cpu_list
-    except Exception:
+    except Exception as e:
+        logger.debug(f"NUMA detection failed, using process ID fallback: {e}")
         # Fallback: use process ID for deterministic distribution
         import os
         numa_node = os.getpid() % NUMA_NODES
@@ -352,8 +353,8 @@ def _build_numa_cmd(base_cmd: List[str], numa_node: int, cpu_list: str) -> Tuple
                 'taskset',
                 '-c', cpu_list,
             ] + base_cmd, numa_node, cpu_list
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"CPU affinity setup failed: {e}")
     
     # No affinity tools available, return base command
     return base_cmd, numa_node, cpu_list
@@ -363,8 +364,8 @@ def _get_hpo_slots_dir() -> Path:
     d = Path('/opt/bist-pattern/results/hpo_slots')
     try:
         d.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to create directory {d}: {e}")
     return d
 
  
@@ -379,7 +380,8 @@ def _get_hpo_max_slots() -> int:
             logger.warning(f"⚠️ HPO_MAX_SLOTS seems incorrect ({max_slots}), forcing to 100")
             max_slots = 100
         return max_slots
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to get max_slots, using 100: {e}")
         return 100  # Default to 100 instead of 3
 
 
@@ -513,12 +515,12 @@ def acquire_hpo_slot(timeout_seconds: float = 300.0):
                                             try:
                                                 lock_path.unlink()
                                                 logger.info(f"🧹 Cleaned stale slot {idx} (PID {lock_pid} no longer exists)")
-                                            except Exception:
-                                                pass
+                                            except Exception as e:
+                                                logger.debug(f"Failed to clean stale slot {idx}: {e}")
                                     except (ValueError, IndexError):
                                         pass
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to process slot cleanup: {e}")
                 
                 f = open(lock_path, 'a+')
                 try:
@@ -529,27 +531,29 @@ def acquire_hpo_slot(timeout_seconds: float = 300.0):
                         f.write(f'{os.getpid()} {datetime.now().isoformat()}\n')
                         f.flush()
                         os.fsync(f.fileno())
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to fsync lock file: {e}")
                     return idx, f, lock_path
                 except BlockingIOError:
                     # Slot is locked by another process, close file and try next slot
                     if f is not None:
                         try:
                             f.close()
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to close file after BlockingIOError: {e}")
                     continue
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Other exception during flock: {e}")
                     # Other exception during flock (e.g., OSError, PermissionError)
                     # ✅ CRITICAL FIX: Close file handle to prevent file descriptor leak
                     if f is not None:
                         try:
                             f.close()
-                        except Exception:
-                            pass
+                        except Exception as e2:
+                            logger.debug(f"Failed to close file after flock exception: {e2}")
                     continue
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Exception during file open: {e}")
                 # Exception during file open (e.g., PermissionError, FileNotFoundError)
                 # File was not opened, so nothing to close
                 continue
@@ -575,14 +579,14 @@ def acquire_hpo_slot(timeout_seconds: float = 300.0):
                                             # If lock is older than 2 hours, it's probably stuck
                                             if lock_age > 7200:
                                                 stuck_slots.append((idx, lock_age))
-                                        except Exception:
-                                            pass
-                        except Exception:
-                            pass
+                                        except Exception as e:
+                                            logger.debug(f"Failed to parse lock time for slot {idx}: {e}")
+                        except Exception as e:
+                            logger.debug(f"Failed to check lock file for slot {idx}: {e}")
                 if stuck_slots:
                     logger.warning(f"⚠️ Detected potentially stuck HPO slots: {stuck_slots}")
-            except Exception:
-                pass  # Don't fail slot acquisition due to deadlock detection errors
+            except Exception as e:
+                logger.debug(f"Deadlock detection failed: {e}")  # Don't fail slot acquisition due to deadlock detection errors
         
         _time.sleep(0.25)
 
@@ -592,14 +596,14 @@ def release_hpo_slot(fobj) -> None:
         if fobj is not None:
             try:
                 fcntl.flock(fobj.fileno(), fcntl.LOCK_UN)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to unlock file: {e}")
             try:
                 fobj.close()
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as e:
+                logger.debug(f"Failed to close file: {e}")
+    except Exception as e:
+        logger.debug(f"release_hpo_slot failed: {e}")
 
 
 @dataclass
@@ -784,8 +788,8 @@ class ContinuousHPOPipeline:
                     # Shared lock for reading to avoid partial reads while another process writes
                     try:
                         fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to acquire shared lock for state file: {e}")
                     content = f.read()
                     data = json.loads(content)
                     self.cycle = data.get('cycle', 0)
@@ -865,8 +869,8 @@ class ContinuousHPOPipeline:
             # Acquire exclusive lock - will be held until explicitly released
             try:
                 fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            except Exception:
-                pass  # Lock acquisition failed, continue anyway (best effort)
+            except Exception as e:
+                logger.debug(f"Lock acquisition failed (best effort): {e}")  # Lock acquisition failed, continue anyway (best effort)
             
             # Read existing state (with lock held)
             merged_state = {}
@@ -880,9 +884,9 @@ class ContinuousHPOPipeline:
                     # Merge existing tasks
                     for key, task_data in existing_data.get('state', {}).items():
                         merged_state[key] = task_data
-            except Exception:
+            except Exception as e:
                 # If read fails, start fresh (but log it)
-                logger.warning("⚠️ Could not read existing state for merge, using current state only")
+                logger.warning(f"⚠️ Could not read existing state for merge, using current state only: {e}")
             
             # Merge current process's updates (overwrite only changed tasks)
             # This happens while lock is still held
@@ -950,8 +954,8 @@ class ContinuousHPOPipeline:
                         if file_handle:
                             try:
                                 file_handle.close()
-                            except Exception:
-                                pass
+                            except Exception as e2:
+                                logger.debug(f"Failed to cleanup after write error: {e2}")
                         logger.error(f"❌ Error during file write: {write_err}")
                         import traceback
                         logger.error(f"❌ Write error traceback: {''.join(traceback.format_exc())}")
@@ -1003,8 +1007,8 @@ class ContinuousHPOPipeline:
                 if tmp_path.exists():
                     try:
                         os.remove(tmp_path)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to remove tmp_path: {e}")
         except Exception as e:
             logger.error(f"❌ Error saving state: {e}")
         finally:
@@ -1012,12 +1016,12 @@ class ContinuousHPOPipeline:
             if lock_fd is not None:
                 try:
                     fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to unlock lock_fd: {e}")
                 try:
                     os.close(lock_fd)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to close lock_fd: {e}")
 
     def _reset_stale_in_progress(self):
         """Reset tasks left in 'in_progress' states (resume safety after restart)."""
@@ -1321,8 +1325,8 @@ class ContinuousHPOPipeline:
                             if stderr_file.exists():
                                 with open(stderr_file, 'r') as f:
                                     stderr_content = f.read()
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to read stderr file: {e}")
                         
                         result = subprocess.CompletedProcess(
                             numa_cmd,
@@ -1350,8 +1354,8 @@ class ContinuousHPOPipeline:
                             if stderr_file.exists():
                                 with open(stderr_file, 'r') as f:
                                     stderr_content = f.read()
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to read stderr file: {e}")
                         
                         result = subprocess.CompletedProcess(
                             numa_cmd,
@@ -1523,8 +1527,8 @@ class ContinuousHPOPipeline:
                                 _val = best_trial.user_attrs.get('avg_dirhit', None)
                                 if isinstance(_val, (int, float)) and np.isfinite(_val):
                                     best_dirhit = float(_val)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"Failed to get best_dirhit from trial: {e}")
                             if best_dirhit is None or not np.isfinite(best_dirhit):
                                 best_dirhit = best_value
                             
@@ -1624,8 +1628,8 @@ class ContinuousHPOPipeline:
                                     isinstance(hpo_data_precheck.get('n_trials', 0), int) and
                                     hpo_data_precheck.get('n_trials', 0) >= MIN_TRIALS_FOR_RECOVERY):  # HPO must be completed
                                 json_file_valid = True
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to validate HPO JSON file: {e}")
                     
                     # ✅ FIX: Timestamp validation - flexible for valid JSON files (handles restart cases)
                     # If JSON file is valid (correct symbol/horizon/trials), use relaxed timestamp validation
@@ -1726,11 +1730,13 @@ class ContinuousHPOPipeline:
                                 # Default: 0/0.0 (same as HPO code default) - environment variable will override
                                 try:
                                     _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))  # Default: 0 (same as HPO)
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Failed to get HPO_MIN_MASK_COUNT, using 0: {e}")
                                     _min_mc = 0
                                 try:
                                     _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '0.0'))  # Default: 0.0 (same as HPO)
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Failed to get HPO_MIN_MASK_PCT, using 0.0: {e}")
                                     _min_mp = 0.0
                                 
                                 if total_mask_count < _min_mc or avg_mask_pct < _min_mp:
@@ -1868,11 +1874,13 @@ class ContinuousHPOPipeline:
                             # Default: 0/0.0 (same as HPO code default) - environment variable will override
                             try:
                                 _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))  # Default: 0 (same as HPO)
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to get HPO_MIN_MASK_COUNT, using 0: {e}")
                                 _min_mc = 0
                             try:
                                 _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '0.0'))  # Default: 0.0 (same as HPO)
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to get HPO_MIN_MASK_PCT, using 0.0: {e}")
                                 _min_mp = 0.0
                             
                             # Low support threshold: use same as HPO
@@ -1994,23 +2002,24 @@ class ContinuousHPOPipeline:
         try:
             if isinstance(hpo_result, dict):
                 eval_spec = hpo_result.get('evaluation_spec')
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get eval_spec from hpo_result: {e}")
             eval_spec = None
         if isinstance(eval_spec, dict):
             # Set DirHit threshold from spec (fallback to default)
             try:
                 dirhit_thr = float(eval_spec.get('dirhit_threshold', 0.005))
                 os.environ['DIRHIT_THRESHOLD'] = str(dirhit_thr)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to set DIRHIT_THRESHOLD: {e}")
             # Optionally mirror mask thresholds for any gating logic downstream
             try:
                 if 'min_mask_count' in eval_spec:
                     os.environ['HPO_MIN_MASK_COUNT'] = str(int(eval_spec['min_mask_count']))
                 if 'min_mask_pct' in eval_spec:
                     os.environ['HPO_MIN_MASK_PCT'] = str(float(eval_spec['min_mask_pct']))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to set mask thresholds: {e}")
             # Override WFV splits using indices if provided
             try:
                 symbol_key = f"{symbol}_{horizon}d"
@@ -2025,13 +2034,14 @@ class ContinuousHPOPipeline:
                         if tei is not None and pei is not None:
                             try:
                                 splits_idx.append((int(tei), int(pei)))
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to process split_idx: {e}")
                                 continue
                     if splits_idx:
                         wfv_splits = splits_idx
                         logger.info(f"🔁 Using evaluation_spec splits for {symbol} {horizon}d: {len(wfv_splits)} splits")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to process splits_indices: {e}")
         
         if not wfv_splits:
             # Fallback to single split if multiple splits not possible
@@ -2166,8 +2176,8 @@ class ContinuousHPOPipeline:
                         if 'smart_weight_cat' in fp:
                             original_smart_weight_cat = os.environ.get('ML_SMART_WEIGHT_CAT')
                             os.environ['ML_SMART_WEIGHT_CAT'] = str(fp['smart_weight_cat'])
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to set smart_weight env vars: {e}")
                 # Also check enable_* keys in best_params
                 # ✅ CRITICAL FIX: Save original values before setting new ones (fallback path, same as online evaluation)
                 feature_flag_keys = [k for k in best_params.keys() if k.startswith('enable_')]
@@ -2242,8 +2252,8 @@ class ContinuousHPOPipeline:
             try:
                 from bist_pattern.core.config_manager import ConfigManager
                 ConfigManager.clear_cache()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to clear ConfigManager cache: {e}")
             # ✅ CRITICAL FIX: Use best trial's seed for evaluation (match HPO best trial)
             # This ensures evaluation uses the same random seed as the best HPO trial
             # If best_trial_number is not available, fallback to 42
@@ -2256,7 +2266,8 @@ class ContinuousHPOPipeline:
             # HPO uses seed = 42 + trial.number
             try:
                 eval_seed = 42 + int(best_trial_number) if best_trial_number is not None else 42
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to calculate eval_seed, using 42: {e}")
                 eval_seed = 42
             try:
                 import random
@@ -2271,8 +2282,8 @@ class ContinuousHPOPipeline:
                 os.environ.setdefault('LIGHTGBM_SEED', str(eval_seed))
                 os.environ.setdefault('CATBOOST_RANDOM_SEED', str(eval_seed))
                 logger.info(f"🔧 {symbol} {horizon}d WFV: Using seed={eval_seed} (best_trial={best_trial_number}) for evaluation")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to set seed env vars: {e}")
             
             # ✅ CRITICAL FIX: Create NEW instance (same as HPO) to avoid singleton cache pollution
             # HPO creates new EnhancedMLSystem() for each trial, we should do the same for evaluation
@@ -2375,7 +2386,8 @@ class ContinuousHPOPipeline:
                                     if last_close > 0:
                                         preds[t] = float(pred_price) / last_close - 1.0
                                         valid_predictions += 1
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to process prediction: {e}")
                         continue
                 
                 # 🔍 DEBUG: Calculate detailed metrics (same as HPO)
@@ -2389,8 +2401,8 @@ class ContinuousHPOPipeline:
                         _thr_env = os.getenv('DIRHIT_THRESHOLD')
                         if _thr_env is not None:
                             thr_env_val = float(_thr_env)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to get DIRHIT_THRESHOLD: {e}")
                     # DirHit
                     dh = self._dirhit(y_true_split, preds, thr=thr_env_val)
                     
@@ -2406,8 +2418,8 @@ class ContinuousHPOPipeline:
                         std_y = float(np.std(y_true_valid)) if y_true_valid.size > 1 else 0.0
                         if std_y > 0:
                             nrmse_val = float(rmse / std_y)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to calculate NRMSE: {e}")
                     
                     # ✅ NEW: Calculate Score (same formula as HPO)
                     from enhanced_ml_system import EnhancedMLSystem
@@ -2420,8 +2432,8 @@ class ContinuousHPOPipeline:
                         _thr_env2 = os.getenv('DIRHIT_THRESHOLD')
                         if _thr_env2 is not None:
                             thr = float(_thr_env2)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to get MASK_THRESHOLD: {e}")
                     mask_count = ((np.abs(y_true_valid) > thr) & (np.abs(preds_valid) > thr)).sum()
                     mask_pct = (mask_count / valid_count) * 100 if valid_count > 0 else 0
                     
@@ -2461,11 +2473,13 @@ class ContinuousHPOPipeline:
                     _min_mp = 0.0
                     try:
                         _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))  # Default: 0 (same as HPO)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to get HPO_MIN_MASK_COUNT, using 0: {e}")
                         _min_mc = 0
                     try:
                         _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '0.0'))  # Default: 0.0 (same as HPO)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to get HPO_MIN_MASK_PCT, using 0.0: {e}")
                         _min_mp = 0.0
                     if (_min_mc > 0 and mask_count < _min_mc) or (_min_mp > 0.0 and mask_pct < _min_mp):
                         low_support = True
@@ -2735,8 +2749,8 @@ class ContinuousHPOPipeline:
                         if 'smart_weight_cat' in fp:
                             original_smart_weight_cat2 = os.environ.get('ML_SMART_WEIGHT_CAT')
                             os.environ['ML_SMART_WEIGHT_CAT'] = str(fp['smart_weight_cat'])
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to set smart_weight env vars: {e}")
             else:
                 # Fallback: Only disable if best_params not available (should not happen in normal flow)
                 logger.warning(f"⚠️ {symbol} {horizon}d Online: best_params not available, using fallback (disabling seed bagging and directional loss)")
@@ -2750,8 +2764,8 @@ class ContinuousHPOPipeline:
             try:
                 from bist_pattern.core.config_manager import ConfigManager
                 ConfigManager.clear_cache()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to clear ConfigManager cache: {e}")
             # ✅ CRITICAL FIX: Use best trial's seed for evaluation (match HPO best trial)
             # This ensures evaluation uses the same random seed as the best HPO trial
             # If best_trial_number is not available, fallback to 42
@@ -2764,7 +2778,8 @@ class ContinuousHPOPipeline:
             # Use the same logic as WFV: seed = 42 + best_trial_number (or 42 fallback)
             try:
                 eval_seed = 42 + int(best_trial_number) if best_trial_number is not None else 42
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to calculate eval_seed, using 42: {e}")
                 eval_seed = 42
             try:
                 import random
@@ -2778,8 +2793,8 @@ class ContinuousHPOPipeline:
                 os.environ.setdefault('LIGHTGBM_SEED', str(eval_seed))
                 os.environ.setdefault('CATBOOST_RANDOM_SEED', str(eval_seed))
                 logger.info(f"🔧 {symbol} {horizon}d Online: Using seed={eval_seed} (best_trial={best_trial_number}) for evaluation")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to set seed env vars: {e}")
             
             # ✅ CRITICAL FIX: Create NEW instance (same as HPO) to avoid singleton cache pollution
             # HPO creates new EnhancedMLSystem() for each trial, we should do the same for evaluation
@@ -2886,7 +2901,8 @@ class ContinuousHPOPipeline:
                                     if last_close > 0:
                                         preds2[t] = float(pred_price) / last_close - 1.0
                                         valid_predictions2 += 1
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to process prediction (online): {e}")
                         continue
                 
                 # 🔍 DEBUG: Calculate detailed metrics (same as HPO)
@@ -2900,8 +2916,8 @@ class ContinuousHPOPipeline:
                         _thr_env_online = os.getenv('DIRHIT_THRESHOLD')
                         if _thr_env_online is not None:
                             thr2 = float(_thr_env_online)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to get DIRHIT_THRESHOLD (online): {e}")
                     # DirHit
                     dh2 = self._dirhit(y_true_split, preds2, thr=thr2)
                     
@@ -2949,11 +2965,13 @@ class ContinuousHPOPipeline:
                     _min_mp2 = 0.0
                     try:
                         _min_mc2 = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))  # Default: 0 (same as HPO)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to get HPO_MIN_MASK_COUNT (online), using 0: {e}")
                         _min_mc2 = 0
                     try:
                         _min_mp2 = float(os.getenv('HPO_MIN_MASK_PCT', '0.0'))  # Default: 0.0 (same as HPO)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to get HPO_MIN_MASK_PCT (online), using 0.0: {e}")
                         _min_mp2 = 0.0
                     if (_min_mc2 > 0 and mask_count2 < _min_mc2) or (_min_mp2 > 0.0 and mask_pct2 < _min_mp2):
                         low_support2 = True
@@ -3040,12 +3058,12 @@ class ContinuousHPOPipeline:
                     elif key in os.environ:
                         # Was not set before, remove it
                         os.environ.pop(key, None)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to restore env var {key}: {e}")
             try:
                 os.environ.pop('ML_SKIP_ADAPTIVE_PHASE2', None)  # ✅ Clean up evaluation mode flag
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to pop ML_SKIP_ADAPTIVE_PHASE2: {e}")
 
         # Mini-CV bloğu kaldırıldı (bakım ve lint sadeleştirme)
 
@@ -3113,8 +3131,8 @@ class ContinuousHPOPipeline:
                             os.environ['ML_SMART_WEIGHT_LGB'] = str(fp.get('smart_weight_lgbm', fp.get('smart_weight_lgb')))
                         if 'smart_weight_cat' in fp:
                             os.environ['ML_SMART_WEIGHT_CAT'] = str(fp['smart_weight_cat'])
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to set smart_weight env vars: {e}")
             # Also set feature flags from best_params keys (enable_*)
             elif isinstance(best_params, dict):
                 feature_flag_keys = [k for k in best_params.keys() if k.startswith('enable_')]
@@ -3192,8 +3210,8 @@ class ContinuousHPOPipeline:
                             os.environ['ML_SMART_WEIGHT_LGB'] = str(fp.get('smart_weight_lgbm', fp.get('smart_weight_lgb')))
                         if 'smart_weight_cat' in fp:
                             os.environ['ML_SMART_WEIGHT_CAT'] = str(fp['smart_weight_cat'])
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to set smart_weight env vars: {e}")
             else:
                 # Fallback: Enable all features if features_enabled not found (backward compatibility)
                 os.environ['ENABLE_EXTERNAL_FEATURES'] = '1'
@@ -3254,8 +3272,8 @@ class ContinuousHPOPipeline:
             try:
                 from bist_pattern.core.config_manager import ConfigManager
                 ConfigManager.clear_cache()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to clear ConfigManager cache: {e}")
             
             # ✅ CRITICAL FIX: Clear singleton using thread-safe function
             from enhanced_ml_system import clear_enhanced_ml_system
@@ -3422,8 +3440,8 @@ class ContinuousHPOPipeline:
                             skip_data_check = True
                             logger.info(f"⏭️ Skipping data quality check for {symbol} {horizon}d (HPO already started with {trial_count} trials)")
                             break
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to check HPO trial count: {e}")
             
             # ✅ CRITICAL FIX: Check if HPO is already completed but state wasn't updated properly
             # This handles cases where HPO finished but JSON file wasn't found or state wasn't updated
@@ -3507,7 +3525,8 @@ class ContinuousHPOPipeline:
                                             }
                                             logger.info(f"✅ Found HPO JSON file: {json_file.name}")
                                             break
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"Failed to process HPO JSON file: {e}")
                                         continue
                                 
                                 if hpo_result:
@@ -3613,8 +3632,8 @@ class ContinuousHPOPipeline:
                                     self.state[key] = task
                                     self.save_state()
                                 break
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to process task recovery: {e}")
             
             MAX_RETRY_COUNT = 10
             if task and task.status == 'failed' and task.retry_count < MAX_RETRY_COUNT and not task_was_reset:
@@ -3659,36 +3678,53 @@ class ContinuousHPOPipeline:
             # This prevents false "insufficient data" when HPO is continuing from previous run
             if not skip_data_check:
                 # Check if symbol has sufficient data for this horizon
+                data_fetch_error = None
                 try:
                     with app.app_context():
                         det = HybridPatternDetector()
                         df = det.get_stock_data(symbol, days=0)
                         
-                        # Minimum data requirements per horizon
-                        # ✅ USER REQUEST: All horizons require minimum 100 days
-                        min_required = {
-                            1: 100,   # 1d needs 100 days
-                            3: 100,   # 3d needs 100 days
-                            7: 100,   # 7d needs 100 days
-                            14: 100,  # 14d needs 100 days
-                            30: 100,  # 30d needs 100 days
-                        }
-                        
-                        min_days = min_required.get(horizon, 100)
-                        actual_days = len(df) if df is not None else 0
-                        
-                        if actual_days < min_days:
-                            # Insufficient data - skip this task
-                            logger.info(f"⏭️ Skipping {symbol} {horizon}d: insufficient data ({actual_days} < {min_days} days required)")
-                            task = self.state.get(key, TaskState(symbol=symbol, horizon=horizon, status='pending', cycle=self.cycle))
-                            task.status = 'skipped'
-                            task.error = f'Insufficient data: {actual_days}/{min_days} days'
-                            task.cycle = self.cycle
-                            self.state[key] = task
-                            self.save_state()
-                            return False
+                        # ✅ FIX: If df is None, it could be due to:
+                        # 1. Database connection error (should proceed with HPO)
+                        # 2. Symbol not found in database (should proceed with HPO, HPO will handle it)
+                        # 3. Actually no data (should skip)
+                        # We can't distinguish between these cases easily, so we'll proceed with HPO
+                        # and let HPO handle the data fetching (it has better error handling)
+                        if df is None:
+                            # Check if this is a connection error by trying to get any symbol
+                            # If connection fails, we should proceed with HPO (HPO has its own data fetching)
+                            logger.warning(f"⚠️ {symbol} {horizon}d: get_stock_data returned None. This could be due to DB connection issues or missing data. Proceeding with HPO (HPO will handle data fetching)...")
+                            # Don't skip - let HPO handle it
+                        else:
+                            # Minimum data requirements per horizon
+                            # ✅ USER REQUEST: All horizons require minimum 100 days
+                            min_required = {
+                                1: 100,   # 1d needs 100 days
+                                3: 100,   # 3d needs 100 days
+                                7: 100,   # 7d needs 100 days
+                                14: 100,  # 14d needs 100 days
+                                30: 100,  # 30d needs 100 days
+                            }
+                            
+                            min_days = min_required.get(horizon, 100)
+                            actual_days = len(df) if df is not None else 0
+                            
+                            if actual_days < min_days:
+                                # Insufficient data - skip this task
+                                logger.info(f"⏭️ Skipping {symbol} {horizon}d: insufficient data ({actual_days} < {min_days} days required)")
+                                task = self.state.get(key, TaskState(symbol=symbol, horizon=horizon, status='pending', cycle=self.cycle))
+                                task.status = 'skipped'
+                                task.error = f'Insufficient data: {actual_days}/{min_days} days'
+                                task.cycle = self.cycle
+                                self.state[key] = task
+                                self.save_state()
+                                return False
                 except Exception as e:
-                    logger.warning(f"⚠️ Data quality check failed for {symbol} {horizon}d: {e}. Proceeding with HPO...")
+                    # ✅ FIX: If data fetch fails (e.g., DB connection error), proceed with HPO
+                    # HPO has its own data fetching mechanism that might work better
+                    data_fetch_error = str(e)
+                    logger.warning(f"⚠️ Data quality check failed for {symbol} {horizon}d: {e}. This is likely a DB connection issue. Proceeding with HPO (HPO will handle data fetching)...")
+                    # Don't skip - let HPO handle it
             
             # Update state: HPO in progress
             task = self.state.get(key, TaskState(symbol=symbol, horizon=horizon, status='pending', cycle=self.cycle))
@@ -3780,7 +3816,8 @@ class ContinuousHPOPipeline:
                                 else:
                                     task.status = 'failed'
                                     task.retry_count = task.retry_count + 1
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to handle task error: {e}")
                             task.status = 'failed'
                             task.retry_count = task.retry_count + 1
                     else:
@@ -3928,10 +3965,10 @@ class ContinuousHPOPipeline:
                                         dt_str = timestamp_str.split(',')[0]
                                         cycle_start = datetime.strptime(dt_str, '%Y-%m-%d %H:%M:%S')
                                         break
-                                    except Exception:
-                                        pass
-                except Exception:
-                    pass
+                                    except Exception as e:
+                                        logger.debug(f"Failed to parse cycle_start from timestamp: {e}")
+                except Exception as e:
+                    logger.debug(f"Failed to read cycle_start from state file: {e}")
             
             # If cycle start not found, use state file mtime
             if cycle_start is None:
@@ -3939,7 +3976,8 @@ class ContinuousHPOPipeline:
                 if state_file.exists():
                     try:
                         cycle_start = datetime.fromtimestamp(state_file.stat().st_mtime)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to get cycle_start from file mtime: {e}")
                         cycle_start = datetime.now()
                 else:
                     cycle_start = datetime.now()
@@ -4316,8 +4354,8 @@ def main():
                                 best_params['best_trial_number'] = _btn
                     elif isinstance(best_params, dict) and 'best_trial_number' not in best_params:
                         best_params['best_trial_number'] = hpo_data.get('best_trial_number')
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to set best_trial_number: {e}")
                 # Run training only (pass full hpo_result so ENABLE_* flags are set from features_enabled)
                 result = pipeline.run_training(args.symbol, args.horizon, best_params, hpo_result=hpo_data)
                 if result is not None:

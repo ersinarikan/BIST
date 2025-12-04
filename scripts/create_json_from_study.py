@@ -7,10 +7,13 @@ import sys
 import os
 import json
 import argparse
+import logging
 from pathlib import Path
 from typing import Dict, Optional
 from datetime import datetime
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, '/opt/bist-pattern')
 os.environ['PYTHONPATH'] = '/opt/bist-pattern'
@@ -36,7 +39,8 @@ def load_state() -> Dict:
     try:
         with open(STATE_FILE, 'r') as f:
             return json.load(f)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to load state file: {e}")
         return {}
 
 
@@ -59,8 +63,8 @@ def create_json_from_study(db_file: Path, symbol: str, horizon: int, cycle: int,
             _val = best_trial.user_attrs.get('avg_dirhit', None)
             if isinstance(_val, (int, float)) and np.isfinite(_val):
                 best_dirhit = float(_val)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to get avg_dirhit from best trial: {e}")
         
         # Fallback: try symbol-specific avg_dirhit
         if best_dirhit is None:
@@ -72,8 +76,8 @@ def create_json_from_study(db_file: Path, symbol: str, horizon: int, cycle: int,
                     best_dirhit = symbol_metric.get('avg_dirhit')
                     if best_dirhit is not None:
                         best_dirhit = float(best_dirhit)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to get symbol-specific avg_dirhit: {e}")
         
         if best_dirhit is None or not np.isfinite(best_dirhit):
             best_dirhit = best_value  # fallback

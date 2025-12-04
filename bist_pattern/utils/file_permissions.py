@@ -110,10 +110,10 @@ def _set_permissions(path: Path, owner: str, group: str, mode: int, is_dir: bool
         # If we can't change ownership (e.g., not running as root), just set permissions
         try:
             os.chmod(path, mode)
-        except Exception:
-            pass
-    except Exception:
-        pass
+        except Exception as e:
+            logger.debug(f"Failed to chmod {path}: {e}")
+    except Exception as e:
+        logger.debug(f"Failed to set permissions for {path}: {e}")
 
 
 def ensure_directory_permissions(dir_path: Path, owner: Optional[str] = None, 

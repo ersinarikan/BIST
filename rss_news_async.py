@@ -103,8 +103,8 @@ class AsyncRSSNewsProvider:
                                         new_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
                                     new_loop.close()
                                     asyncio.set_event_loop(None)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug(f"Failed to close new_loop: {e}")
                         with concurrent.futures.ThreadPoolExecutor() as executor:
                             future = executor.submit(_run_in_isolated_thread, coro)
                             return future.result(timeout=30)
@@ -125,8 +125,8 @@ class AsyncRSSNewsProvider:
                                 loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
                             loop.close()
                             asyncio.set_event_loop(None)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to close loop: {e}")
             except Exception as e:
                 logger.error(f"RSS loop run error: {e}")
                 return None
@@ -141,8 +141,8 @@ class AsyncRSSNewsProvider:
                 try:
                     loop.close()
                     asyncio.set_event_loop(None)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to close loop in _run_in_thread_with_loop: {e}")
         
         def background_fetcher():
             """Background thread that periodically fetches RSS feeds"""
@@ -169,8 +169,8 @@ class AsyncRSSNewsProvider:
                                         loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
                                     loop.close()
                                     asyncio.set_event_loop(None)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug(f"Failed to close loop in executor: {e}")
                         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                             executor.submit(_run_in_isolated_thread).result(timeout=60)
                     
@@ -204,8 +204,8 @@ class AsyncRSSNewsProvider:
                             loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
                         loop.close()
                         asyncio.set_event_loop(None)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to close loop before executor: {e}")
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 executor.submit(_run_in_isolated_thread).result(timeout=60)
         self._background_pool.submit(_first_fetch)
@@ -326,15 +326,18 @@ class AsyncRSSNewsProvider:
                             try:
                                 pub_dt = parsedate_to_datetime(pub_date_str)
                                 pub_timestamp = pub_dt.timestamp()
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to parse pub_date with parsedate_to_datetime: {e}")
                                 # Fallback: try datetime parsing
                                 try:
                                     pub_dt = datetime.fromisoformat(pub_date_str.replace('Z', '+00:00'))
                                     pub_timestamp = pub_dt.timestamp()
-                                except Exception:
+                                except Exception as e2:
+                                    logger.debug(f"Failed to parse pub_date with datetime.fromisoformat: {e2}")
                                     # If parsing fails, use current time (assume recent)
                                     pub_timestamp = time.time()
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to parse pub_date completely: {e}")
                             # If all parsing fails, use current time (assume recent)
                             pub_timestamp = time.time()
                     else:
@@ -561,10 +564,10 @@ class AsyncRSSNewsProvider:
                                 # Also check if variant is a substring (for compound words, minimum 4 chars)
                                 if len(variant) > 4 and variant in text_upper:
                                     return True
-            except Exception:
-                pass
-        except Exception:
-            pass
+            except Exception as e:
+                logger.debug(f"Failed to check symbol variant: {e}")
+        except Exception as e:
+            logger.debug(f"Failed to check symbol in text: {e}")
         
         return False
     
@@ -600,8 +603,8 @@ class AsyncRSSNewsProvider:
                                         new_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
                                     new_loop.close()
                                     asyncio.set_event_loop(None)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug(f"Failed to close new_loop: {e}")
                         with concurrent.futures.ThreadPoolExecutor() as executor:
                             future = executor.submit(_run_in_isolated_thread, coro)
                             return future.result(timeout=30)
@@ -622,8 +625,8 @@ class AsyncRSSNewsProvider:
                                 loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
                             loop.close()
                             asyncio.set_event_loop(None)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to close loop: {e}")
             except Exception as e:
                 logger.error(f"RSS refresh loop error: {e}")
                 return None

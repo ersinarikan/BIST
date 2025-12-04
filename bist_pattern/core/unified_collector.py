@@ -30,21 +30,25 @@ DEBUG_VERBOSE = str(os.getenv('DEBUG_VERBOSE', '0')).lower() in ('1', 'true', 'y
 # Hard safety rails for DB persistence to avoid numeric overflows
 try:
     COLLECTOR_MAX_PRICE = float(os.getenv('COLLECTOR_MAX_PRICE', '999999.0'))  # numeric(10,4) => abs(value) < 1e6
-except Exception:
+except Exception as e:
+    logger.debug(f"Failed to get COLLECTOR_MAX_PRICE, using 999999.0: {e}")
     COLLECTOR_MAX_PRICE = 999999.0
 try:
     COLLECTOR_MIN_PRICE = float(os.getenv('COLLECTOR_MIN_PRICE', '0.0001'))
-except Exception:
+except Exception as e:
+    logger.debug(f"Failed to get COLLECTOR_MIN_PRICE, using 0.0001: {e}")
     COLLECTOR_MIN_PRICE = 0.0001
 
 # Lightweight in-process caches to reduce repeated API calls within a short window
 try:
     FETCH_CACHE_TTL = int(os.getenv('COLLECTOR_FETCH_CACHE_TTL', '300'))  # seconds
-except Exception:
+except Exception as e:
+    logger.debug(f"Failed to get COLLECTOR_FETCH_CACHE_TTL, using 300: {e}")
     FETCH_CACHE_TTL = 300
 try:
     NO_DATA_TTL = int(os.getenv('COLLECTOR_NO_DATA_TTL_SECONDS', '600'))  # seconds
-except Exception:
+except Exception as e:
+    logger.debug(f"Failed to get COLLECTOR_NO_DATA_TTL_SECONDS, using 600: {e}")
     NO_DATA_TTL = 600
 
 # Thread-safe caches with locks
@@ -57,7 +61,8 @@ def _ddebug(msg: str) -> None:
     try:
         if DEBUG_VERBOSE:
             logger.debug(msg)
-    except Exception:
+    except Exception as e:
+        # Silently ignore debug logging failures
         pass
 
 
@@ -65,7 +70,8 @@ def _ddebug(msg: str) -> None:
 def _isfinite(v: float) -> bool:
     try:
         return v == v and v not in (float('inf'), float('-inf'))
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to check if value is finite: {e}")
         return False
 
 
@@ -77,7 +83,8 @@ def _sanitize_prices_and_volume(row: pd.Series) -> Optional[dict]:
         low_v = float(row['Low'])
         close_v = float(row['Close'])
         vol_v = int(row['Volume'])
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to extract OHLCV from row: {e}")
         return None
 
     # Basic finite checks
@@ -100,7 +107,8 @@ def _sanitize_prices_and_volume(row: pd.Series) -> Optional[dict]:
             return None
         if low_v > high_v:
             return None
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to validate OHLC relationships: {e}")
         return None
 
     # Volume sanity (non-negative)
@@ -121,8 +129,8 @@ try:  # pragma: no cover
     yfl = logging.getLogger('yfinance')
     yfl.propagate = False
     yfl.setLevel(logging.CRITICAL)
-except Exception:
-    pass
+except Exception as e:
+    logger.debug(f"Failed to silence yfinance logger: {e}")
 
 
 def _broadcast(level: str, message: str, category: str = 'collector') -> None:
@@ -133,9 +141,9 @@ def _broadcast(level: str, message: str, category: str = 'collector') -> None:
         if hasattr(app_obj, 'broadcast_log'):
             # ✅ FIX: Add service identifier to distinguish from HPO logs
             app_obj.broadcast_log(level, message, category='working_automation', service='working_automation')
-    except Exception:
+    except Exception as e:
         # Silently ignore if no app context/socket available
-        pass
+        logger.debug(f"Broadcast failed (no app context): {e}")
 
 
 class UnifiedDataCollector:
@@ -155,8 +163,8 @@ class UnifiedDataCollector:
             try:
                 session = cffi_requests.Session(impersonate='chrome')
                 return yf.Ticker(yf_symbol, session=session)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to create cffi session, using default: {e}")
         return yf.Ticker(yf_symbol)
 
     def collect_single_stock(self, symbol: str, period: str = '1mo') -> Dict[str, Any]:
@@ -189,7 +197,8 @@ class UnifiedDataCollector:
                 else:
                     try:
                         gap = (datetime.utcnow().date() - last_date).days  # type: ignore[arg-type]
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to calculate date gap, using 7: {e}")
                         gap = 7
                     if gap <= 1:
                         target_period = '5d'
@@ -203,7 +212,8 @@ class UnifiedDataCollector:
                         target_period = '1y'
                     else:
                         target_period = '2y'
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to determine target_period, using {period}: {e}")
             target_period = period
 
         def _chart_try(range_param: str) -> Optional[pd.DataFrame]:
@@ -252,7 +262,8 @@ class UnifiedDataCollector:
                             return None
                         try:
                             idx = _pd.to_datetime(_pd.Series(ts).astype('int64'), unit='s')
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to parse timestamp as int64, trying fallback: {e}")
                             idx = _pd.to_datetime(ts, unit='s', errors='coerce')
                         df_chart = _pd.DataFrame({'Open': opens, 'High': highs, 'Low': lows, 'Close': closes, 'Volume': vols}, index=idx)
                         df_chart = df_chart.dropna(how='all')
@@ -266,12 +277,14 @@ class UnifiedDataCollector:
                         logger.info("collector.fetch ok symbol=%s period=%s rows=%s source=chart", symbol, range_param, rows)
                         _broadcast('SUCCESS', f"collector.fetch ok symbol={symbol} period={range_param} rows={rows} source=chart")
                         return df_chart
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Chart fetch attempt {attempt} failed: {e}")
                         wait = min(10.0, base * (2 ** attempt)) + random.uniform(0, 0.25)
                         time.sleep(wait)
                         continue
                 return None
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Chart fetch failed completely: {e}")
                 return None
 
         def _download_try(p: str) -> Optional[pd.DataFrame]:
@@ -301,18 +314,21 @@ class UnifiedDataCollector:
                         wait = min(8.0, base * (2 ** attempt)) + random.uniform(0, 0.25)
                         logger.warning("collector.fetch download_try empty symbol=%s period=%s wait=%.2fs", symbol, p, wait)
                         time.sleep(wait)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Download fetch attempt {attempt} failed: {e}")
                         wait = min(8.0, base * (2 ** attempt)) + random.uniform(0, 0.25)
                         time.sleep(wait)
                         continue
                 return None
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Download fetch failed completely: {e}")
                 return None
 
         def _yfinance_try(p: str) -> Optional[pd.DataFrame]:
             try:
                 delay = float(os.getenv('YF_RETRY_BASE_DELAY', '1.2'))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get YF_RETRY_BASE_DELAY, using 1.2: {e}")
                 delay = 1.2
             allow_cffi_local = str(os.getenv('YF_USE_CFFI', '0')).lower() in ('1', 'true', 'yes') and (cffi_requests is not None)
             session_order = (('cffi', True),) if allow_cffi_local else tuple()
@@ -322,11 +338,12 @@ class UnifiedDataCollector:
                 single = str(os.getenv('YF_SINGLE_SESSION', '')).lower().strip()
                 if single in ('cffi', 'default'):
                     session_order = (('cffi', True),) if single == 'cffi' else (('default', False),)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to get YF_SINGLE_SESSION: {e}")
             try:
                 yfin_tries = int(os.getenv('YF_YFINANCE_TRIES', '1'))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get YF_YFINANCE_TRIES, using 1: {e}")
                 yfin_tries = 1
             for _ in range(max(1, yfin_tries)):
                 for source_name, use_cffi_flag in session_order:
@@ -342,7 +359,8 @@ class UnifiedDataCollector:
                             return df_local
                         _broadcast('WARNING', f"collector.fetch empty symbol={symbol} period={p} wait={delay:.1f}s source={source_name}")
                         time.sleep(delay + random.uniform(0, 0.25))
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"yfinance fetch attempt failed: {e}")
                         time.sleep(delay + random.uniform(0, 0.25))
                         continue
                 delay = min(8.0, delay + 0.6)
@@ -366,7 +384,8 @@ class UnifiedDataCollector:
                         logger.info("collector.fetch ok symbol=%s period=%s rows=%s source=native", symbol, p, rows)
                         _broadcast('SUCCESS', f"collector.fetch ok symbol={symbol} period={p} rows={rows} source=native")
                         return df_native
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Native fetch failed: {e}")
                 return None
             return None
 
@@ -380,8 +399,8 @@ class UnifiedDataCollector:
                 until = float(_no_data_until.get(symbol) or 0)
                 if until and now_ts < until:
                     return {'symbol': symbol, 'success': False, 'records': 0, 'error': 'no_data_cooldown', 'period': target_period}
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to check no-data cooldown: {e}")
 
         # Positive cache: reuse recent successful fetches for the same symbol/period (thread-safe)
         try:
@@ -393,13 +412,14 @@ class UnifiedDataCollector:
                     if df_cached is None or getattr(df_cached, 'empty', True):
                         return {'symbol': symbol, 'success': False, 'records': 0, 'error': 'no_data_cached', 'period': target_period}
                     df = df_cached
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to check fetch cache: {e}")
         for stage in ('chart', 'download', 'yfinance', 'native'):
             if stage == 'chart':
                 try:
                     allow_alt = str(os.getenv('YF_TRY_ALT_PERIODS', '0')).lower() in ('1', 'true', 'yes')
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get YF_TRY_ALT_PERIODS, using False: {e}")
                     allow_alt = False
                 ranges = (('5d', '1mo', target_period) if allow_alt else (target_period,))
                 for rp in ranges:
@@ -417,7 +437,8 @@ class UnifiedDataCollector:
         if df is None or df.empty:
             try:
                 allow_alt = str(os.getenv('YF_TRY_ALT_PERIODS', '0')).lower() in ('1', 'true', 'yes')
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get YF_TRY_ALT_PERIODS, using False: {e}")
                 allow_alt = False
             if allow_alt:
                 for rp in ('1mo', '3mo', '6mo', '1y', '2y'):
@@ -431,8 +452,8 @@ class UnifiedDataCollector:
                 with _cache_lock:
                     _no_data_until[symbol] = time.time() + float(NO_DATA_TTL)
                     _fetch_cache[(symbol, target_period)] = {'df': None, 'ts': time.time()}
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to set no-data cache: {e}")
             return {'symbol': symbol, 'success': False, 'records': 0, 'error': 'no_data'}
 
         # Ensure today's row via intraday aggregation if needed
@@ -451,14 +472,15 @@ class UnifiedDataCollector:
                         intraday = ticker.history(period='1d', interval=interval, auto_adjust=True, prepost=False)
                         if intraday is not None and not intraday.empty:
                             break
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to fetch intraday for {interval}: {e}")
                         time.sleep(0.2)
                 if intraday is not None and not intraday.empty:
                     try:
                         if getattr(intraday.index, 'tz', None) is not None:
                             intraday.index = intraday.index.tz_convert('UTC').tz_localize(None)  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to convert timezone: {e}")
                     intraday['_date_only'] = intraday.index.date  # type: ignore[attr-defined]
                     today_rows = intraday[intraday['_date_only'] == today_date]
                     if not today_rows.empty:
@@ -471,15 +493,15 @@ class UnifiedDataCollector:
                         if today_date not in [x.date() if hasattr(x, 'date') else x for x in df.index]:  # type: ignore[attr-defined]
                             df = pd.concat([df, df_today])
                             target_period = 'intraday_agg'
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to aggregate intraday data: {e}")
 
         # Cache successful result (thread-safe)
         try:
             with _cache_lock:
                 _fetch_cache[(symbol, target_period)] = {'df': df, 'ts': time.time()}
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to cache successful result: {e}")
 
         # Save with proper transaction management
         try:
@@ -506,9 +528,11 @@ class UnifiedDataCollector:
                                 date_list.append(idx.to_pydatetime().date())  # type: ignore[attr-defined]
                             else:
                                 date_list.append(idx)
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to extract date from index: {e}")
                             date_list.append(idx)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to build date_list, using df.index: {e}")
                     date_list = list(df.index)
                 
                 # Single query to get all existing records
@@ -531,7 +555,8 @@ class UnifiedDataCollector:
                             date_val = idx.to_pydatetime().date()  # type: ignore[attr-defined]
                         else:
                             date_val = idx
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to extract date_val, using idx: {e}")
                         date_val = idx
                         
                     # Sanitize OHLCV; skip out-of-range or illogical rows
@@ -582,8 +607,8 @@ class UnifiedDataCollector:
                 # Rollback on error
                 try:
                     db.session.rollback()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to rollback session: {e}")
                 raise inner_e
             
             return {'symbol': symbol, 'success': True, 'records': records_added, 'updated': records_updated, 'method': 'yfinance', 'period': target_period}

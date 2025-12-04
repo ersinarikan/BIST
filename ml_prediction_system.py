@@ -31,7 +31,8 @@ try:
     from statsmodels.tsa.holtwinters import ExponentialSmoothing  # type: ignore
     from statsmodels.tsa.arima.model import ARIMA  # type: ignore
     STATSMODELS_AVAILABLE = True
-except Exception:
+except Exception as e:
+    logger.debug(f"statsmodels not available: {e}")
     STATSMODELS_AVAILABLE = False
 
 
@@ -91,8 +92,8 @@ class MLPredictionSystem:
             # ✅ FIX: Try to set permissions if possible (non-critical if fails)
             try:
                 os.chmod(self.basic_model_dir, 0o775)
-            except Exception:
-                pass  # Non-critical, continue anyway
+            except Exception as e:
+                logger.debug(f"Failed to chmod basic_model_dir (non-critical): {e}")
             
             model_path = self._get_model_path(symbol)
             joblib.dump(models, model_path)  # type: ignore
@@ -166,7 +167,8 @@ class MLPredictionSystem:
                             rmse_penalty = min(0.1, max(0.0, rmse_pct * 2))  # Penalty up to 0.1
                         else:
                             rmse_penalty = 0.05  # Default penalty if can't calculate
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to calculate rmse_penalty for ETS: {e}")
                         rmse_penalty = 0.05  # Default penalty
                     
                     # Combine AIC and RMSE for confidence
@@ -179,7 +181,8 @@ class MLPredictionSystem:
                     else:
                         # No AIC, use RMSE-based confidence
                         model_quality = max(0.35, min(0.45, 0.45 - rmse_penalty))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to calculate model_quality for ETS: {e}")
                     model_quality = 0.45  # Default for ETS
                 
                 for h in self.prediction_horizons:
@@ -217,7 +220,8 @@ class MLPredictionSystem:
                             rmse_penalty = min(0.1, max(0.0, rmse_pct * 2))  # Penalty up to 0.1
                         else:
                             rmse_penalty = 0.05  # Default penalty if can't calculate
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to calculate rmse_penalty for ETS: {e}")
                         rmse_penalty = 0.05  # Default penalty
                     
                     # Combine AIC and RMSE for confidence
@@ -230,7 +234,8 @@ class MLPredictionSystem:
                     else:
                         # No AIC, use RMSE-based confidence
                         model_quality = max(0.3, min(0.4, 0.4 - rmse_penalty))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to calculate model_quality for ARIMA: {e}")
                     model_quality = 0.4  # Default for ARIMA
                 
                 for h in self.prediction_horizons:
@@ -334,7 +339,8 @@ class MLPredictionSystem:
                     confidence = base_conf + data_factor + trend_bonus - vol_penalty
                     # Clamp to reasonable range [0.25, 0.45]
                     confidence = max(0.25, min(0.45, confidence))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to calculate confidence: {e}")
                     # Fallback to default if calculation fails
                     confidence = 0.4
             

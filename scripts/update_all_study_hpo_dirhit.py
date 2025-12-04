@@ -59,8 +59,9 @@ def get_active_hpo_symbols() -> Set[Tuple[str, int]]:
                     symbol = match.group(1)
                     horizon = int(match.group(2))
                     active.add((symbol, horizon))
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).debug(f"Failed to parse active HPO processes: {e}")
     return active
 
 

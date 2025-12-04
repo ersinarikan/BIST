@@ -13,11 +13,13 @@ import math
 import time
 import json
 from typing import Any, Callable
+from pathlib import Path
 try:
     import fcntl  # Posix lock
 except Exception:  # pragma: no cover
     fcntl = None  # type: ignore
-from models import Stock, StockPrice
+from models import Stock  # StockPrice artık kullanılmıyor (doğrudan SQL kullanıyoruz)
+from sqlalchemy import create_engine, text
 from bist_pattern.utils.debug_utils import ddebug as _ddebug
 from bist_pattern.core.config_manager import ConfigManager
 from bist_pattern.utils.error_handler import ErrorHandler
@@ -82,16 +84,19 @@ class HybridPatternDetector:
             self.cache_ttl = 300
         try:
             self.result_cache_max_size = int(os.getenv('PATTERN_RESULT_CACHE_MAX_SIZE', '200'))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get PATTERN_RESULT_CACHE_MAX_SIZE, using 200: {e}")
             self.result_cache_max_size = 200
         # DataFrame kısa süreli cache (DB yükünü azaltmak için)
         try:
             self.data_cache_ttl = int(os.getenv('PATTERN_DATA_CACHE_TTL', '60'))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get PATTERN_DATA_CACHE_TTL, using 60: {e}")
             self.data_cache_ttl = 60
         try:
             self.df_cache_max_size = int(os.getenv('PATTERN_DF_CACHE_MAX_SIZE', '512'))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get PATTERN_DF_CACHE_MAX_SIZE, using 512: {e}")
             self.df_cache_max_size = 512
         self._df_cache: dict[str, dict] = {}
         self._bulk_write_ts: dict[str, float] = {}
@@ -151,7 +156,8 @@ class HybridPatternDetector:
             try:
                 from config import config
                 raw_flag = getattr(config['default'], 'ENABLE_FINGPT', True)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get ENABLE_FINGPT from config, using True: {e}")
                 raw_flag = True  # Default to True if config.py unavailable
         # Normalize to boolean from str/int/bool
         if isinstance(raw_flag, bool):
@@ -171,7 +177,8 @@ class HybridPatternDetector:
                 from fingpt_analyzer import get_fingpt_analyzer  # type: ignore
                 self.fingpt = get_fingpt_analyzer()
                 self.fingpt_available = True
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to initialize FinGPT analyzer: {e}")
                 self.fingpt = None
                 self.fingpt_available = False
         # Async RSS News Provider (non-blocking)
@@ -209,7 +216,8 @@ class HybridPatternDetector:
             if len(self.cache) > self.result_cache_max_size:
                 try:
                     items = sorted(self.cache.items(), key=lambda kv: float(kv[1].get('timestamp', 0)))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to sort cache items, using unsorted: {e}")
                     items = list(self.cache.items())
                 to_remove = max(0, len(self.cache) - self.result_cache_max_size)
                 for i in range(to_remove):
@@ -243,14 +251,15 @@ class HybridPatternDetector:
                 return
             try:
                 items = sorted(self._df_cache.items(), key=lambda kv: float(kv[1].get('ts', 0)))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to sort DF cache items, using unsorted: {e}")
                 items = list(self._df_cache.items())
             to_remove = max(0, len(self._df_cache) - self.df_cache_max_size)
             for i in range(to_remove):
                 self._df_cache.pop(items[i][0], None)
             logger.info(f"DF cache prune: removed={to_remove} size={len(self._df_cache)} max={self.df_cache_max_size}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"DF cache prune failed: {e}")
     
     def _calculate_pattern_agreement(self, patterns, ml_signal, ml_confidence):
         """
@@ -329,7 +338,8 @@ class HybridPatternDetector:
                         if not is_duplicate:
                             bearish_patterns.append(pattern_family)
                             total_conf += conf
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Pattern agreement calculation failed: {e}")
                     continue
             
             # Calculate agreement
@@ -392,7 +402,7 @@ class HybridPatternDetector:
             return 'NEUTRAL'
     
     def get_stock_data(self, symbol, days=None):
-        """PostgreSQL'den hisse verilerini al"""
+        """PostgreSQL'den hisse verilerini al - ✅ FIX: Doğrudan SQL kullanarak PgBouncer transaction pooling ile uyumlu"""
         try:
             # Kısa süreli cache: aynı sembol için tekrar DB'yi yormayalım
             now_ts = time.time()
@@ -401,6 +411,7 @@ class HybridPatternDetector:
                 df_cached = cached.get('df')
                 if df_cached is not None:
                     return df_cached
+            
             # Default days from config
             try:
                 # ✅ FIX: Use ConfigManager for consistent config access
@@ -411,128 +422,123 @@ class HybridPatternDetector:
             # If days is None, use default; if days <= 0, fetch full history (no limit)
             try:
                 use_days = default_days if days is None else int(days)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get use_days, using default_days: {e}")
                 use_days = default_days
+            
+            # ✅ FIX: Doğrudan SQL kullanarak PgBouncer transaction pooling ile uyumlu hale getir
+            # ORM sorguları yerine text() kullanarak fetch_prices() ile tutarlılık sağla
             try:
-                from flask import current_app
-                with current_app.app_context():
-                    # Stock ID'yi bul
-                    stock = Stock.query.filter_by(symbol=symbol.upper()).first()
-                    if not stock:
-                        logger.warning(f"Hisse bulunamadı: {symbol}")
+                # DATABASE_URL'i al (config'den veya secret dosyasından)
+                db_url = os.getenv('DATABASE_URL')
+                if not db_url:
+                    # Secret dosyasından oku (config.py ile aynı mantık)
+                    secret_file = Path('/opt/bist-pattern/.secrets/db_password')
+                    if secret_file.exists():
+                        with open(secret_file, 'r') as f:
+                            db_password = f.read().strip()
+                        db_host = os.getenv('DB_HOST', '127.0.0.1')
+                        db_port = os.getenv('DB_PORT', '6432')
+                        db_name = os.getenv('DB_NAME', 'bist_pattern_db')
+                        db_user = os.getenv('DB_USER', 'bist_user')
+                        db_url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+                    else:
+                        logger.error(f"⚠️ {symbol}: DATABASE_URL not set and secret file not found")
                         # Yahoo Finance fallback dene
                         yahoo_data = self._try_yahoo_finance_fallback(symbol, (use_days if use_days > 0 else None))
                         if yahoo_data is not None:
                             return yahoo_data
                         return None
-                    
-                    # Son N günlük veriyi al (use_days <= 0 ise limitsiz)
-                    query = StockPrice.query.filter_by(stock_id=stock.id)\
-                                .order_by(StockPrice.date.desc())
-                    if use_days > 0:
-                        query = query.limit(use_days)
-                    prices = query.all()
-                    
-                    if not prices:
-                        logger.warning(f"Fiyat verisi bulunamadı: {symbol}")
-                        # Yahoo Finance fallback dene
-                        yahoo_data = self._try_yahoo_finance_fallback(symbol, (use_days if use_days > 0 else None))
-                        if yahoo_data is not None:
-                            return yahoo_data
-                        return None
-                    
-                    # DataFrame'e çevir
-                    data = []
-                    for price in reversed(prices):  # Tarihe göre sırala
-                        data.append({
-                            'date': price.date,
-                            'open': float(price.open_price),
-                            'high': float(price.high_price),
-                            'low': float(price.low_price),
-                            'close': float(price.close_price),
-                            'volume': int(price.volume)
-                        })
-                    
-                    df = pd.DataFrame(data)
-                    df['date'] = pd.to_datetime(df['date'])
-                    df.set_index('date', inplace=True)
-                    
-                    # ✅ HİBRİT YAKLAŞIM: Duplicate date kontrolü (aynı tarihli kayıtlar varsa temizle)
-                    if df.index.duplicated().any():
-                        duplicate_count = df.index.duplicated().sum()
-                        logger.warning(f"{symbol}: {duplicate_count} duplicate date found, dropping (keep='last')")
-                        df = df[~df.index.duplicated(keep='last')]
-                        df = df.sort_index()
-                    
-                    # Cache'e koy
+                
+                # Force PgBouncer port if somehow 5432 got in
+                if ':5432/' in db_url:
+                    db_url = db_url.replace(':5432/', ':6432/')
+                    logger.debug("Fixed DATABASE_URL port from 5432 to 6432")
+                
+                # Engine oluştur (PgBouncer transaction pooling ile uyumlu)
+                engine = create_engine(db_url, pool_pre_ping=True, pool_recycle=3600)
+                
+                # Doğrudan SQL sorgusu (ORM yerine)
+                symbol_upper = symbol.strip().upper()
+                if symbol_upper.startswith('\ufeff'):
+                    symbol_upper = symbol_upper[1:]
+                
+                # Limit belirle (use_days <= 0 ise limitsiz, büyük bir sayı kullan)
+                limit = use_days if use_days > 0 else 10000
+                
+                q = text(
+                    """
+                    SELECT p.date, p.open_price, p.high_price, p.low_price, p.close_price, p.volume
+                    FROM stock_prices p
+                    JOIN stocks s ON s.id = p.stock_id
+                    WHERE s.symbol = :sym
+                    ORDER BY p.date DESC
+                    LIMIT :lim
+                    """
+                )
+                
+                with engine.connect() as conn:
+                    rows = conn.execute(q, {"sym": symbol_upper, "lim": limit}).fetchall()
+                
+                if not rows:
+                    logger.warning(f"Fiyat verisi bulunamadı: {symbol}")
+                    # Yahoo Finance fallback dene
+                    yahoo_data = self._try_yahoo_finance_fallback(symbol, (use_days if use_days > 0 else None))
+                    if yahoo_data is not None:
+                        return yahoo_data
+                    return None
+                
+                # DataFrame'e çevir (fetch_prices() ile aynı format)
+                df = pd.DataFrame([
+                    {
+                        'open': float(r[1]),
+                        'high': float(r[2]),
+                        'low': float(r[3]),
+                        'close': float(r[4]),
+                        'volume': float(r[5]) if r[5] is not None else 0.0
+                    }
+                    for r in rows
+                ], index=[r[0] for r in rows])
+                
+                # ✅ Ensure datetime index (prevents macro merge fallback and TZ mismatches)
+                try:
+                    df.index = pd.to_datetime(df.index).tz_localize(None)
+                except Exception as e:
+                    logger.debug(f"Failed to parse datetime index, trying coerce: {e}")
                     try:
-                        self._df_cache[symbol] = {'df': df, 'ts': now_ts}
-                        self._prune_df_cache()
-                    except Exception:
-                        pass
-                    
-                    return df
-            except RuntimeError:
-                # No app context, create temporary app context
-                from app import create_app
-                temp_app = create_app()
-                with temp_app.app_context():
-                    # Stock ID'yi bul
-                    stock = Stock.query.filter_by(symbol=symbol.upper()).first()
-                    if not stock:
-                        logger.warning(f"Hisse bulunamadı: {symbol}")
-                        # Yahoo Finance fallback dene
-                        yahoo_data = self._try_yahoo_finance_fallback(symbol, (use_days if use_days > 0 else None))
-                        if yahoo_data is not None:
-                            return yahoo_data
-                        return None
-                    
-                    # Son N günlük veriyi al (use_days <= 0 ise limitsiz)
-                    query = StockPrice.query.filter_by(stock_id=stock.id)\
-                                .order_by(StockPrice.date.desc())
-                    if use_days > 0:
-                        query = query.limit(use_days)
-                    prices = query.all()
-                    
-                    if not prices:
-                        logger.warning(f"Fiyat verisi bulunamadı: {symbol}")
-                        # Yahoo Finance fallback dene
-                        yahoo_data = self._try_yahoo_finance_fallback(symbol, (use_days if use_days > 0 else None))
-                        if yahoo_data is not None:
-                            return yahoo_data
-                        return None
-                    
-                    # DataFrame'e çevir
-                    data = []
-                    for price in reversed(prices):  # Tarihe göre sırala
-                        data.append({
-                            'date': price.date,
-                            'open': float(price.open_price),
-                            'high': float(price.high_price),
-                            'low': float(price.low_price),
-                            'close': float(price.close_price),
-                            'volume': int(price.volume)
-                        })
-                    
-                    df = pd.DataFrame(data)
-                    df['date'] = pd.to_datetime(df['date'])
-                    df.set_index('date', inplace=True)
-                    
-                    # ✅ HİBRİT YAKLAŞIM: Duplicate date kontrolü (aynı tarihli kayıtlar varsa temizle)
-                    if df.index.duplicated().any():
-                        duplicate_count = df.index.duplicated().sum()
-                        logger.warning(f"{symbol}: {duplicate_count} duplicate date found, dropping (keep='last')")
-                        df = df[~df.index.duplicated(keep='last')]
-                        df = df.sort_index()
-                    
-                    # Cache'e koy
-                    try:
-                        self._df_cache[symbol] = {'df': df, 'ts': now_ts}
-                        self._prune_df_cache()
-                    except Exception:
-                        pass
-                    
-                    return df
+                        df.index = pd.to_datetime(df.index, errors='coerce').tz_localize(None)
+                    except Exception as e2:
+                        logger.warning(f"Failed to parse datetime index even with coerce: {e2}")
+                
+                df = df.sort_index()
+                
+                # ✅ HİBRİT YAKLAŞIM: Duplicate date kontrolü (aynı tarihli kayıtlar varsa temizle)
+                if df.index.duplicated().any():
+                    duplicate_count = df.index.duplicated().sum()
+                    logger.warning(f"{symbol}: {duplicate_count} duplicate date found, dropping (keep='last')")
+                    df = df[~df.index.duplicated(keep='last')]
+                    df = df.sort_index()
+                
+                # Limit uygula (eğer use_days > 0 ise, son N günü al)
+                if use_days > 0 and len(df) > use_days:
+                    df = df.iloc[-use_days:].copy()
+                
+                # Cache'e koy
+                try:
+                    self._df_cache[symbol] = {'df': df, 'ts': now_ts}
+                    self._prune_df_cache()
+                except Exception as e:
+                    logger.debug(f"Failed to cache DF for {symbol}: {e}")
+                
+                return df
+                
+            except Exception as e:
+                logger.error(f"Veri alma hatası {symbol}: {e}")
+                # Son çare Yahoo Finance fallback
+                yahoo_data = self._try_yahoo_finance_fallback(symbol, days)
+                if yahoo_data is not None:
+                    return yahoo_data
+                return None
             
         except Exception as e:
             logger.error(f"Veri alma hatası {symbol}: {e}")
@@ -560,7 +566,8 @@ class HybridPatternDetector:
                 from bist_pattern.utils.symbols import sanitize_symbol, to_yf_symbol
                 clean = sanitize_symbol(symbol)
                 yf_symbol = to_yf_symbol(clean)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to sanitize/convert symbol, using fallback: {e}")
                 yf_symbol = (symbol or '').upper()
                 if not yf_symbol.endswith('.IS'):
                     yf_symbol = f"{yf_symbol}.IS"
@@ -611,8 +618,8 @@ class HybridPatternDetector:
                             now_ts = time.time()
                             self._df_cache[symbol] = {'df': processed_data, 'ts': now_ts}
                             self._prune_df_cache()
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to cache processed_data for {symbol}: {e}")
                         
                         return processed_data
                     else:
@@ -645,8 +652,8 @@ class HybridPatternDetector:
                         now_ts = time.time()
                         self._df_cache[symbol] = {'df': processed_data, 'ts': now_ts}
                         self._prune_df_cache()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to cache processed_data (native) for {symbol}: {e}")
                     
                     return processed_data
                 else:
@@ -781,8 +788,8 @@ class HybridPatternDetector:
                 # Only log if not in training mode (DISABLE_ML_PREDICTION_DURING_TRAINING not set)
                 if not os.getenv('DISABLE_ML_PREDICTION_DURING_TRAINING', '0').lower() in ('1', 'true', 'yes', 'on'):
                     logger.warning(f"PROBE analyze_stock pid={_os.getpid()} argv={_argv} symbol={symbol}")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"PROBE logging failed: {e}")
             try:
                 # Progress broadcast: analysis start (best-effort)
                 from flask import current_app
@@ -792,8 +799,8 @@ class HybridPatternDetector:
                 except RuntimeError:
                     # No app context, skip broadcast
                     pass
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Progress broadcast failed: {e}")
             # ✅ FIX: Cache key symbol-based (not minute-based!)
             # Automation results should be reused by user requests
             cache_key = symbol  # Simple, effective!
@@ -824,7 +831,8 @@ class HybridPatternDetector:
                 if os.path.exists(cpath):
                     with open(cpath, 'r') as cf:
                         calib_override = _json.load(cf) or {}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to load calibration override: {e}")
                 calib_override = None
 
             # Veri al
@@ -860,8 +868,8 @@ class HybridPatternDetector:
                 # Only log if not in training mode (DISABLE_ML_PREDICTION_DURING_TRAINING not set)
                 if not os.getenv('DISABLE_ML_PREDICTION_DURING_TRAINING', '0').lower() in ('1', 'true', 'yes', 'on'):
                     logger.warning(f"PROBE before_advanced_ta pid={_os.getpid()} argv={_argv} symbol={symbol}")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"PROBE logging failed (advanced_ta): {e}")
             if self.advanced_detector and ADVANCED_PATTERNS_AVAILABLE:
                 try:
                     adv_raw = self.advanced_detector.analyze_all_patterns(data)
@@ -880,7 +888,8 @@ class HybridPatternDetector:
                                 advanced_patterns.append(ap)
                             else:
                                 advanced_patterns.append(ap)
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to process advanced pattern range: {e}")
                             advanced_patterns.append(ap)
                 except Exception as e:
                     logger.error(f"Advanced pattern analysis hatası: {e}")
@@ -896,7 +905,8 @@ class HybridPatternDetector:
                     if not hasattr(self, '_visual_thread_pool'):
                         try:
                             max_workers = int(os.getenv('VISUAL_THREAD_POOL_WORKERS', '1'))
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to get VISUAL_THREAD_POOL_WORKERS, using 1: {e}")
                             max_workers = 1
                         self._visual_thread_pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="YOLO")
                         self._visual_results = {}
@@ -961,7 +971,8 @@ class HybridPatternDetector:
                                                             'details': {'detection_index': i},
                                                             'range': {'start_index': max(0, len(data) - 30), 'end_index': len(data) - 1}
                                                         })
-                                                except Exception:
+                                                except Exception as e:
+                                                    logger.debug(f"Failed to add range to visual pattern: {e}")
                                                     continue
                                 
                                 # Store result in thread-safe way
@@ -988,8 +999,8 @@ class HybridPatternDetector:
                             cached = self._visual_results.get(symbol)
                             if cached and (time.time() - cached['timestamp']) < 300:  # 5 min cache
                                 cached_result = cached
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to check cached visual result: {e}")
                     
                     # If no cache, wait briefly for fresh result (2 sec timeout)
                     if not cached_result:
@@ -1039,7 +1050,8 @@ class HybridPatternDetector:
                     try:
                         from config import config
                         raw_flag = getattr(config['default'], 'ENABLE_FINGPT', True)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to get ENABLE_FINGPT from config, using True: {e}")
                         raw_flag = True
                 if isinstance(raw_flag, bool):
                     enable_fingpt = raw_flag
@@ -1080,11 +1092,13 @@ class HybridPatternDetector:
                             sig = self.fingpt.get_sentiment_signal(sent_res)
                             try:
                                 conf = float(sent_res.get('confidence', 0.0) or 0.0)
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to parse FinGPT confidence: {e}")
                                 conf = 0.0
                             try:
                                 news_count = int(sent_res.get('news_count', 0) or 0)
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to parse FinGPT news_count: {e}")
                                 news_count = 0
                         else:
                             logger.debug(f"📰 FinGPT returned invalid result for {symbol}: {type(sent_res)}")
@@ -1217,11 +1231,13 @@ class HybridPatternDetector:
                 def _calibrate_delta(delta: float) -> float:
                     try:
                         tau = float(os.getenv('DELTA_CAL_TAU', '0.08'))
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to get DELTA_CAL_TAU, using 0.08: {e}")
                         tau = 0.08
                     try:
                         return float(math.tanh(delta / max(1e-9, tau)) * tau)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Delta calibration calculation failed: {e}")
                         return float(delta)
                 
                 def _emit(hkey: str, pred_px: float, source: str, base_w: float = 0.6, reliability: float | None = None):
@@ -1235,7 +1251,8 @@ class HybridPatternDetector:
                         if not isinstance(rel, (int, float)):
                             try:
                                 rel = float(os.getenv('BASIC_RELIABILITY', '0.6')) if source.upper() in ('ML_PREDICTOR', 'ML') else 0.65
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to get BASIC_RELIABILITY, using 0.6: {e}")
                                 rel = 0.6
                         rel = max(0.0, min(1.0, float(rel)))
                         if abs(delta_pct) < 0.003:
@@ -1253,8 +1270,8 @@ class HybridPatternDetector:
                             'source': src,
                             'delta_pct': float(delta_pct)
                         })
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to emit pattern: {e}")
                 # Basic ML predictions: ignore metadata keys like 'timestamp'/'model'
                 basic = ml_predictions if isinstance(ml_predictions, dict) else {}
                 basic_count = 0
@@ -1269,11 +1286,13 @@ class HybridPatternDetector:
                         # Basic reliability from env (no per-horizon metric)
                         try:
                             basic_rel = float(os.getenv('BASIC_RELIABILITY', '0.6'))
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to get BASIC_RELIABILITY, using 0.6: {e}")
                             basic_rel = 0.6
                         _emit(hk, float(px), 'ML_PREDICTOR', reliability=basic_rel)
                         basic_count += 1
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to process basic ML prediction for {hk}: {e}")
                         continue
                 
                 # Debug: Log basic ML status
@@ -1312,7 +1331,8 @@ class HybridPatternDetector:
                                         # Cap at 0.95 to remain conservative
                                         rel_hint = 0.5 + (r2 - 0.5) * 0.9
                                         rel_hint = min(0.95, rel_hint)
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to calculate rel_hint: {e}")
                                 rel_hint = None
                         elif isinstance(pobj, (int, float)):
                             pred_val = float(pobj)
@@ -1320,7 +1340,8 @@ class HybridPatternDetector:
                             continue
                         _emit(hk, float(pred_val), 'ENHANCED_ML', base_w=0.7, reliability=rel_hint)
                         enh_count += 1
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to process enhanced ML prediction for {hk}: {e}")
                         continue
                 
                 # Debug: Log enhanced ML status
@@ -1369,10 +1390,12 @@ class HybridPatternDetector:
                                 if price is not None:
                                     try:
                                         basic_rel = float(os.getenv('BASIC_RELIABILITY', '0.6'))
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"Failed to get basic reliability: {e}")
                                         basic_rel = 0.6
                                     out[str(h).lower()] = {'source': 'basic', 'price': price, 'reliability': float(max(0.0, min(1.0, basic_rel)))}
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to process basic prediction for {h}: {e}")
                                 continue
                     return out
                 
@@ -1401,13 +1424,15 @@ class HybridPatternDetector:
                                                 rel = r2
                                             else:
                                                 rel = min(0.95, 0.5 + (r2 - 0.5) * 0.9)
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"Failed to get enhanced reliability: {e}")
                                         rel = None
                                 if price is not None:
                                     if not isinstance(rel, (int, float)):
                                         rel = 0.65
                                     out[str(h).lower()] = {'source': 'enhanced', 'price': price, 'reliability': float(max(0.0, min(1.0, rel)))}
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to process enhanced prediction for {h}: {e}")
                                 continue
                     return out
                 bmap = _norm_basic(ml_predictions)
@@ -1417,7 +1442,8 @@ class HybridPatternDetector:
                 # Policy: enhanced-first if available (env-driven)
                 try:
                     enhanced_first = (os.getenv('ENHANCED_FIRST', '1').lower() in ('1', 'true', 'yes', 'on'))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get ENHANCED_FIRST, using True: {e}")
                     enhanced_first = True
                 # Regime score: use realized volatility to modulate weights (higher vol → favor enhanced)
                 try:
@@ -1426,33 +1452,39 @@ class HybridPatternDetector:
                     recent_ret60 = data['close'].pct_change().tail(60)
                     vol60 = float(recent_ret60.std()) if len(recent_ret60) > 5 else 0.0
                     regime = min(1.0, max(0.0, (vol20 / max(1e-6, vol60)) if vol60 > 0 else vol20 / 0.05))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Regime score calculation failed: {e}")
                     regime = 0.5
 
                 # Aggregate evidence from patterns and sentiment
                 # Pre-compute visual confirmation and sentiment gating thresholds
                 try:
                     enable_yolo_confirm = (os.getenv('ENABLE_YOLO_CONFIRM', '1').lower() in ('1', 'true', 'yes', 'on'))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get ENABLE_YOLO_CONFIRM, using True: {e}")
                     enable_yolo_confirm = True
                 try:
                     yolo_confirm_mult = float(os.getenv('YOLO_CONFIRM_MULT', '1.5'))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get YOLO_CONFIRM_MULT, using 1.5: {e}")
                     yolo_confirm_mult = 1.5
                 try:
                     yolo_min_conf_ev = float(os.getenv('YOLO_MIN_CONF_EVID', '0.25'))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get YOLO_MIN_CONF_EVID, using 0.25: {e}")
                     yolo_min_conf_ev = 0.25
                 try:
                     # ⚡ IMPROVED: Lowered threshold from 0.65 to 0.50 for better Turkish model compatibility
                     # Turkish BERT produces lower confidence scores than English FinBERT
                     # 0.50 threshold allows 45% more sentiment data to impact ML predictions
                     fingpt_min_conf = float(os.getenv('FINGPT_MIN_CONF', '0.50'))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get FINGPT_MIN_CONF, using 0.50: {e}")
                     fingpt_min_conf = 0.50
                 try:
                     fingpt_min_news = int(os.getenv('FINGPT_MIN_NEWS', '1'))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get FINGPT_MIN_NEWS, using 1: {e}")
                     fingpt_min_news = 1
 
                 # Visual confirmation flags (recent YOLO detections)
@@ -1464,14 +1496,16 @@ class HybridPatternDetector:
                             try:
                                 if float(_vp.get('confidence', 0.0)) < yolo_min_conf_ev:
                                     continue
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to process visual pattern: {e}")
                                 continue
                             _sig = str(_vp.get('signal', '')).upper()
                             if _sig == 'BULLISH':
                                 visual_bullish = True
                             elif _sig == 'BEARISH':
                                 visual_bearish = True
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Visual confirmation check failed: {e}")
                     visual_bullish = visual_bearish = False
 
                 def _agg_evidence(h_days: int):
@@ -1499,7 +1533,8 @@ class HybridPatternDetector:
                                 if src == 'FINGPT':
                                     try:
                                         nnews = int(p.get('news_count', 0) or 0)
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"Failed to parse FinGPT news_count: {e}")
                                         nnews = 0
                                     if (confp >= fingpt_min_conf) and (nnews >= fingpt_min_news):
                                         w = confp * h_w * src_w
@@ -1516,12 +1551,14 @@ class HybridPatternDetector:
                                             w *= yolo_confirm_mult
                                     pat_score += sgn * w
                                     pat_w += w
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to process pattern evidence: {e}")
                                 continue
                         pat_val = (pat_score / pat_w) if pat_w > 0 else 0.0
                         sent_val = (sent_score / sent_w) if sent_w > 0 else 0.0
                         return max(-1.0, min(1.0, pat_val)), max(-1.0, min(1.0, sent_val))
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(f"Evidence aggregation failed: {e}")
                         return 0.0, 0.0
 
                 # --- Helper: 1D directional booster (lightweight, on-cycle) ---
@@ -1529,7 +1566,8 @@ class HybridPatternDetector:
                     try:
                         try:
                             from sklearn.linear_model import LogisticRegression
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to import LogisticRegression: {e}")
                             return None
                         import numpy as np  # local import
                         import pandas as pd  # local import
@@ -1597,7 +1635,8 @@ class HybridPatternDetector:
                         clf.fit(X_train.values, y_train.values)
                         p_up = float(clf.predict_proba(X_last.values)[0, 1])
                         return p_up
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"1D booster probability calculation failed: {e}")
                         return None
 
                 for h in horizons:
@@ -1623,19 +1662,22 @@ class HybridPatternDetector:
                                     base_w = (0.6 + 0.2 * regime) if src == 'enhanced' else (0.65 - 0.15 * regime)
                                     rr = float(rel) if isinstance(rel, (int, float)) else (0.65 if src == 'enhanced' else 0.6)
                                     conf = max(0.25, min(0.95, base_w * rr * min(1.0, abs(cdelta) / move_scale)))
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Confidence calculation failed: {e}")
                                     conf = max(0.25, min(0.95, abs(cdelta) / 0.05))
                                 
                                 # Evidence-based confidence adjustment (applied to base model confidence)
                                 try:
                                     h_days = int(str(h).replace('d', '') or 7)
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Failed to parse h_days, using 7: {e}")
                                     h_days = 7
                                 # Gate by env: PATTERN_SENTI_META (default on)
                                 enable_meta = True
                                 try:
                                     enable_meta = (os.getenv('PATTERN_SENTI_META', '1').lower() in ('1', 'true', 'yes', 'on'))
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Failed to get PATTERN_SENTI_META, using True: {e}")
                                     enable_meta = True
                                 pat_s, sent_s = _agg_evidence(h_days)
                                 
@@ -1648,7 +1690,8 @@ class HybridPatternDetector:
                                 
                                 try:
                                     use_new_validation = (os.getenv('USE_PATTERN_AGREEMENT', '1').lower() in ('1', 'true', 'yes', 'on'))
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Failed to get USE_PATTERN_AGREEMENT, using True: {e}")
                                     use_new_validation = True
                                 
                                 if use_new_validation:
@@ -1660,7 +1703,8 @@ class HybridPatternDetector:
                                             ml_signal='BULLISH' if cdelta > 0 else 'BEARISH',
                                             ml_confidence=conf
                                         )
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"Pattern agreement calculation failed: {e}")
                                         pattern_agreement = 0.0
                                     evidence_boost = pattern_agreement  # Already clamped in function
                                     # ✅ FIX: Calculate signed_adj for delta tilt even when using new validation
@@ -1673,7 +1717,8 @@ class HybridPatternDetector:
                                             w_sent = float(_wmap.get('w_sent', 0.0)) or 0.0
                                         else:
                                             raise KeyError('no weights')
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"Failed to load weights from param_store (new validation): {e}")
                                         if h_days <= 1:
                                             w_pat, w_sent = 0.12, 0.10
                                         elif h_days <= 3:
@@ -1696,7 +1741,8 @@ class HybridPatternDetector:
                                             w_sent = float(_wmap.get('w_sent', 0.0)) or 0.0
                                         else:
                                             raise KeyError('no weights')
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"Failed to load weights from param_store (new validation): {e}")
                                         if h_days <= 1:
                                             w_pat, w_sent = 0.12, 0.10
                                         elif h_days <= 3:
@@ -1715,7 +1761,8 @@ class HybridPatternDetector:
                                 booster_p = None
                                 try:
                                     enable_booster = (os.getenv('ENABLE_1D_BOOSTER', '1').lower() in ('1', 'true', 'yes', 'on'))
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Failed to get ENABLE_1D_BOOSTER, using True: {e}")
                                     enable_booster = True
                                 if enable_booster and h_days <= 1:
                                     booster_p = _compute_1d_booster_prob(data)
@@ -1730,7 +1777,8 @@ class HybridPatternDetector:
                                 # yapılan tahminlerin gerçekleşme oranına (dir_hit rate) göre confidence'ı ayarlar.
                                 try:
                                     online_adj = self._get_empirical_confidence_adjustment(str(h), conf)
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Empirical confidence adjustment failed: {e}")
                                     online_adj = 0.0
                                 
                                 # Add evidence boost directly to base model confidence
@@ -1742,11 +1790,14 @@ class HybridPatternDetector:
                                 conf_final = max(0.25, min(0.95, conf_after_meta_and_booster + online_adj))
 
                                 # Small horizon-aware delta tilt using evidence alignment (strictly bounded)
+                                # ✅ FIX: Initialize cdelta_tilted before try block to avoid UnboundLocalError
+                                cdelta_tilted = cdelta
+                                delta_contrib = 0.0
                                 try:
-                                    try:
-                                        enable_delta_tilt = (os.getenv('ENABLE_DELTA_TILT', '1').lower() in ('1', 'true', 'yes', 'on'))
-                                    except Exception:
-                                        enable_delta_tilt = True
+                                    enable_delta_tilt = (os.getenv('ENABLE_DELTA_TILT', '1').lower() in ('1', 'true', 'yes', 'on'))
+                                except Exception as e:
+                                    logger.debug(f"Failed to get ENABLE_DELTA_TILT, using True: {e}")
+                                    enable_delta_tilt = True
                                     thr_map = {'1d': 0.008, '3d': 0.021, '7d': 0.03, '14d': 0.03, '30d': 0.025}
                                     alpha_map = {'1d': 0.25, '3d': 0.15, '7d': 0.10, '14d': 0.08, '30d': 0.08}
                                     h_key = str(h)
@@ -1784,7 +1835,8 @@ class HybridPatternDetector:
                                     if cdelta_tilted < -0.5:
                                         cdelta_tilted = -0.5
                                     delta_contrib = (cdelta_tilted - cdelta)
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Delta tilt calculation failed: {e}")
                                     cdelta_tilted = cdelta
                                     delta_contrib = 0.0
 
@@ -1834,7 +1886,8 @@ class HybridPatternDetector:
                             if chall and frac < max(0.0, min(1.0, traffic)):
                                 th = chall
                                 ab_label = 'ab:chall'
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"A/B label calculation failed: {e}")
                             ab_label = 'ab:prod'
                         # ✅ FIX: Use sensible defaults if thresholds are missing (0.0 would disable thresholds)
                         # Default to conservative thresholds if not found in param_store
@@ -1847,7 +1900,8 @@ class HybridPatternDetector:
                                 penalty_factor = float(calib_override.get('penalty_factor'))
                             else:
                                 penalty_factor = float(os.getenv('THRESHOLD_PENALTY_FACTOR', '0.95'))
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to get THRESHOLD_PENALTY_FACTOR, using 0.95: {e}")
                             penalty_factor = 0.95
                         
                         # Apply threshold penalty if signal is below thresholds
@@ -1857,17 +1911,17 @@ class HybridPatternDetector:
                                 if abs(float(be.get('delta_pct', 0.0))) < delta_thr or float(be.get('confidence', 0.0)) < conf_thr:
                                     # Demote confidence smoothly (softer penalty temporarily)
                                     be['confidence'] = max(0.25, float(be.get('confidence', 0.0)) * penalty_factor)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"Failed to apply threshold penalty: {e}")
                             # Tag param version used for A/B attribution
                             try:
                                 pv = str((store or {}).get('generated_at') or '')
                                 be['param_version'] = (pv + '|' + ab_label) if pv else ab_label
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"Failed to tag param_version: {e}")
                         # ⚡ REMOVED: Isotonic calibration (removed from both training and prediction for consistency)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Confidence adjustment failed: {e}")
                     
                     # ✅ FIX: Add current horizon to ml_unified dictionary (inside loop scope)
                     # Only add if there's actual data
@@ -1901,7 +1955,8 @@ class HybridPatternDetector:
             }
             # --- Feedback logging: write one row per horizon into predictions_log (best-effort)
             try:
-                from models import PredictionsLog, Stock  # type: ignore
+                from models import PredictionsLog  # type: ignore
+                # Stock already imported at top of file (line 21)
                 
                 # Training/detect-only context gate: skip DB writes in training or when explicitly disabled
                 try:
@@ -1913,7 +1968,8 @@ class HybridPatternDetector:
                         or (_os.getenv('DISABLE_PREDICTIONS_LOG', '0').lower() in ('1', 'true', 'yes', 'on'))
                         or (_os.getenv('DETECT_ONLY', '0').lower() in ('1', 'true', 'yes', 'on'))
                     )
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to check skip_predlog, using False: {e}")
                     _skip_predlog = False
                 if _skip_predlog:
                     logger.debug(f"🛑 Skipping PredictionsLog write for {symbol} (training/detect-only context)")
@@ -1931,7 +1987,8 @@ class HybridPatternDetector:
                 try:
                     st = Stock.query.filter_by(symbol=symbol.upper()).first()
                     stock_id = getattr(st, 'id', None)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to resolve stock_id for {symbol}: {e}")
                     stock_id = None
                 # Fill missing horizons from enhanced/basic predictions (even if ml_unified partially filled)
                 try:
@@ -2040,7 +2097,8 @@ class HybridPatternDetector:
                                 ev = src_entry.get('evidence') or {}
                                 pscore = float(ev.get('pattern_score')) if isinstance(ev.get('pattern_score'), (int, float)) else None
                                 sscore = float(ev.get('sentiment_score')) if isinstance(ev.get('sentiment_score'), (int, float)) else None
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to extract evidence scores: {e}")
                                 pscore = sscore = None
                         # ⚡ FIX: param_version from src_entry (contains ab:chall or ab:prod tag)
                         # First try to get from src_entry (set during threshold application)
@@ -2054,7 +2112,8 @@ class HybridPatternDetector:
                                 pv_base = str(_ps.get('generated_at') or '') or None
                                 # Default to 'ab:prod' if no tag is present
                                 param_version = (pv_base + '|ab:prod') if pv_base else 'ab:prod'
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to get param_version from param_store: {e}")
                                 param_version = 'ab:prod'  # Default tag
                         log = PredictionsLog(
                             stock_id=stock_id,
@@ -2129,7 +2188,8 @@ class HybridPatternDetector:
                     now_ts = time.time()
                     try:
                         throttle_seconds = int(os.getenv('ENH_WRITE_THROTTLE_SECONDS', '900'))
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to get ENH_WRITE_THROTTLE_SECONDS, using 900: {e}")
                         throttle_seconds = 900
                     last_ts = float(self._bulk_write_ts.get(symbol, 0.0))
 
@@ -2142,11 +2202,12 @@ class HybridPatternDetector:
                             if getattr(mlc_for_write, 'enhanced_ml', None) and mlc_for_write.enhanced_ml.has_trained_models(symbol):
                                 try:
                                     mlc_for_write.enhanced_ml.load_trained_models(symbol)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug(f"Failed to load trained models for enhanced write: {e}")
                                 # Use same data frame
                                 cur_enhanced = mlc_for_write.enhanced_ml.predict_enhanced(symbol, data) or {}
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to get cur_enhanced: {e}")
                             cur_enhanced = {}
 
                     if (now_ts - last_ts) >= throttle_seconds and (cur_enhanced or ml_predictions):
@@ -2158,7 +2219,8 @@ class HybridPatternDetector:
                             if os.path.exists(path):
                                 with open(path, 'r') as rf:
                                     obj = json.load(rf) or {'predictions': {}}
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Failed to load bulk predictions from {path}: {e}")
                             obj = {'predictions': {}}
 
                         preds = obj.setdefault('predictions', {})
@@ -2182,30 +2244,30 @@ class HybridPatternDetector:
                                 with open(lock_path, 'a') as lf:
                                     try:
                                         fcntl.flock(lf, fcntl.LOCK_EX)
-                                    except Exception:
-                                        pass
+                                    except Exception as e:
+                                        logger.debug(f"Failed to acquire lock: {e}")
                                     with open(tmp_path, 'w') as wf:
                                         wf.write(payload)
                                         try:
                                             wf.flush()
                                             os.fsync(wf.fileno())
-                                        except Exception:
-                                            pass
+                                        except Exception as e:
+                                            logger.debug(f"Failed to fsync bulk predictions: {e}")
                                     try:
                                         os.replace(tmp_path, path)
                                     finally:
                                         try:
                                             fcntl.flock(lf, fcntl.LOCK_UN)
-                                        except Exception:
-                                            pass
+                                        except Exception as e:
+                                            logger.debug(f"Failed to release lock: {e}")
                             else:
                                 with open(tmp_path, 'w') as wf:
                                     wf.write(payload)
                                     try:
                                         wf.flush()
                                         os.fsync(wf.fileno())
-                                    except Exception:
-                                        pass
+                                    except Exception as e:
+                                        logger.debug(f"Failed to fsync bulk predictions (no lock): {e}")
                                 os.replace(tmp_path, path)
                             self._bulk_write_ts[symbol] = now_ts
                             _ddebug(f"✅ Enhanced merge attempt: sym={symbol} wrote_enh={bool(ent.get('enhanced'))}", logger)
@@ -2213,8 +2275,8 @@ class HybridPatternDetector:
                             try:
                                 if os.path.exists(tmp_path):
                                     os.remove(tmp_path)
-                            except Exception:
-                                pass
+                            except Exception as e2:
+                                logger.debug(f"Failed to cleanup after bulk write error: {e2}")
                             logger.error(f"Error writing bulk predictions for {symbol}: {e}")
                     else:
                         # Skip with reason for diagnostics (best-effort)
@@ -2255,8 +2317,8 @@ class HybridPatternDetector:
                         f"features: ML={int(ml_on)} ENH={int(enh_on)} VIS={int(vis_on)} ADV={int(adv_on)} FG={int(fg_on)}"
                     )
                     flask_app.broadcast_log('INFO', msg, 'ai_analysis')  # type: ignore[attr-defined]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to broadcast AI analysis summary: {e}")
             # Persist compact last-signal snapshot for dashboards (non-breaking)
             try:
                 log_dir = '/opt/bist-pattern/logs'
@@ -2267,7 +2329,8 @@ class HybridPatternDetector:
                     if os.path.exists(snap_path):
                         with open(snap_path, 'r') as rf:
                             snap = json.load(rf) or {}
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to load signals_last.json: {e}")
                     snap = {}
                 # Include VISUAL_YOLO evidence (top up to 3 by confidence) for UI
                 visual_evidence = []
@@ -2276,7 +2339,8 @@ class HybridPatternDetector:
                     vis_sorted = sorted(vis, key=lambda p: float(p.get('confidence', 0.0)), reverse=True)
                     for p in vis_sorted[:3]:
                         visual_evidence.append({'pattern': p.get('pattern'), 'confidence': float(p.get('confidence', 0.0))})
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to extract visual evidence: {e}")
                     visual_evidence = []
 
                 # Include FinGPT sentiment evidence (compact) for UI counters
@@ -2292,7 +2356,8 @@ class HybridPatternDetector:
                             'confidence': float(p.get('confidence', 0.0) or 0.0),
                             'news_count': int(p.get('news_count', 0) or 0)
                         })
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to extract FinGPT evidence: {e}")
                     fingpt_evidence = []
 
                 snap[symbol] = {
@@ -2305,8 +2370,8 @@ class HybridPatternDetector:
                 }
                 with open(snap_path, 'w') as wf:
                     json.dump(snap, wf)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to save signals_last.json: {e}")
 
             try:
                 from flask import current_app
@@ -2328,8 +2393,8 @@ class HybridPatternDetector:
                 except Exception as e:
                     logger.warning(f"⚠️ Live signal broadcast error for {symbol}: {e}")
                     
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"User signal broadcast failed: {e}")
             
             # Cache'e TTL ile kaydet
             self.cache[cache_key] = {
@@ -2345,14 +2410,14 @@ class HybridPatternDetector:
                 file_cache_dir = _os.path.join(log_dir, 'pattern_cache')
                 try:
                     _os.makedirs(file_cache_dir, exist_ok=True)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to create file_cache_dir: {e}")
                 fpath = _os.path.join(file_cache_dir, f'{symbol}.json')
                 with open(fpath, 'w') as wf:
                     _json.dump(result, wf)
-            except Exception:
+            except Exception as e:
                 # Best-effort only; ignore persistence errors to avoid breaking analysis
-                pass
+                logger.debug(f"Failed to persist file cache for {symbol}: {e}")
             
             # Cache cleanup - 100'den fazla entry varsa eski olanları temizle
             if len(self.cache) > self.result_cache_max_size:
@@ -2368,8 +2433,8 @@ class HybridPatternDetector:
                 overall = (result or {}).get('overall_signal') or {}
                 if overall and flask_app and hasattr(flask_app, 'broadcast_log'):
                     flask_app.broadcast_log('INFO', f"{symbol}: {overall.get('signal', '?')} ({overall.get('confidence', 0):.2f})", 'ai_analysis')  # type: ignore[attr-defined]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to broadcast overall signal: {e}")
 
             return result
             
@@ -2479,7 +2544,8 @@ class HybridPatternDetector:
                     # Weighted threshold (environment-driven)
                     # Default 2.0 = requires strong combined confidence
                     weighted_threshold = float(os.getenv('WEIGHTED_CONSENSUS_THRESHOLD', '2.0'))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get WEIGHTED_CONSENSUS_THRESHOLD, using 2.0: {e}")
                     weighted_threshold = 2.0
                 
                 # Collect ML/Enhanced patterns with weights
@@ -2536,11 +2602,13 @@ class HybridPatternDetector:
                 import os  # type: ignore
                 try:
                     vol_high = float(os.getenv('VOL_HIGH_THRESHOLD', '0.10'))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get VOL_HIGH_THRESHOLD, using 0.10: {e}")
                     vol_high = 0.10
                 try:
                     vol_low = float(os.getenv('VOL_LOW_THRESHOLD', '0.03'))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get VOL_LOW_THRESHOLD, using 0.03: {e}")
                     vol_low = 0.03
                 weight_scale = 1.0
                 if isinstance(upper, (int, float)) and isinstance(lower, (int, float)) and (upper + lower) != 0:
@@ -2551,8 +2619,8 @@ class HybridPatternDetector:
                         weight_scale = 1.10
                 if weight_scale != 1.0 and signals:
                     signals = [(s, max(0.0, min(1.0, c * weight_scale)), r) for (s, c, r) in signals]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Volatility-aware weighting failed: {e}")
 
             # Overall calculation
             if not signals:
@@ -2597,6 +2665,7 @@ class HybridPatternDetector:
 
     def _load_param_store(self):
         """Load param_store.json once (best-effort)."""
+        path = None
         try:
             if hasattr(self, '_param_store') and isinstance(self._param_store, dict):
                 return self._param_store
@@ -2609,7 +2678,9 @@ class HybridPatternDetector:
             with open(path, 'r') as rf:
                 self._param_store = _json.load(rf) or {}
             return self._param_store
-        except Exception:
+        except Exception as e:
+            path_str = path if path else 'param_store.json'
+            logger.debug(f"Failed to load param_store from {path_str}: {e}")
             self._param_store = {}
             return self._param_store
     
@@ -2663,11 +2734,11 @@ class HybridPatternDetector:
                                             # This horizon doesn't have enough data → skip adjustment
                                             logger.debug(f"⚠️ Online adjustment skipped for {horizon}: insufficient data ({skipped.get('reason', 'not_enough_samples')})")
                                             return 0.0
-                            except Exception:
-                                pass  # If param_store can't be read, continue (may not exist yet)
-            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Failed to check skipped_horizons: {e}")  # If param_store can't be read, continue (may not exist yet)
+            except Exception as e:
+                logger.debug(f"Failed to read calibration_state, assuming bypass=True: {e}")
                 # If we can't read calibration_state, assume bypass=True (safe default)
-                pass
             
             # Gate by environment variable (default: ON)
             enable_online_calib = ConfigManager.get('ENABLE_ONLINE_CONFIDENCE_ADJUSTMENT', '1').lower() in ('1', 'true', 'yes')
@@ -2691,7 +2762,8 @@ class HybridPatternDetector:
                 from flask import current_app
                 if not current_app:
                     return 0.0
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Not in Flask context (e.g., during training): {e}")
                 # Not in Flask context (e.g., during training) → skip
                 return 0.0
             
