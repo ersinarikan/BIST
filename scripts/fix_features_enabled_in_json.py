@@ -14,7 +14,7 @@ import shutil
 sys.path.insert(0, '/opt/bist-pattern')
 os.environ['PYTHONPATH'] = '/opt/bist-pattern'
 
-from scripts.continuous_hpo_training_pipeline import STATE_FILE
+from scripts.continuous_hpo_training_pipeline import STATE_FILE  # noqa: E402
 
 
 def load_state() -> Dict:
@@ -38,7 +38,7 @@ def fix_features_enabled(json_file: Path, dry_run: bool = False) -> bool:
         model_choice = best_params.get('model_choice', 'unknown')
         
         if model_choice == 'unknown':
-            print(f"  ⚠️ model_choice unknown, skipping")
+            print("  ⚠️ model_choice unknown, skipping")
             return False
         
         # Get feature flags from best_params
@@ -165,7 +165,7 @@ def main():
                     symbol = parts[0]
                     try:
                         horizon = int(parts[1].replace('d', ''))
-                    except:
+                    except Exception:
                         continue
                 else:
                     continue
@@ -183,7 +183,7 @@ def main():
         pattern = f"optuna_pilot_features_on_h{args.horizons[0]}_c{current_cycle}_*.json"
         json_files = list(results_dir.glob(pattern))
     
-    print(f"📊 Fixing features_enabled in JSON files")
+    print("📊 Fixing features_enabled in JSON files")
     print(f"🔄 Cycle: {current_cycle}")
     print(f"🔍 Dry-run: {args.dry_run}")
     if symbols_to_fix:
@@ -230,4 +230,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

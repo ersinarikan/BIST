@@ -479,20 +479,29 @@ class UIRenderer {
   _buildPatternBadges(analysis, maxCount) {
     const patterns = Array.isArray(analysis.patterns) ? analysis.patterns : [];
     
-    // ✅ FIX: Debug log to check FINGPT patterns
-    const fingptPatterns = patterns.filter(p => (p.source || '').toUpperCase() === 'FINGPT');
-    if (fingptPatterns.length > 0) {
-      logDebug('_buildPatternBadges - FINGPT patterns found:', fingptPatterns.length);
-    }
-    
-    return patterns
-      .filter(p => {
+    // ✅ FIX: Prioritize FinGPT patterns - show them first
+    const filteredPatterns = patterns.filter(p => {
         const src = (p.source || '').toUpperCase();
         // Exclude ML patterns (they're shown in ML unified section)
         // ✅ FIX: FINGPT patterns should be included
         return src !== 'ML_PREDICTOR' && src !== 'ENHANCED_ML';
-      })
-      .slice(0, Math.max(0, maxCount))
+      });
+    
+    // Separate FinGPT patterns and sort by confidence
+    const fingptPatterns = filteredPatterns.filter(p => (p.source || '').toUpperCase() === 'FINGPT');
+    if (fingptPatterns.length > 0) {
+      logDebug('_buildPatternBadges - FINGPT patterns found:', fingptPatterns.length);
+    }
+    const otherPatterns = filteredPatterns.filter(p => (p.source || '').toUpperCase() !== 'FINGPT');
+    
+    // Sort by confidence (descending)
+    fingptPatterns.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+    otherPatterns.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+    
+    // ✅ FIX: Always show FinGPT patterns first, then others
+    const sortedPatterns = [...fingptPatterns, ...otherPatterns];
+    
+    return sortedPatterns.slice(0, Math.max(0, maxCount))
       .map(p => {
         const src = (p.source || '').toUpperCase();
         const conf = Math.round((p.confidence || 0) * 100);

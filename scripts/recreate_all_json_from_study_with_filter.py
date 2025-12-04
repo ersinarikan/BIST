@@ -9,13 +9,9 @@ import os
 import json
 import argparse
 import shutil
-import signal
-import threading
-import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional
 from datetime import datetime
-import numpy as np
 import time
 
 sys.path.insert(0, '/opt/bist-pattern')
@@ -31,13 +27,14 @@ except ImportError:
     else:
         raise
 
-from scripts.continuous_hpo_training_pipeline import STATE_FILE
+from scripts.continuous_hpo_training_pipeline import STATE_FILE  # noqa: E402
 
 # ✅ FIX: Define find_study_db and find_best_trial_with_filter_applied here
 # to avoid Flask initialization (from app import app in retrain_high_discrepancy_symbols.py)
 # These functions don't need Flask, so we'll define them directly
 
 HPO_STUDIES_DIR = Path('/opt/bist-pattern/hpo_studies')
+
 
 def find_study_db(symbol: str, horizon: int, cycle: Optional[int] = None) -> Optional[Path]:
     """Find study database file for symbol-horizon"""
@@ -155,6 +152,7 @@ def find_existing_json(symbol: str, horizon: int, cycle: int) -> Optional[Path]:
 
 class TimeoutError(Exception):
     pass
+
 
 def find_best_trial_with_timeout(db_file: Path, symbol: str, horizon: int,
                                  min_mask_count: int, min_mask_pct: float,
@@ -276,6 +274,7 @@ def find_best_trial_with_timeout(db_file: Path, symbol: str, horizon: int,
         raise
     except Exception as e:
         raise Exception(f"Error in find_best_trial_with_timeout: {e}")
+
 
 def create_json_from_filtered_trial(db_file: Path, symbol: str, horizon: int, cycle: int,
                                     min_mask_count: int = 5, min_mask_pct: float = 2.5,
@@ -414,8 +413,8 @@ def create_json_from_filtered_trial(db_file: Path, symbol: str, horizon: int, cy
         
         # Build JSON structure (matching optuna_hpo_with_feature_flags.py format)
         result = {
-            'best_value': float(filtered_score),
-            'best_dirhit': float(best_dirhit),
+            'best_value': float(filtered_score) if filtered_score is not None else 0.0,
+            'best_dirhit': float(best_dirhit) if best_dirhit is not None else 0.0,
             'best_params': best_params,
             'best_trial': {
                 'number': int(best_trial_number),
@@ -469,11 +468,11 @@ def create_json_from_filtered_trial(db_file: Path, symbol: str, horizon: int, cy
         print(f"  ✅ Created: {Path(output_file).name} [{elapsed:.1f}s]")
         return Path(output_file)
         
-    except TimeoutError as e:
+    except TimeoutError:
         elapsed = time.time() - start_time
         print(f"  ⏱️ TIMEOUT: {symbol} exceeded {timeout_seconds}s limit (elapsed: {elapsed:.1f}s)")
         print(f"  ⚠️ Skipping {symbol} - study file may be too large or have too many trials")
-        print(f"  💡 Suggestion: Process this symbol separately or increase timeout")
+        print("  💡 Suggestion: Process this symbol separately or increase timeout")
         return None
     except Exception as e:
         elapsed = time.time() - start_time
@@ -527,7 +526,7 @@ def main():
                             horizon = int(parts[1].replace('d', ''))
                             if horizon in args.horizons:
                                 completed_symbols.add((symbol, horizon))
-                        except:
+                        except Exception:
                             continue
         
         # Study dosyası var mı kontrol et
@@ -548,7 +547,7 @@ def main():
     print(f"📊 İşlenecek sembol sayısı: {len(symbols_to_process)}")
     
     if args.dry_run:
-        print(f"\n⚠️ DRY-RUN MODE - Dosyalar oluşturulmayacak")
+        print("\n⚠️ DRY-RUN MODE - Dosyalar oluşturulmayacak")
     
     created_count = 0
     failed_count = 0
@@ -566,7 +565,7 @@ def main():
             # Find study database
             db_file = find_study_db(symbol, horizon, current_cycle)
             if not db_file:
-                print(f"  ❌ Study database not found")
+                print("  ❌ Study database not found")
                 failed_count += 1
                 continue
             
@@ -575,7 +574,7 @@ def main():
             print(f"  ✅ Study DB: {db_file.name} ({size_mb:.2f} MB)")
             
             if size_mb > 50:
-                print(f"  ⚠️ Large study file - may take longer")
+                print("  ⚠️ Large study file - may take longer")
             
             # Create JSON from filtered trial
             # Adjust timeout based on file size
@@ -649,7 +648,13 @@ except Exception as e:
                     if result.stderr:
                         # Flask uyarılarını filtrele
                         stderr_lines = result.stderr.split('\n')
-                        filtered_stderr = [l for l in stderr_lines if 'FLASK_SECRET_KEY' not in l and 'INTERNAL_API_TOKEN' not in l and 'api_patterns blueprint' not in l and 'AUTO_START_CYCLE' not in l and 'Calibration startup' not in l and 'HPO Configuration Check' not in l]
+                        filtered_stderr = [
+                            line for line in stderr_lines
+                            if all(keyword not in line for keyword in [
+                                'FLASK_SECRET_KEY', 'INTERNAL_API_TOKEN', 'api_patterns blueprint',
+                                'AUTO_START_CYCLE', 'Calibration startup', 'HPO Configuration Check'
+                            ])
+                        ]
                         if filtered_stderr:
                             print('\n'.join(filtered_stderr), end='', file=sys.stderr, flush=True)
                     
@@ -658,10 +663,10 @@ except Exception as e:
                         json_file = find_existing_json(symbol, horizon, current_cycle)
                         if json_file and json_file.stat().st_mtime >= symbol_start_time:
                             created_count += 1
-                            print(f"  ✅ JSON created successfully")
+                            print("  ✅ JSON created successfully")
                         else:
                             failed_count += 1
-                            print(f"  ❌ JSON not found after success")
+                            print("  ❌ JSON not found after success")
                     else:
                         # ✅ FALLBACK: Eğer 5/2.5 filtresine uyan trial yoksa, 0/0.0 ile dene
                         if "No trial found with filter" in result.stdout or "No trial found with filter" in result.stderr:
@@ -719,16 +724,16 @@ except Exception as e:
                                     json_file = find_existing_json(symbol, horizon, current_cycle)
                                     if json_file and json_file.stat().st_mtime >= symbol_start_time:
                                         created_count += 1
-                                        print(f"  ✅ JSON created with fallback filter 0/0.0")
+                                        print("  ✅ JSON created with fallback filter 0/0.0")
                                     else:
                                         failed_count += 1
                                 else:
                                     failed_count += 1
-                                    print(f"  ❌ Fallback also failed")
+                                    print("  ❌ Fallback also failed")
                             finally:
                                 try:
                                     os.unlink(fallback_temp)
-                                except:
+                                except Exception:
                                     pass
                         else:
                             failed_count += 1
@@ -742,7 +747,7 @@ except Exception as e:
                     # Cleanup temp script
                     try:
                         os.unlink(temp_script)
-                    except:
+                    except Exception:
                         pass
                         
             except Exception as e:
@@ -776,4 +781,3 @@ except Exception as e:
 
 if __name__ == '__main__':
     main()
-

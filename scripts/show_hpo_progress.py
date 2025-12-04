@@ -191,8 +191,8 @@ def get_trial_info_from_db(db_file: Path, symbol: Optional[str] = None, horizon:
                     cursor.execute("""
                         SELECT value_json
                         FROM trial_user_attributes
-                        WHERE trial_id = ? AND key = 'symbol_metrics'
-                    """, (best_trial_id,))
+                            WHERE trial_id = ? AND key = 'symbol_metrics'
+                        """, (best_trial_id,))
                     row = cursor.fetchone()
                     if row:
                         try:
@@ -283,8 +283,8 @@ def get_trial_info_from_db(db_file: Path, symbol: Optional[str] = None, horizon:
                     cursor.execute("""
                         SELECT value_json
                         FROM trial_user_attributes
-                        WHERE trial_id = ? AND key = 'symbol_metrics'
-                    """, (current_trial_id,))
+                            WHERE trial_id = ? AND key = 'symbol_metrics'
+                        """, (current_trial_id,))
                     row = cursor.fetchone()
                     if row:
                         try:

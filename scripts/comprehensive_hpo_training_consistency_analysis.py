@@ -12,8 +12,7 @@ import os
 import json
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime
+from typing import Dict, Optional
 
 sys.path.insert(0, '/opt/bist-pattern')
 os.environ['PYTHONPATH'] = '/opt/bist-pattern'
@@ -27,10 +26,9 @@ except ImportError:
     else:
         raise
 
-from scripts.continuous_hpo_training_pipeline import STATE_FILE
-from scripts.retrain_high_discrepancy_symbols import (
-    find_study_db,
-    find_best_trial_with_filter_applied
+from scripts.continuous_hpo_training_pipeline import STATE_FILE  # noqa: E402
+from scripts.retrain_high_discrepancy_symbols import (  # noqa: E402
+    find_study_db
 )
 
 
@@ -360,7 +358,7 @@ def main():
                 symbol = parts[0]
                 try:
                     horizon = int(parts[1].replace('d', ''))
-                except:
+                except Exception:
                     continue
             else:
                 continue
@@ -410,7 +408,7 @@ def main():
             status = scenario_data.get('status', 'UNKNOWN')
             scenario_counts[status] = scenario_counts.get(status, 0) + 1
     
-    print(f"\n📊 Scenario Status:")
+    print("\n📊 Scenario Status:")
     for status, count in sorted(scenario_counts.items()):
         print(f"   {status}: {count}")
     
@@ -438,4 +436,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

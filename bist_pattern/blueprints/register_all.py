@@ -14,8 +14,25 @@ def register_all_blueprints(app: Any, csrf: Any) -> None:
         try:
             from importlib import import_module
             mod = import_module(module_path)
+            
+            # ✅ FIX: Check if blueprint is already registered to avoid duplicate registration
+            # Get the blueprint instance from the module
+            bp_instance = getattr(mod, 'bp', None)
+            if bp_instance is not None:
+                # Check if this blueprint is already registered to this app
+                bp_name = getattr(bp_instance, 'name', None)
+                if bp_name and bp_name in app.blueprints:
+                    # Blueprint already registered, skip
+                    return
+            
+            # Try to register
             getattr(mod, attr)(app)
         except Exception as e:  # pragma: no cover
+            # ✅ FIX: Only log if it's not an "already registered" error
+            error_msg = str(e)
+            if "already been registered" in error_msg or "already registered" in error_msg.lower():
+                # This is expected if blueprint was registered elsewhere, skip logging
+                return
             try:
                 import traceback
                 app.logger.warning(f"{module_path} blueprint register failed: {e}")

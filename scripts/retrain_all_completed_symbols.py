@@ -8,8 +8,7 @@ import os
 import json
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional
-from datetime import datetime
+from typing import Dict, Optional
 
 sys.path.insert(0, '/opt/bist-pattern')
 os.environ['PYTHONPATH'] = '/opt/bist-pattern'
@@ -21,7 +20,7 @@ if os.path.exists(secret_file_path):
         db_password = f.read().strip()
     os.environ['DATABASE_URL'] = f"postgresql://bist_user:{db_password}@127.0.0.1:6432/bist_pattern_db"
 
-from scripts.continuous_hpo_training_pipeline import ContinuousHPOPipeline, STATE_FILE
+from scripts.continuous_hpo_training_pipeline import ContinuousHPOPipeline, STATE_FILE  # noqa: E402
 
 
 def load_state() -> Dict:
@@ -92,7 +91,7 @@ def main():
                 symbol = parts[0]
                 try:
                     horizon = int(parts[1].replace('d', ''))
-                except:
+                except Exception:
                     continue
             else:
                 continue
@@ -143,7 +142,7 @@ def main():
         # Find JSON file
         json_file = find_json_file(symbol, horizon, current_cycle)
         if not json_file:
-            print(f"  ❌ JSON file not found")
+            print("  ❌ JSON file not found")
             failed_count += 1
             continue
         
@@ -177,13 +176,13 @@ def main():
             # Run training
             result = pipeline.run_training(symbol, horizon, best_params, hpo_result)
             if result:
-                print(f"  ✅ Training completed")
+                print("  ✅ Training completed")
                 for h, dirhit in result.items():
                     if dirhit:
                         print(f"    - {h}d: DirHit={dirhit:.2f}%")
                 success_count += 1
             else:
-                print(f"  ⚠️ Training returned None")
+                print("  ⚠️ Training returned None")
                 failed_count += 1
         except Exception as e:
             print(f"  ❌ Training error: {e}")
@@ -202,4 +201,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

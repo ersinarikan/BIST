@@ -8,7 +8,7 @@ import os
 import json
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 from datetime import datetime
 import numpy as np
 
@@ -25,8 +25,8 @@ except ImportError:
     else:
         raise
 
-from scripts.continuous_hpo_training_pipeline import STATE_FILE
-from scripts.retrain_high_discrepancy_symbols import find_study_db
+from scripts.continuous_hpo_training_pipeline import STATE_FILE  # noqa: E402
+from scripts.retrain_high_discrepancy_symbols import find_study_db  # noqa: E402
 
 
 def load_state() -> Dict:
@@ -46,7 +46,7 @@ def create_json_from_study(db_file: Path, symbol: str, horizon: int, cycle: int,
         study = optuna.load_study(study_name=None, storage=f"sqlite:///{db_file}")
         
         if study.best_trial is None:
-            print(f"  ❌ No best trial found in study")
+            print("  ❌ No best trial found in study")
             return None
         
         best_trial = study.best_trial
@@ -311,7 +311,7 @@ def main():
                     symbol = parts[0]
                     try:
                         horizon = int(parts[1].replace('d', ''))
-                    except:
+                    except Exception:
                         continue
                 else:
                     continue
@@ -355,7 +355,7 @@ def main():
         # Find study DB
         db_file = find_study_db(symbol, horizon, current_cycle)
         if not db_file:
-            print(f"  ❌ Study DB not found")
+            print("  ❌ Study DB not found")
             failed += 1
             continue
         
@@ -379,4 +379,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

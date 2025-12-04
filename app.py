@@ -129,13 +129,6 @@ def create_app(config_name='default'):
         logger.info(f"CSRF exempt for socketio failed: {_csrf_socketio_err}")
     limiter.init_app(app)
 
-    # Register patterns blueprint (exposes /api/visual-analysis)
-    try:
-        from blueprints.api_patterns import api_patterns as _api_patterns  # type: ignore
-        app.register_blueprint(_api_patterns)
-    except Exception as _bp_err:
-        logger.warning(f"api_patterns blueprint registration skipped: {_bp_err}")
-
     # Template auto-reload to avoid stale cached templates in production
     try:
         app.config['TEMPLATES_AUTO_RELOAD'] = True

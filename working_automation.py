@@ -148,7 +148,6 @@ class WorkingAutomationPipeline:
                                             # ✅ FIX: Sanitize log_update data to prevent parse errors
                                             try:
                                                 from bist_pattern.core.broadcaster import _sanitize_json_value
-                                                import json
                                                 log_data = {
                                                     'level': level,
                                                     'message': str(message)[:1000],  # Limit message length
@@ -196,7 +195,6 @@ class WorkingAutomationPipeline:
                                     })
                                     payload['history'] = payload['history'][-200:]
                                     # ✅ FIX: Use atomic write to prevent corruption
-                                    import tempfile
                                     temp_file = status_file + '.tmp'
                                     try:
                                         with open(temp_file, 'w') as wf:
@@ -213,41 +211,6 @@ class WorkingAutomationPipeline:
                                 except Exception as e:
                                     # ✅ FIX: Log exception instead of silent pass
                                     logger.warning(f"_append_history failed: {e}")
-
-                            def _broadcast(level: str, message: str, category: str = 'working_automation') -> None:
-                                try:
-                                    # ✅ FIX: Validate flask_app is not None
-                                    if flask_app is None:
-                                        logger.debug("flask_app is None, cannot broadcast")
-                                        return
-                                    
-                                    if hasattr(flask_app, 'broadcast_log'):
-                                        # ✅ FIX: Add service identifier to distinguish from HPO logs
-                                        flask_app.broadcast_log(level, message, category='working_automation', service='working_automation')  # type: ignore[attr-defined]
-                                    else:
-                                        # Fallback emit if broadcast helper is absent
-                                        sock = getattr(flask_app, 'socketio', None)
-                                        if sock is not None:
-                                            # ✅ FIX: Sanitize log_update data to prevent parse errors
-                                            try:
-                                                from bist_pattern.core.broadcaster import _sanitize_json_value
-                                                import json
-                                                log_data = {
-                                                    'level': level,
-                                                    'message': str(message)[:1000],  # Limit message length
-                                                    'category': 'working_automation',  # ✅ FIX: Use specific category to distinguish from HPO
-                                                    'timestamp': datetime.now().isoformat(),
-                                                    'service': 'working_automation'  # ✅ FIX: Add service identifier
-                                                }
-                                                sanitized_data = _sanitize_json_value(log_data)
-                                                json.dumps(sanitized_data)  # Test serialization
-                                                # ✅ FIX: Only send to admin room - user clients don't need log updates
-                                                sock.emit('log_update', sanitized_data, room='admin')
-                                            except Exception as sanitize_err:
-                                                logger.debug(f"Log broadcast sanitization failed: {sanitize_err}")
-                                except Exception as e:
-                                    # ✅ FIX: Log exception instead of silent pass
-                                    logger.debug(f"_broadcast failed: {e}")
                             
                             # ✅ FIX: Setup enhanced_ml_system logger handler to broadcast logs with service identifier
                             # This ensures logs from enhanced_ml_system are visible in admin dashboard
@@ -629,6 +592,7 @@ class WorkingAutomationPipeline:
                             
                             # ✅ FIX: Save metrics to file
                             try:
+                                import json  # Ensure json is available in this scope
                                 metrics_file = Path(ConfigManager.get('BIST_LOG_PATH', '/opt/bist-pattern/logs')) / 'automation_metrics.json'
                                 metrics_file.parent.mkdir(parents=True, exist_ok=True)
                                 

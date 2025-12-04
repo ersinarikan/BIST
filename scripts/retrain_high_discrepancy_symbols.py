@@ -48,12 +48,10 @@ else:
     db_url = os.environ.get('DATABASE_URL', '')
     if ':5432/' in db_url:
         os.environ['DATABASE_URL'] = db_url.replace(':5432/', ':6432/')
-        print(f"⚠️ Fixed DATABASE_URL port from 5432 to 6432", file=sys.stderr)
+        print("⚠️ Fixed DATABASE_URL port from 5432 to 6432", file=sys.stderr)
 
-from scripts.continuous_hpo_training_pipeline import ContinuousHPOPipeline, STATE_FILE
-from scripts.train_completed_hpo_with_best_params import set_hpo_params_as_env
-from app import app
-from pattern_detector import HybridPatternDetector
+from scripts.continuous_hpo_training_pipeline import ContinuousHPOPipeline, STATE_FILE  # noqa: E402
+from app import app  # noqa: E402
 
 # HPO Studies directory
 HPO_STUDIES_DIR = Path('/opt/bist-pattern/hpo_studies')
@@ -103,7 +101,7 @@ def find_study_db(symbol: str, horizon: int, cycle: Optional[int] = None) -> Opt
 
 
 def find_best_trial_with_filter_applied(db_file: Path, symbol: str, horizon: int,
-                                        min_mask_count: int, min_mask_pct: float) -> Optional[optuna.Trial]:
+                                        min_mask_count: int, min_mask_pct: float) -> Tuple[Optional[optuna.trial.FrozenTrial], Optional[float]]:
     """Find best trial after applying filter to study (not JSON's best trial)"""
     try:
         import optuna
@@ -269,13 +267,13 @@ def get_best_params_from_study(db_file: Path, symbol: str, horizon: int,
                             'filter_used': filter_used
                         }
                         if update_hpo_json_with_filtered_trial(json_file, filtered_trial_data):
-                            print(f"   ✅ JSON file updated successfully")
+                            print("   ✅ JSON file updated successfully")
                         else:
-                            print(f"   ⚠️  Failed to update JSON file (will continue with filtered params)")
+                            print("   ⚠️  Failed to update JSON file (will continue with filtered params)")
                     else:
-                        print(f"   ⚠️  JSON file not found, skipping update")
+                        print("   ⚠️  JSON file not found, skipping update")
                 else:
-                    print(f"   ⚠️  No valid trial found with filter, using original best trial")
+                    print("   ⚠️  No valid trial found with filter, using original best trial")
         
         return {
             'best_params': best_params,
@@ -635,8 +633,8 @@ def main():
             if split_info.get('excluded_splits', 0) > 0:
                 print(f"   ⚠️  WARNING: Best params found with only {split_info.get('included_splits')}/{split_info.get('total_splits')} splits!")
                 print(f"   ⚠️  {split_info.get('excluded_splits')} split(s) were excluded due to low support during HPO")
-                print(f"   ⚠️  Training will also exclude low support splits to match HPO")
-                print(f"   ⚠️  If results are still poor, best params may not be optimal - consider re-running HPO with 0/0.0 filter")
+                print("   ⚠️  Training will also exclude low support splits to match HPO")
+                print("   ⚠️  If results are still poor, best params may not be optimal - consider re-running HPO with 0/0.0 filter")
             
             # Retrain
             if retrain_symbol(symbol, horizon, best_params_data, pipeline):
@@ -656,4 +654,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

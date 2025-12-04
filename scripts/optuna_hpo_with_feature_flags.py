@@ -255,8 +255,11 @@ def generate_walkforward_splits(total_days: int, horizon: int, n_splits: int = 4
     
     # Calculate split window size (how much to expand train for each split)
     # Use approximately 30 days per split, but ensure we have enough test data
+    # ✅ FIX: Changed from * n_splits to * 2 for more flexible split generation
+    # This allows more symbols to have 2+ splits (enabling DirHit calculation)
+    # while maintaining statistical reliability (min 2 splits required)
     available_test_days = total_days - initial_split
-    if available_test_days < min_test_days * n_splits:
+    if available_test_days < min_test_days * 2:  # Changed from * n_splits to * 2
         # Not enough data for multiple splits, use single split
         if available_test_days >= min_test_days:
             splits.append((initial_split, total_days))
@@ -588,6 +591,19 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
             'split_metrics': []
         }
         trial_symbol_metrics[symbol_key] = symbol_metric_entry
+        
+        # ✅ FIX: Initialize filter variables at symbol level to avoid "possibly unbound" linter errors
+        # These are used in warning messages at symbol level (after split loop)
+        _min_mc = 0
+        _min_mp = 0.0
+        try:
+            _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))
+        except Exception:
+            _min_mc = 0
+        try:
+            _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '0'))
+        except Exception:
+            _min_mp = 0.0
         print(f"[hpo] Trial {trial.number}: Fetching prices for {sym}...", file=sys.stderr, flush=True)
         df = fetch_prices(engine, sym)
         if df is None:
@@ -758,8 +774,7 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
             
             # ✅ FIX: Initialize low_support variables before conditional block (linter fix)
             low_support = False
-            _min_mc = 0
-            _min_mp = 0.0
+            # Note: _min_mc and _min_mp are initialized at symbol level (above) to avoid linter errors
             
             # 🔍 DEBUG: Calculate additional metrics
             if valid_count > 0:
@@ -802,15 +817,7 @@ def objective(trial: optuna.Trial, symbols, horizon: int, engine, db_url: str, s
                 # Configure via environment:
                 #  - HPO_MIN_MASK_COUNT (int, default 0 → disabled)
                 #  - HPO_MIN_MASK_PCT (float percent, default 0 → disabled)
-                # Note: low_support, _min_mc, _min_mp already initialized above
-                try:
-                    _min_mc = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))
-                except Exception:
-                    _min_mc = 0
-                try:
-                    _min_mp = float(os.getenv('HPO_MIN_MASK_PCT', '0'))
-                except Exception:
-                    _min_mp = 0.0
+                # Note: low_support, _min_mc, _min_mp already initialized above (moved to top of block)
                 if (_min_mc > 0 and mask_count < _min_mc) or (_min_mp > 0.0 and mask_pct < _min_mp):
                     low_support = True
                     # Informative log (only first split to reduce noise)
@@ -1314,10 +1321,15 @@ def main():
                     _min_mp_spec = float(first_split.get('min_mask_pct', 0.0))
         except Exception:
             # Fallback to environment variables if split_metrics not available
+            pass
+        
+        # If not set from split_metrics, try environment variables
+        if _min_mc_spec == 0:
             try:
                 _min_mc_spec = int(os.getenv('HPO_MIN_MASK_COUNT', '0'))
             except Exception:
                 _min_mc_spec = 0
+        if _min_mp_spec == 0.0:
             try:
                 _min_mp_spec = float(os.getenv('HPO_MIN_MASK_PCT', '0'))
             except Exception:

@@ -7,7 +7,6 @@ excludes all splits. This ensures we have valid params even for low-support symb
 """
 
 import sys
-import os
 from pathlib import Path
 from typing import Optional, Dict
 
@@ -125,4 +124,3 @@ if __name__ == '__main__':
     else:
         print(f"❌ No fallback best params found for {args.symbol} {args.horizon}d")
         sys.exit(1)
-

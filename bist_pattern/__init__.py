@@ -66,12 +66,6 @@ def create_app(config_name: str | None = None) -> Flask:
         register_recent(app)
     except Exception:
         pass
-    # Also register top-level patterns blueprint if present (provides /api/visual-analysis)
-    try:
-        from blueprints.api_patterns import api_patterns as _api_patterns  # type: ignore
-        app.register_blueprint(_api_patterns)
-    except Exception:
-        pass
 
     register_socketio_events(app)
 
