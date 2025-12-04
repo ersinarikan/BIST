@@ -1,3 +1,4 @@
+# pyright: reportUnusedVariable=false, reportUnusedImport=false
 """
 Enhanced ML System
 XGBoost, LightGBM, CatBoost ile gelişmiş tahmin modelleri
@@ -7,6 +8,7 @@ CHANGELOG 2025-10-20:
 - Increased prediction caps 5x
 - Objective: Improve direction accuracy from 19% to 50%+
 """
+# pyright: reportUnusedVariable=false, reportUnusedImport=false
 
 import numpy as np
 import pandas as pd
@@ -19,7 +21,7 @@ from bist_pattern.core.config_manager import ConfigManager
 from bist_pattern.utils.error_handler import ErrorHandler
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LogisticRegression  # noqa: F401 (reserved for future direction classifier)
+# LogisticRegression reserved for future direction classifier (not currently used)
 import joblib
 import json
 from datetime import datetime
@@ -1662,7 +1664,7 @@ class EnhancedMLSystem:
             
             # Clean infinite and large values (delegated)
             try:
-                from bist_pattern.features.cleaning import clean_dataframe as _clean_df
+                from bist_pattern.features.cleaning import clean_dataframe as _clean_df  # type: ignore[unused-import]
                 df_features = _clean_df(df_features)
             except Exception as e:
                 logger.debug(f"External clean_dataframe failed, using internal: {e}")
@@ -1746,10 +1748,10 @@ class EnhancedMLSystem:
                     _diff = (df_features[target] - _chk).abs()
                     _n = int(_diff.dropna().shape[0])
                     if _n > 0:
-                        _mdiff = float(_diff.dropna().mean())
-                        _p95 = float(np.nanpercentile(np.abs(df_features[target].values), 95))
                         logger.info(
-                            f"🎯 Target audit {symbol} {horizon}d: samples={_n}, mean_abs_diff={_mdiff:.6f}, |ret|_p95={_p95:.3f}"
+                            f"🎯 Target audit {symbol} {horizon}d: samples={_n}, "
+                            f"mean_abs_diff={float(_diff.dropna().mean()):.6f}, "
+                            f"|ret|_p95={float(np.nanpercentile(np.abs(df_features[target].values), 95)):.3f}"
                         )
                 except Exception as e:
                     logger.debug(f"Target audit failed: {e}")
@@ -1778,7 +1780,7 @@ class EnhancedMLSystem:
                 
                 # Step 1: Variance-based filtering (remove features with very low variance)
                 try:
-                    from bist_pattern.features.selection import variance_and_correlation_filter
+                    from bist_pattern.features.selection import variance_and_correlation_filter  # type: ignore[unused-import]
                     reduced_features = variance_and_correlation_filter(
                         pd.DataFrame(df_model[feature_cols]),
                         feature_cols,
@@ -1885,34 +1887,27 @@ class EnhancedMLSystem:
                         if use_stability and imp_arr.shape[0] > 1:
                             top_k_flags = []
                             for i in range(imp_arr.shape[0]):
-                                ranks = np.argsort(-imp_arr[i])  # descending
-                                top_idx = set(ranks[:max_k].tolist())
-                                flags = np.array([1 if j in top_idx else 0 for j in range(len(reduced_features))], dtype=float)
-                                top_k_flags.append(flags)
-                            top_k_flags = np.vstack(top_k_flags)
-                            share_in_topk = np.nanmean(top_k_flags, axis=0)
+                                top_idx = set(np.argsort(-imp_arr[i])[:max_k].tolist())  # descending
+                                top_k_flags.append(np.array([1 if j in top_idx else 0 for j in range(len(reduced_features))], dtype=float))
+                            share_in_topk = np.nanmean(np.vstack(top_k_flags), axis=0)
                         else:
                             share_in_topk = np.ones_like(avg_imp)
                         
                         # Combine: first take stable features (share>=min_share), sort by avg importance
                         tuples = list(zip(reduced_features, avg_imp.tolist(), share_in_topk.tolist()))
-                        stable = [(f, a, s) for (f, a, s) in tuples if s >= min_share]
-                        stable.sort(key=lambda x: x[1], reverse=True)
+                        stable = sorted([(f, a, s) for (f, a, s) in tuples if s >= min_share], key=lambda x: x[1], reverse=True)
                         selected = stable[:max_k]
                         
                         if len(selected) < max_k:
                             # Fill remaining by avg importance regardless of share
-                            remaining = [(f, a, s) for (f, a, s) in tuples if (f not in {x[0] for x in selected})]
-                            remaining.sort(key=lambda x: x[1], reverse=True)
-                            selected.extend(remaining[: (max_k - len(selected))])
+                            selected.extend(sorted([(f, a, s) for (f, a, s) in tuples if (f not in {x[0] for x in selected})], key=lambda x: x[1], reverse=True)[: (max_k - len(selected))])
                             
                             # ✅ FIX: Final validation - ensure we have enough features
                             if len(selected) < max_k:
                                 logger.warning(f"Only {len(selected)}/{max_k} features selected. Using all available from reduced_features.")
                                 # Use all reduced_features if still not enough
                                 if len(reduced_features) > len(selected):
-                                    missing = [f for f in reduced_features if f not in {x[0] for x in selected}]
-                                    selected.extend([(f, 0.0, 0.0) for f in missing[:max_k - len(selected)]])
+                                    selected.extend([(f, 0.0, 0.0) for f in [f for f in reduced_features if f not in {x[0] for x in selected}][:max_k - len(selected)]])
                                 # If still not enough, this will be caught by empty check later
                         
                         horizon_feature_cols = [f for (f, _, __) in selected]
@@ -1984,108 +1979,67 @@ class EnhancedMLSystem:
                     # H&S weighting
                     if 'hs_conf' in df_model.columns:
                         _s = pd.to_numeric(df_model['hs_conf'], errors='coerce')
-                        hs_conf_arr: np.ndarray = np.asarray(_s.values, dtype=float)
-                        hs_conf_arr = np.nan_to_num(hs_conf_arr, nan=0.0)
-                        hs_conf_arr = np.clip(hs_conf_arr, 0.0, 1.0)
-                        w = w * (1.0 + hs_conf_arr)
+                        w = w * (1.0 + np.clip(np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0), 0.0, 1.0))
                     if 'hs_breakout' in df_model.columns:
                         _s = pd.to_numeric(df_model['hs_breakout'], errors='coerce')
-                        hs_breakout: np.ndarray = np.asarray(_s.values, dtype=float)
-                        hs_breakout = np.nan_to_num(hs_breakout, nan=0.0)
-                        w = w * (1.0 + 0.75 * hs_breakout)
+                        w = w * (1.0 + 0.75 * np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0))
                     if 'hs_event_window_14' in df_model.columns:
                         _s = pd.to_numeric(df_model['hs_event_window_14'], errors='coerce')
-                        hs_ev14: np.ndarray = np.asarray(_s.values, dtype=float)
-                        hs_ev14 = np.nan_to_num(hs_ev14, nan=0.0)
-                        w = w * (1.0 + 0.35 * hs_ev14)
+                        w = w * (1.0 + 0.35 * np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0))
                     # DTB weighting
                     if 'dtb_conf' in df_model.columns:
                         _s = pd.to_numeric(df_model['dtb_conf'], errors='coerce')
-                        dtb_conf: np.ndarray = np.asarray(_s.values, dtype=float)
-                        dtb_conf = np.nan_to_num(dtb_conf, nan=0.0)
-                        dtb_conf = np.clip(dtb_conf, 0.0, 1.0)
-                        w = w * (1.0 + dtb_conf)
+                        w = w * (1.0 + np.clip(np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0), 0.0, 1.0))
                     if 'dtb_breakout' in df_model.columns:
                         _s = pd.to_numeric(df_model['dtb_breakout'], errors='coerce')
-                        dtb_breakout: np.ndarray = np.asarray(_s.values, dtype=float)
-                        dtb_breakout = np.nan_to_num(dtb_breakout, nan=0.0)
-                        w = w * (1.0 + 0.5 * dtb_breakout)
+                        w = w * (1.0 + 0.5 * np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0))
                     if 'dtb_event_window_14' in df_model.columns:
                         _s = pd.to_numeric(df_model['dtb_event_window_14'], errors='coerce')
-                        dtb_ev14: np.ndarray = np.asarray(_s.values, dtype=float)
-                        dtb_ev14 = np.nan_to_num(dtb_ev14, nan=0.0)
-                        w = w * (1.0 + 0.25 * dtb_ev14)
+                        w = w * (1.0 + 0.25 * np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0))
                     # Triangle weighting
                     if 'tri_conf' in df_model.columns:
                         _s = pd.to_numeric(df_model['tri_conf'], errors='coerce')
-                        tri_conf_arr: np.ndarray = np.asarray(_s.values, dtype=float)
-                        tri_conf_arr = np.nan_to_num(tri_conf_arr, nan=0.0)
-                        tri_conf_arr = np.clip(tri_conf_arr, 0.0, 1.0)
-                        w = w * (1.0 + tri_conf_arr)
+                        w = w * (1.0 + np.clip(np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0), 0.0, 1.0))
                     if 'tri_breakout' in df_model.columns:
                         _s = pd.to_numeric(df_model['tri_breakout'], errors='coerce')
-                        tri_breakout_arr: np.ndarray = np.asarray(_s.values, dtype=float)
-                        tri_breakout_arr = np.nan_to_num(tri_breakout_arr, nan=0.0)
-                        w = w * (1.0 + 0.5 * tri_breakout_arr)
+                        w = w * (1.0 + 0.5 * np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0))
                     if 'tri_event_window_14' in df_model.columns:
                         _s = pd.to_numeric(df_model['tri_event_window_14'], errors='coerce')
-                        tri_ev14_arr: np.ndarray = np.asarray(_s.values, dtype=float)
-                        tri_ev14_arr = np.nan_to_num(tri_ev14_arr, nan=0.0)
-                        w = w * (1.0 + 0.25 * tri_ev14_arr)
+                        w = w * (1.0 + 0.25 * np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0))
 
                     # Flag weighting
                     if 'flag_conf' in df_model.columns:
                         _s = pd.to_numeric(df_model['flag_conf'], errors='coerce')
-                        flag_conf_arr: np.ndarray = np.asarray(_s.values, dtype=float)
-                        flag_conf_arr = np.nan_to_num(flag_conf_arr, nan=0.0)
-                        flag_conf_arr = np.clip(flag_conf_arr, 0.0, 1.0)
-                        w = w * (1.0 + flag_conf_arr)
+                        w = w * (1.0 + np.clip(np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0), 0.0, 1.0))
                     if 'flag_breakout' in df_model.columns:
                         _s = pd.to_numeric(df_model['flag_breakout'], errors='coerce')
-                        flag_breakout_arr: np.ndarray = np.asarray(_s.values, dtype=float)
-                        flag_breakout_arr = np.nan_to_num(flag_breakout_arr, nan=0.0)
-                        w = w * (1.0 + 0.5 * flag_breakout_arr)
+                        w = w * (1.0 + 0.5 * np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0))
                     if 'flag_event_window_14' in df_model.columns:
                         _s = pd.to_numeric(df_model['flag_event_window_14'], errors='coerce')
-                        flag_ev14_arr: np.ndarray = np.asarray(_s.values, dtype=float)
-                        flag_ev14_arr = np.nan_to_num(flag_ev14_arr, nan=0.0)
-                        w = w * (1.0 + 0.25 * flag_ev14_arr)
+                        w = w * (1.0 + 0.25 * np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0))
 
                     # Wedge weighting
                     if 'wedge_conf' in df_model.columns:
                         _s = pd.to_numeric(df_model['wedge_conf'], errors='coerce')
-                        wedge_conf_arr: np.ndarray = np.asarray(_s.values, dtype=float)
-                        wedge_conf_arr = np.nan_to_num(wedge_conf_arr, nan=0.0)
-                        wedge_conf_arr = np.clip(wedge_conf_arr, 0.0, 1.0)
-                        w = w * (1.0 + wedge_conf_arr)
+                        w = w * (1.0 + np.clip(np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0), 0.0, 1.0))
                     if 'wedge_breakout' in df_model.columns:
                         _s = pd.to_numeric(df_model['wedge_breakout'], errors='coerce')
-                        wedge_breakout_arr: np.ndarray = np.asarray(_s.values, dtype=float)
-                        wedge_breakout_arr = np.nan_to_num(wedge_breakout_arr, nan=0.0)
-                        w = w * (1.0 + 0.5 * wedge_breakout_arr)
+                        w = w * (1.0 + 0.5 * np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0))
                     if 'wedge_event_window_14' in df_model.columns:
                         _s = pd.to_numeric(df_model['wedge_event_window_14'], errors='coerce')
-                        wedge_ev14_arr: np.ndarray = np.asarray(_s.values, dtype=float)
-                        wedge_ev14_arr = np.nan_to_num(wedge_ev14_arr, nan=0.0)
-                        w = w * (1.0 + 0.25 * wedge_ev14_arr)
+                        w = w * (1.0 + 0.25 * np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0))
 
                     # Aggregated pattern features weighting
                     if 'pattern_breakout_any' in df_model.columns:
                         _s = pd.to_numeric(df_model['pattern_breakout_any'], errors='coerce')
-                        patt_brk_any: np.ndarray = np.asarray(_s.values, dtype=float)
-                        patt_brk_any = np.nan_to_num(patt_brk_any, nan=0.0)
-                        w = w * (1.0 + 0.25 * patt_brk_any)
+                        w = w * (1.0 + 0.25 * np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0))
                     if 'pattern_event_window_14' in df_model.columns:
                         _s = pd.to_numeric(df_model['pattern_event_window_14'], errors='coerce')
-                        patt_ev14: np.ndarray = np.asarray(_s.values, dtype=float)
-                        patt_ev14 = np.nan_to_num(patt_ev14, nan=0.0)
-                        w = w * (1.0 + 0.25 * patt_ev14)
+                        w = w * (1.0 + 0.25 * np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0))
                     if 'pattern_dir_consensus' in df_model.columns:
                         _s = pd.to_numeric(df_model['pattern_dir_consensus'], errors='coerce').abs()
-                        patt_dirc: np.ndarray = np.asarray(_s.values, dtype=float)
-                        patt_dirc = np.nan_to_num(patt_dirc, nan=0.0)
                         # Modest emphasis on strong directional consensus
-                        w = w * (1.0 + 0.20 * patt_dirc)
+                        w = w * (1.0 + 0.20 * np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0))
 
                     # Short-horizon multipliers: emphasize recent events and net candlestick bias
                     try:
@@ -2108,9 +2062,7 @@ class EnhancedMLSystem:
                             # Moderate boost for week horizon
                             if 'pattern_event_window_7' in df_model.columns:
                                 _s = pd.to_numeric(df_model['pattern_event_window_7'], errors='coerce')
-                                patt_ev7: np.ndarray = np.asarray(_s.values, dtype=float)
-                                patt_ev7 = np.nan_to_num(patt_ev7, nan=0.0)
-                                w = w * (1.0 + 0.10 * patt_ev7)
+                                w = w * (1.0 + 0.10 * np.nan_to_num(np.asarray(_s.values, dtype=float), nan=0.0))
                             w = w * (1.05)
                     except Exception as e:
                         logger.debug(f"Pattern weight boost failed: {e}")
@@ -2713,7 +2665,11 @@ class EnhancedMLSystem:
                         logger.info(f"XGBoost {horizon}D - R²: {raw_r2:.3f}, MAPE: {xgb_mape_oof:.2f}% nRMSE:{nrmse:.2f} Hit:{_hit_pct:.1f}% → Confidence: {confidence:.3f}")
                         # Store concise metrics for pilot summaries
                         try:
+                            if not isinstance(results, dict):
+                                results = {}
                             if 'metrics' not in results:
+                                results['metrics'] = {}
+                            if not isinstance(results['metrics'], dict):
                                 results['metrics'] = {}
                             results['metrics'][f"{horizon}d"] = {
                                 'r2': float(raw_r2),
@@ -3322,8 +3278,9 @@ class EnhancedMLSystem:
                             oof_r2_scores = {}
                             oof_rmse_scores = {}
                             
+                            model_names_list = ['XGBoost', 'LightGBM', 'CatBoost']
                             for i, oof_pred in enumerate(oof_list):
-                                model_name = ['XGBoost', 'LightGBM', 'CatBoost'][i] if i < 3 else f'Model_{i}'
+                                model_name = model_names_list[i] if i < len(model_names_list) else f'Model_{i}'
                                 try:
                                     # Correlation with target
                                     corr = float(np.corrcoef(oof_pred[_valid_mask], meta_y)[0, 1]) if len(meta_y) > 1 else 0.0
@@ -3482,11 +3439,15 @@ class EnhancedMLSystem:
                         # Store backtest results
                         # ✅ FIX: Properly handle backtest_results and prevent KeyError
                         if isinstance(backtest_results, dict) and backtest_results.get('status') == 'success':
-                            overall = backtest_results.get('overall', {})
+                            overall = backtest_results.get('overall')
+                            if not isinstance(overall, dict):
+                                overall = {}
+                            if not isinstance(results, dict):
+                                results = {}
                             results['backtest'] = {
-                                'sharpe_ratio': overall.get('avg_sharpe_ratio', 0.0),
-                                'mape': overall.get('avg_mape', 0.0),
-                                'hit_rate': overall.get('avg_hit_rate', 0.0),
+                                'sharpe_ratio': float(overall.get('avg_sharpe_ratio', 0.0) or 0.0),
+                                'mape': float(overall.get('avg_mape', 0.0) or 0.0),
+                                'hit_rate': float(overall.get('avg_hit_rate', 0.0) or 0.0),
                                 'quality': overall.get('quality', 'UNKNOWN')
                             }
                             
@@ -3601,7 +3562,7 @@ class EnhancedMLSystem:
                                 logger.warning(f"   ⚠️ {h}d: Horizon models not found, skipping")
                                 continue
                             
-                            horizon_models = self.models[horizon_key]
+                            horizon_models = self.models.get(horizon_key)
                             if not isinstance(horizon_models, dict) or 'xgboost' not in horizon_models:
                                 logger.warning(f"   ⚠️ {h}d: XGBoost model not found in horizon models, skipping")
                                 continue
@@ -3859,10 +3820,7 @@ class EnhancedMLSystem:
                                     y_train_phase16 = df_train_clean_phase16[target_col].values
                                     
                                     horizon_key = f"{symbol}_{h}d"
-                                    if horizon_key not in self.models:
-                                        continue
-                                    
-                                    horizon_models = self.models[horizon_key]
+                                    horizon_models = self.models.get(horizon_key)
                                     if not isinstance(horizon_models, dict) or 'xgboost' not in horizon_models:
                                         continue
                                     
@@ -4000,10 +3958,7 @@ class EnhancedMLSystem:
                                     y_full = df_full_clean[target_col].values
                                     
                                     horizon_key = f"{symbol}_{h}d"
-                                    if horizon_key not in self.models:
-                                        continue
-                                    
-                                    horizon_models = self.models[horizon_key]
+                                    horizon_models = self.models.get(horizon_key)
                                     if not isinstance(horizon_models, dict) or 'xgboost' not in horizon_models:
                                         continue
                                     
@@ -4123,7 +4078,7 @@ class EnhancedMLSystem:
             
             # ✅ FIX: Check if models are already in memory first (from training)
             # Only load from disk if models are not in memory
-            model_key = f"{symbol}_{self.prediction_horizons[0]}d" if self.prediction_horizons else None
+            model_key = f"{symbol}_{self.prediction_horizons[0]}d" if (self.prediction_horizons and len(self.prediction_horizons) > 0) else None
             
             # ⚡ CRITICAL FIX: Check if ANY horizon model exists for this symbol (more flexible)
             # This handles HPO case where only one horizon is trained
@@ -5046,21 +5001,26 @@ class EnhancedMLSystem:
                                         ref_values = ref_map.get(key) if isinstance(ref_map, dict) else None
                                         if use_reference and isinstance(ref_values, dict) and ref_values:
                                             overridden = []
-                                            for idx, model_name in enumerate(model_predictions.keys()):
+                                            model_names = list(model_predictions.keys())
+                                            for idx, model_name in enumerate(model_names):
                                                 ref_val = ref_values.get(model_name)
                                                 if isinstance(ref_val, (int, float)):
                                                     overridden.append(float(ref_val))
-                                                else:
+                                                elif idx < len(historical_r2):
                                                     overridden.append(float(historical_r2[idx]))
+                                                else:
+                                                    # Fallback to default if index out of bounds
+                                                    overridden.append(0.5)
                                             historical_r2 = np.array(overridden, dtype=float)
                                             historical_r2_source = 'reference'
                                     except Exception as e:
                                         logger.debug(f"Failed to load reference historical R2, using model: {e}")
                                         historical_r2_source = 'model'
                                     
+                                    model_names_list = list(model_predictions.keys())
                                     historical_r2_map = {
-                                        model_name: float(historical_r2[idx])
-                                        for idx, model_name in enumerate(model_predictions.keys())
+                                        model_name: float(historical_r2[idx]) if idx < len(historical_r2) else 0.5
+                                        for idx, model_name in enumerate(model_names_list)
                                     }
                                     
                                     # Smart ensemble: consensus + performance (HPO-optimizable)
@@ -5092,7 +5052,8 @@ class EnhancedMLSystem:
                                         'lightgbm': w_lgb,
                                         'catboost': w_cat,
                                     }
-                                    prior_weights = np.array([prior_map.get(k, 1.0) for k in model_predictions.keys()], dtype=float)
+                                    model_names_list = list(model_predictions.keys())
+                                    prior_weights = np.array([prior_map.get(k, 1.0) for k in model_names_list], dtype=float)
                                     
                                     ensemble_pred, final_weights = smart_ensemble(
                                         predictions=np.array(predictions_list),
@@ -5106,9 +5067,10 @@ class EnhancedMLSystem:
                                     # Confidence: weighted average with disagreement penalty
                                     avg_confidence = np.average(weights, weights=final_weights) * confidence_scale
                                     try:
+                                        model_names_list = list(model_predictions.keys())
                                         ensemble_weights_map = {
-                                            model_name: float(final_weights[idx])
-                                            for idx, model_name in enumerate(model_predictions.keys())
+                                            model_name: float(final_weights[idx]) if idx < len(final_weights) else 0.0
+                                            for idx, model_name in enumerate(model_names_list)
                                         }
                                     except Exception as e:
                                         logger.debug(f"Failed to create ensemble_weights_map: {e}")
@@ -5184,12 +5146,17 @@ class EnhancedMLSystem:
                     
                     if adjustment_factor != 1.0:
                         for h_key in predictions:
-                            if 'ensemble_prediction' in predictions[h_key]:
-                                original = predictions[h_key]['ensemble_prediction']
+                            pred_dict = predictions.get(h_key)
+                            if not isinstance(pred_dict, dict):
+                                continue
+                            if 'ensemble_prediction' in pred_dict:
+                                original = pred_dict.get('ensemble_prediction')
+                                if original is None:
+                                    continue
                                 adjusted = original * adjustment_factor
-                                predictions[h_key]['ensemble_prediction'] = float(adjusted)
-                                predictions[h_key]['sentiment_adjusted'] = True
-                                predictions[h_key]['sentiment_score'] = float(sent)
+                                pred_dict['ensemble_prediction'] = float(adjusted)
+                                pred_dict['sentiment_adjusted'] = True
+                                pred_dict['sentiment_score'] = float(sent)
                         logger.debug(f"Sentiment adjustment applied: {sent:.2f} → {adjustment_factor:.2f}x")
                 except Exception as e:
                     logger.error(f"Sentiment adjustment error: {e}")
@@ -5236,21 +5203,26 @@ class EnhancedMLSystem:
                             # Apply regime scaling to all predictions
                             if regime_scale != 1.0:
                                 for h_key in predictions:
-                                    if 'ensemble_prediction' in predictions[h_key]:
-                                        current_price = predictions[h_key]['current_price']
-                                        pred_price = predictions[h_key]['ensemble_prediction']
+                                    pred_dict = predictions.get(h_key)
+                                    if not isinstance(pred_dict, dict):
+                                        continue
+                                    if 'ensemble_prediction' in pred_dict:
+                                        current_price = pred_dict.get('current_price')
+                                        pred_price = pred_dict.get('ensemble_prediction')
+                                        if current_price is None or pred_price is None:
+                                            continue
                                         
                                         # Scale the return, not the price
                                         pred_return = (pred_price - current_price) / current_price
                                         scaled_return = pred_return * regime_scale
                                         scaled_price = current_price * (1.0 + scaled_return)
                                         
-                                        predictions[h_key]['ensemble_prediction'] = float(scaled_price)
-                                        predictions[h_key]['regime'] = regime
-                                        predictions[h_key]['regime_scale'] = float(regime_scale)
-                                        predictions[h_key]['vol_20d'] = float(vol_20)
-                                        predictions[h_key]['vol_p33'] = float(vol_p33)
-                                        predictions[h_key]['vol_p67'] = float(vol_p67)
+                                        pred_dict['ensemble_prediction'] = float(scaled_price)
+                                        pred_dict['regime'] = regime
+                                        pred_dict['regime_scale'] = float(regime_scale)
+                                        pred_dict['vol_20d'] = float(vol_20)
+                                        pred_dict['vol_p33'] = float(vol_p33)
+                                        pred_dict['vol_p67'] = float(vol_p67)
                                 
                                 logger.debug(f"{symbol}: Regime {regime} (vol={vol_20:.4f}, p33={vol_p33:.4f}, p67={vol_p67:.4f}), scale={regime_scale:.2f}")
                         
@@ -5284,8 +5256,15 @@ class EnhancedMLSystem:
 
                 for h_key in list(predictions.keys()):
                     try:
-                        current_price = float(predictions[h_key]['current_price'])
-                        pred_px = float(predictions[h_key]['ensemble_prediction'])
+                        pred_dict = predictions.get(h_key)
+                        if not isinstance(pred_dict, dict):
+                            continue
+                        current_price_val = pred_dict.get('current_price')
+                        pred_px_val = pred_dict.get('ensemble_prediction')
+                        if current_price_val is None or pred_px_val is None:
+                            continue
+                        current_price = float(current_price_val)
+                        pred_px = float(pred_px_val)
                         raw_delta = (pred_px - current_price) / max(current_price, 1e-12)
                         # Prefer training-time empirical cap if available for this symbol/horizon
                         try:
@@ -5299,19 +5278,19 @@ class EnhancedMLSystem:
                         cap = float(cap_train) if (cap_train == cap_train) else cap_env  # use train cap if not NaN
                         clipped_delta = float(np.clip(raw_delta, -cap, cap))
 
-                        predictions[h_key]['raw_delta'] = float(raw_delta)
-                        predictions[h_key]['cap'] = float(cap)
+                        pred_dict['raw_delta'] = float(raw_delta)
+                        pred_dict['cap'] = float(cap)
                         if clipped_delta != raw_delta:
-                            predictions[h_key]['cap_applied'] = True
-                            predictions[h_key]['delta_clipped'] = float(clipped_delta)
-                            predictions[h_key]['ensemble_prediction'] = float(
+                            pred_dict['cap_applied'] = True
+                            pred_dict['delta_clipped'] = float(clipped_delta)
+                            pred_dict['ensemble_prediction'] = float(
                                 current_price * (1.0 + clipped_delta)
                             )
                             logger.debug(
                                 f"{symbol} {h_key}: delta clipped {raw_delta:.3f} → {clipped_delta:.3f} (cap={cap:.2f})"
                             )
                         else:
-                            predictions[h_key]['cap_applied'] = False
+                            pred_dict['cap_applied'] = False
                     except Exception as _e:
                         logger.debug(f"Empirical cap step error for {symbol} {h_key}: {_e}")
             except Exception as e:
@@ -5325,8 +5304,15 @@ class EnhancedMLSystem:
                 
                 # Calibration factor (higher vol → wider predictions)
                 for h_key in predictions:
-                    pred = predictions[h_key]['ensemble_prediction']
-                    current_price = predictions[h_key]['current_price']
+                    pred_dict = predictions.get(h_key)
+                    if not isinstance(pred_dict, dict):
+                        continue
+                    pred_val = pred_dict.get('ensemble_prediction')
+                    current_price_val = pred_dict.get('current_price')
+                    if pred_val is None or current_price_val is None:
+                        continue
+                    pred = float(pred_val)
+                    current_price = float(current_price_val)
                     
                     # Delta in percentage
                     delta_pct = (pred - current_price) / current_price
@@ -5339,9 +5325,9 @@ class EnhancedMLSystem:
                     
                     # Apply calibrated delta
                     calibrated_pred = current_price * (1 + calibrated_delta)
-                    predictions[h_key]['ensemble_prediction'] = float(calibrated_pred)
-                    predictions[h_key]['calibrated'] = True
-                    predictions[h_key]['vol_20d'] = float(vol_20d)
+                    pred_dict['ensemble_prediction'] = float(calibrated_pred)
+                    pred_dict['calibrated'] = True
+                    pred_dict['vol_20d'] = float(vol_20d)
                     
                 logger.debug(f"Volatility calibration applied (vol={vol_20d:.4f})")
             except Exception as e:
@@ -5439,15 +5425,26 @@ class EnhancedMLSystem:
                     if hk in ('consistency_enforced',):
                         continue
                     try:
-                        cp = float(predictions[hk]['current_price'])
-                        px = float(predictions[hk]['ensemble_prediction'])
+                        pred_hk = predictions.get(hk)
+                        if pred_hk is None or not isinstance(pred_hk, dict):
+                            continue
+                        current_price = pred_hk.get('current_price')
+                        ensemble_pred = pred_hk.get('ensemble_prediction')
+                        if current_price is None or ensemble_pred is None:
+                            continue
+                        cp = float(current_price)
+                        px = float(ensemble_pred)
                         delta = (px - cp) / max(cp, 1e-12)
+                        guard_dict = pred_hk.get('guard')
+                        guard_scale = 1.0
+                        if isinstance(guard_dict, dict):
+                            guard_scale = float(guard_dict.get('confidence_scale', 1.0))
                         entry['items'].append({
                             'horizon': hk,
                             'delta': float(delta),
-                            'cap_applied': bool(predictions[hk].get('cap_applied', False)),
-                            'guard_scale': float(predictions[hk].get('guard', {}).get('confidence_scale', 1.0)) if isinstance(predictions[hk].get('guard'), dict) else 1.0,
-                            'inconsistency': bool(predictions[hk].get('inconsistency_flag', False)),
+                            'cap_applied': bool(pred_hk.get('cap_applied', False)),
+                            'guard_scale': guard_scale,
+                            'inconsistency': bool(pred_hk.get('inconsistency_flag', False)),
                         })
                     except Exception as e:
                         logger.debug(f"Failed to append prediction entry for {hk}: {e}")
@@ -5519,15 +5516,20 @@ class EnhancedMLSystem:
                     key = f"{symbol}_{h}d"
                     if key in self.models:
                         entry = {}
-                        for m, info in (self.models.get(key, {}) or {}).items():
+                        models_dict = self.models.get(key)
+                        if models_dict is None or not isinstance(models_dict, dict):
+                            models_dict = {}
+                        for m, info in models_dict.items():
+                            if not isinstance(info, dict):
+                                continue
                             try:
                                 entry[m] = {
-                                    'score': float(info.get('score', 0.0)),
-                                    'rmse': float(info.get('rmse', 0.0)),
-                                    'mape': float(info.get('mape', 0.0)),
-                                    'raw_r2': float(info.get('raw_r2', 0.0)),
+                                    'score': float(info.get('score', 0.0) or 0.0),
+                                    'rmse': float(info.get('rmse', 0.0) or 0.0),
+                                    'mape': float(info.get('mape', 0.0) or 0.0),
+                                    'raw_r2': float(info.get('raw_r2', 0.0) or 0.0),
                                 }
-                            except Exception as e:
+                            except (ValueError, TypeError) as e:
                                 logger.debug(f"Failed to create metrics entry for {m}: {e}")
                                 continue
                         metrics[f"{h}d"] = entry
@@ -5535,7 +5537,7 @@ class EnhancedMLSystem:
                 # ✅ CRITICAL FIX: Atomic write to prevent corrupt metrics file
                 _atomic_write_json(metrics_file, metrics)
             except Exception as e:
-                logger.warning(f"Failed to save metrics to {metrics_file}: {e}")
+                logger.warning(f"Failed to save metrics: {e}")
 
             # Feature importance kaydet
             importance_file = f"{self.model_directory}/{symbol}_feature_importance.pkl"
@@ -5573,7 +5575,7 @@ class EnhancedMLSystem:
                 # ✅ CRITICAL FIX: Atomic write to prevent corrupt feature columns file
                 _atomic_write_json(cols_file, list(self.feature_columns or []))
             except Exception as e:
-                logger.warning(f"Failed to save feature columns to {cols_file}: {e}")
+                logger.warning(f"Failed to save feature columns: {e}")
             
             # ⚡ CRITICAL FIX: Save horizon-specific feature columns!
             # Each horizon uses different features after reduction (40 features per horizon)
@@ -5647,10 +5649,14 @@ class EnhancedMLSystem:
                         # ✅ FIX: Get meta-learner model order if available
                         if hasattr(self, 'meta_model_orders'):
                             meta_order_key = f"{symbol}_{h}d_meta_model_order"
-                            if meta_order_key in self.meta_model_orders:
-                                cur_meta_order[hk] = self.meta_model_orders[meta_order_key]
+                            meta_order_val = self.meta_model_orders.get(meta_order_key)
+                            if meta_order_val is not None:
+                                cur_meta_order[hk] = meta_order_val
                         # Horizon features (if available in memory)
-                        cur_hfeat[hk] = list(self.models.get(f"{symbol}_{h}d_features", []))
+                        features_val = self.models.get(f"{symbol}_{h}d_features", [])
+                        if not isinstance(features_val, list):
+                            features_val = []
+                        cur_hfeat[hk] = list(features_val)
                         # Horizon empirical cap (if available)
                         cap_val = self.models.get(f"{symbol}_{h}d_cap", np.nan)
                         try:
@@ -5704,7 +5710,11 @@ class EnhancedMLSystem:
                 try:
                     with open(manifest_path, 'r') as rf:
                         final_manifest = json.load(rf) or {}
+                    if not isinstance(final_manifest, dict):
+                        final_manifest = {}
                     all_horizons = final_manifest.get('horizons', [])
+                    if not isinstance(all_horizons, list):
+                        all_horizons = []
                     logger.debug(f"Model manifest merged & written: {manifest_path} (horizons={all_horizons})")
                 except Exception as e:
                     logger.debug(f"Failed to read back manifest: {e}")
@@ -5729,7 +5739,11 @@ class EnhancedMLSystem:
                                 'rmse': float(info.get('rmse', 0.0)),
                                 'mape': float(info.get('mape', 0.0)),
                             }
-                            for m, info in (self.models.get(f"{symbol}_{h}d", {}) or {}).items()
+                            for m, info in (
+                                (self.models.get(f"{symbol}_{h}d") or {}).items()
+                                if isinstance(self.models.get(f"{symbol}_{h}d"), dict)
+                                else []
+                            )
                         }
                         for h in self.prediction_horizons
                     },
@@ -5809,7 +5823,11 @@ class EnhancedMLSystem:
                 try:
                     with open(manifest_path, 'r') as mf:
                         manifest_obj = json.load(mf) or {}
+                    if not isinstance(manifest_obj, dict):
+                        manifest_obj = {}
                     enabled_models_per_horizon = manifest_obj.get('enabled_models', {})
+                    if not isinstance(enabled_models_per_horizon, dict):
+                        enabled_models_per_horizon = {}
                     logger.debug(f"📋 Loaded enabled_models from manifest: {enabled_models_per_horizon}")
                 except Exception as e:
                     logger.warning(f"⚠️ Could not load manifest for {symbol}: {e}")
@@ -5982,7 +6000,11 @@ class EnhancedMLSystem:
                 if os.path.exists(manifest_path):
                     with open(manifest_path, 'r') as mf:
                         manifest_obj = json.load(mf) or {}
-                    hcaps = manifest_obj.get('horizon_caps') or {}
+                    if not isinstance(manifest_obj, dict):
+                        manifest_obj = {}
+                    hcaps = manifest_obj.get('horizon_caps')
+                    if not isinstance(hcaps, dict):
+                        hcaps = {}
                     # Example keys: {'1d': 0.051, '3d': 0.085, ...}
                     for hk, cap_val in hcaps.items():
                         try:
@@ -6000,7 +6022,9 @@ class EnhancedMLSystem:
             try:
                 meta_file = f"{self.model_directory}/{symbol}_meta_learners.pkl"
                 if os.path.exists(meta_file):
-                    symbol_meta = joblib.load(meta_file) or {}
+                    symbol_meta = joblib.load(meta_file)
+                    if not isinstance(symbol_meta, dict):
+                        symbol_meta = {}
                     self.meta_learners.update(symbol_meta)
                     logger.debug(f"Meta-learners loaded: {len(symbol_meta)} models")
             except Exception as e:
@@ -6010,7 +6034,9 @@ class EnhancedMLSystem:
             try:
                 scalers_file = f"{self.model_directory}/{symbol}_meta_scalers.pkl"
                 if os.path.exists(scalers_file):
-                    symbol_scalers = joblib.load(scalers_file) or {}
+                    symbol_scalers = joblib.load(scalers_file)
+                    if not isinstance(symbol_scalers, dict):
+                        symbol_scalers = {}
                     self.scalers.update(symbol_scalers)
                     logger.debug(f"Meta-scalers loaded: {len(symbol_scalers)} scalers")
             except Exception as e:
@@ -6023,12 +6049,16 @@ class EnhancedMLSystem:
                 if os.path.exists(manifest_path):
                     with open(manifest_path, 'r') as mf:
                         manifest_obj = json.load(mf) or {}
+                    if not isinstance(manifest_obj, dict):
+                        manifest_obj = {}
                     manifest_meta_orders = manifest_obj.get('meta_model_orders', {})
-                    if manifest_meta_orders:
+                    if manifest_meta_orders and isinstance(manifest_meta_orders, dict):
                         if not hasattr(self, 'meta_model_orders'):
                             self.meta_model_orders = {}
                         # Convert manifest format to internal format
                         for hk, order_list in manifest_meta_orders.items():
+                            if not isinstance(order_list, list):
+                                continue
                             order_key = f"{symbol}_{hk}_meta_model_order"
                             self.meta_model_orders[order_key] = order_list
                         logger.debug(f"Meta model orders loaded from manifest: {len(manifest_meta_orders)} orders")

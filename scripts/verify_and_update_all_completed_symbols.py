@@ -12,7 +12,7 @@ import os
 import json
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 from datetime import datetime
 
 sys.path.insert(0, '/opt/bist-pattern')
@@ -30,7 +30,6 @@ except ImportError:
 from scripts.continuous_hpo_training_pipeline import STATE_FILE
 from scripts.retrain_high_discrepancy_symbols import (
     find_study_db,
-    find_best_trial_with_filter_applied,
     get_best_params_from_study
 )
 

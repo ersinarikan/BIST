@@ -9,6 +9,7 @@ Gösterir:
 - O an eğitim yapılıyorsa onu
 - Tamamlanan semboller ve ufuklar için istatistiksel bilgiler
 """
+# pyright: reportUnusedVariable=false, reportUnusedImport=false
 import sys
 import os
 import json

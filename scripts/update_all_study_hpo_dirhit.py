@@ -10,19 +10,10 @@ import json
 import subprocess
 import re
 from pathlib import Path
-from typing import Dict, Optional, Set, Tuple
+from typing import Optional, Set, Tuple
 
 sys.path.insert(0, '/opt/bist-pattern')
 os.environ['PYTHONPATH'] = '/opt/bist-pattern'
-
-try:
-    import optuna
-except ImportError:
-    venv_python = '/opt/bist-pattern/venv/bin/python3'
-    if os.path.exists(venv_python):
-        os.execv(venv_python, [venv_python] + sys.argv)
-    else:
-        raise
 
 from scripts.continuous_hpo_training_pipeline import STATE_FILE
 from scripts.retrain_high_discrepancy_symbols import find_best_trial_with_filter_applied
@@ -86,7 +77,7 @@ def get_filtered_best_dirhit_from_study(db_file: Path, symbol: str, horizon: int
         
         # Fallback: use filtered_score
         return filtered_score
-    except Exception as e:
+    except Exception:
         return None
 
 
@@ -124,7 +115,6 @@ def main():
     print(f"\n📊 Study dosyaları: {len(study_files)}")
     
     updated_count = 0
-    not_found_count = 0
     no_trial_count = 0
     already_correct_count = 0
     

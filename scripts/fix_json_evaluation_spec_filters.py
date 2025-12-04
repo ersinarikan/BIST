@@ -6,7 +6,7 @@ Reads actual filter values from split_metrics and updates evaluation_spec
 import json
 import shutil
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 
 RESULTS_DIR = Path('/opt/bist-pattern/results')
 BACKUP_DIR = RESULTS_DIR / 'json_backups_filter_fix'

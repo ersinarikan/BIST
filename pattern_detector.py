@@ -1,10 +1,11 @@
+# pyright: reportUnusedVariable=false, reportUnusedImport=false
 """
 Hibrit Pattern Detection Sistemi
 TA-Lib + YOLOv8 + FinGPT kombinasyonu ile kesin formasyon tespiti
 """
 
 import pandas as pd
-import numpy as np
+import numpy as np  # type: ignore[unused-import]
 from datetime import datetime
 import warnings
 import logging
@@ -82,6 +83,13 @@ class HybridPatternDetector:
         except Exception as e:
             ErrorHandler.handle(e, 'pattern_detector_init', level='warning')
             self.cache_ttl = 300
+        # Lazy-initialized instance variables
+        # Lazy-initialized instance variables
+        self._cleanup_scheduled: bool = False
+        self._visual_thread_pool = None  # type: ignore
+        self._visual_results: dict = {}
+        self._visual_lock = None  # type: ignore
+        self._param_store: dict | None = None
         try:
             self.result_cache_max_size = int(os.getenv('PATTERN_RESULT_CACHE_MAX_SIZE', '200'))
         except Exception as e:

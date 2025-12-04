@@ -7,7 +7,7 @@ import sys
 import os
 import json
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 sys.path.insert(0, '/opt/bist-pattern')
 os.environ['PYTHONPATH'] = '/opt/bist-pattern'

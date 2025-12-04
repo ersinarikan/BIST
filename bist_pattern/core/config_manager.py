@@ -5,7 +5,7 @@ Provides consistent config access across the application
 
 import os
 import logging
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

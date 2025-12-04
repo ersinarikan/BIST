@@ -5,6 +5,7 @@ Enhanced Yahoo Finance Data Fetcher with Advanced Rate Limiting Bypass
 Bu modül curl_cffi, proxy rotation, session management ve gelişmiş
 anti-detection teknikleri kullanarak Yahoo Finance'tan güvenilir veri çeker.
 """
+# pyright: reportUnusedVariable=false, reportUnusedImport=false
 
 import asyncio
 import random

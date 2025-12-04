@@ -61,7 +61,7 @@ def _ddebug(msg: str) -> None:
     try:
         if DEBUG_VERBOSE:
             logger.debug(msg)
-    except Exception as e:
+    except Exception:
         # Silently ignore debug logging failures
         pass
 

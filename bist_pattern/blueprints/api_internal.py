@@ -1,3 +1,4 @@
+# pyright: reportUnusedVariable=false, reportUnusedImport=false
 from flask import Blueprint, jsonify, request
 import os
 import logging
@@ -482,6 +483,7 @@ def register(app):
         preds_map = {}
         files = sorted(_glob.glob(_os.path.join(pat_dir, '*.json')))
         for f in files:
+            sym = None
             try:
                 sym = _os.path.basename(f).split('.')[0].upper()
                 with open(f, 'r') as rf:
@@ -498,7 +500,7 @@ def register(app):
                 if enriched:
                     preds_map[sym] = {'enhanced': enriched}
             except Exception as e:
-                logger.debug(f"Failed to enrich predictions for {sym}: {e}")
+                logger.debug(f"Failed to enrich predictions for {sym if sym else 'unknown'}: {e}")
                 continue
 
         obj = {'predictions': preds_map, 'rebuilt_at': _time.time()}
@@ -1155,6 +1157,7 @@ def register(app):
             }
 
             # Persist snapshot
+            fpath = None
             try:
                 base_dir = _os.getenv('BIST_LOG_PATH', '/opt/bist-pattern/logs')
                 _os.makedirs(base_dir, exist_ok=True)
@@ -1162,7 +1165,7 @@ def register(app):
                 with open(fpath, 'w') as wf:
                     _json.dump(payload, wf)
             except Exception as e:
-                logger.debug(f"Failed to save file {fpath}: {e}")
+                logger.debug(f"Failed to save file {fpath if fpath else 'unknown'}: {e}")
 
             return jsonify(payload)
         except Exception as e:
@@ -1264,8 +1267,18 @@ def register(app):
                             try:
                                 obj = _json.loads(ln.strip())
                                 if isinstance(obj, dict):
-                                    ok_cnt = int(obj.get('ok')) if obj.get('ok') is not None else ok_cnt
-                                    fail_cnt = int(obj.get('fail')) if obj.get('fail') is not None else fail_cnt
+                                    ok_val = obj.get('ok')
+                                    fail_val = obj.get('fail')
+                                    if ok_val is not None:
+                                        try:
+                                            ok_cnt = int(ok_val)
+                                        except (ValueError, TypeError):
+                                            pass
+                                    if fail_val is not None:
+                                        try:
+                                            fail_cnt = int(fail_val)
+                                        except (ValueError, TypeError):
+                                            pass
                                     break
                             except Exception as e:
                                 logger.debug(f"Failed to parse JSON from log line, trying regex: {e}")
@@ -1547,6 +1560,7 @@ def register(app):
             # This provides additional insight beyond dir_hit
             ab_7d_magnitude = {}
             try:
+                from models import PredictionsLog, OutcomesLog  # type: ignore
                 hkeys2 = ['1d', '3d', '7d', '14d', '30d']
                 ab_7d_magnitude = {h: {'prod': {'acc': None, 'n': 0}, 'chall': {'acc': None, 'n': 0}} for h in hkeys2}
                 from datetime import date as _date2, timedelta as _timedelta2
@@ -1718,13 +1732,15 @@ def register(app):
                             if not hk:
                                 continue
                             try:
-                                hr = float(it.get('hit_rate')) if it.get('hit_rate') is not None else None
-                            except Exception as e:
+                                hit_rate_val = it.get('hit_rate')
+                                hr = float(hit_rate_val) if hit_rate_val is not None else None
+                            except (ValueError, TypeError) as e:
                                 logger.debug(f"Failed to get hit_rate: {e}")
                                 hr = None
                             try:
-                                nr = float(it.get('nrmse')) if it.get('nrmse') is not None else None
-                            except Exception as e:
+                                nrmse_val = it.get('nrmse')
+                                nr = float(nrmse_val) if nrmse_val is not None else None
+                            except (ValueError, TypeError) as e:
                                 logger.debug(f"Failed to get nrmse: {e}")
                                 nr = None
                             if hk not in metrics:
@@ -1801,6 +1817,7 @@ def register(app):
             vsys = get_visual_pattern_system()
             res = vsys.analyze_stock_visual(sym, stock_data)
             # Persist compact snapshot visual evidence if available
+            snap_path = None
             try:
                 import os as _os
                 import json as _json
@@ -1840,7 +1857,7 @@ def register(app):
                 with open(snap_path, 'w') as wf:
                     _json.dump(snap, wf)
             except Exception as e:
-                logger.debug(f"Failed to save snapshot to {snap_path}: {e}")
+                logger.debug(f"Failed to save snapshot to {snap_path if snap_path else 'unknown'}: {e}")
             return jsonify({'status': 'success', 'result': res})
         except Exception as e:
             app.logger.error(f"internal_visual_analysis error: {e}")

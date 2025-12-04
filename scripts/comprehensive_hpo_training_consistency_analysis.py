@@ -6,6 +6,7 @@ Comprehensive analysis of HPO and Training consistency:
 3. Analyze all possible scenarios (filter mismatch, best trial changes, etc.)
 4. Determine if previous trainings are invalid
 """
+# pyright: reportUnusedVariable=false, reportUnusedImport=false
 
 import sys
 import os

@@ -6,21 +6,11 @@ Update hpo_dirhit for in-progress HPO tasks from study files (with 10/5.0 filter
 import sys
 import os
 import json
-import sqlite3
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Optional
 
 sys.path.insert(0, '/opt/bist-pattern')
 os.environ['PYTHONPATH'] = '/opt/bist-pattern'
-
-try:
-    import optuna
-except ImportError:
-    venv_python = '/opt/bist-pattern/venv/bin/python3'
-    if os.path.exists(venv_python):
-        os.execv(venv_python, [venv_python] + sys.argv)
-    else:
-        raise
 
 from scripts.continuous_hpo_training_pipeline import STATE_FILE
 from scripts.retrain_high_discrepancy_symbols import find_best_trial_with_filter_applied

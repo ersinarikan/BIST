@@ -7,7 +7,6 @@ Kalıcı permission çözümü için utility fonksiyonlar:
 - Group-writable permissions (775)
 """
 import os
-import stat
 from pathlib import Path
 from typing import Optional
 import logging

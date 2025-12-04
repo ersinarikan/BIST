@@ -5,7 +5,7 @@ Provides consistent error handling and logging across the application
 
 import logging
 import traceback
-from typing import Optional, Any
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 

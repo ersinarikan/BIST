@@ -15,25 +15,15 @@ import os
 import json
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional
 from datetime import datetime
 
 sys.path.insert(0, '/opt/bist-pattern')
 os.environ['PYTHONPATH'] = '/opt/bist-pattern'
 
-try:
-    import optuna
-except ImportError:
-    venv_python = '/opt/bist-pattern/venv/bin/python3'
-    if os.path.exists(venv_python):
-        os.execv(venv_python, [venv_python] + sys.argv)
-    else:
-        raise
-
 from scripts.continuous_hpo_training_pipeline import STATE_FILE
 from scripts.retrain_high_discrepancy_symbols import (
     find_study_db,
-    find_best_trial_with_filter_applied,
     get_best_params_from_study
 )
 
@@ -125,7 +115,6 @@ def update_json_with_filtered_params(json_file: Path, symbol: str, horizon: int,
             return True
         
         # Update best_params
-        old_best_params = data.get('best_params', {})
         new_best_params = best_params_data.get('best_params', {})
         
         # Update main best_params

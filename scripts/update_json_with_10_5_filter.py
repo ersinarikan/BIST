@@ -8,7 +8,7 @@ import os
 import json
 import argparse
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 from datetime import datetime
 import shutil
 
@@ -75,12 +75,10 @@ def update_json_with_filtered_trial(json_file: Path, symbol: str, horizon: int,
         best_params = filtered_trial.params.copy()
         
         # Get features from filtered trial
-        features_enabled = {}
         feature_params = {}
         hyperparameters = {}
         
         if hasattr(filtered_trial, 'user_attrs'):
-            features_enabled = filtered_trial.user_attrs.get('features_enabled', {})
             feature_params = filtered_trial.user_attrs.get('feature_params', {})
         
         # Feature flags (enable_*)

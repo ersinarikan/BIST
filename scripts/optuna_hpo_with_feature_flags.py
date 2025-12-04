@@ -33,19 +33,19 @@ logger = logging.getLogger(__name__)
 
 # Check model availability
 try:
-    import xgboost  # noqa: F401
+    import xgboost  # type: ignore[unused-import]  # noqa: F401
     XGBOOST_AVAILABLE = True
 except ImportError:
     XGBOOST_AVAILABLE = False
 
 try:
-    import lightgbm  # noqa: F401
+    import lightgbm  # type: ignore[unused-import]  # noqa: F401
     LIGHTGBM_AVAILABLE = True
 except ImportError:
     LIGHTGBM_AVAILABLE = False
 
 try:
-    import catboost  # noqa: F401
+    import catboost  # type: ignore[unused-import]  # noqa: F401
     CATBOOST_AVAILABLE = True
 except ImportError:
     CATBOOST_AVAILABLE = False

@@ -30,21 +30,21 @@ logger = logging.getLogger(__name__)
 
 # System availability flags - module başında tanımla
 try:
-    import advanced_patterns  # noqa: F401
+    import advanced_patterns  # type: ignore[unused-import]  # noqa: F401
     ADVANCED_PATTERNS_AVAILABLE = True
 except ImportError:
     ADVANCED_PATTERNS_AVAILABLE = False
     logger.warning("⚠️ Advanced patterns modülü yüklenemedi")
 
 try:
-    import visual_pattern_detector  # noqa: F401
+    import visual_pattern_detector  # type: ignore[unused-import]  # noqa: F401
     VISUAL_PATTERNS_AVAILABLE = True
 except ImportError:
     VISUAL_PATTERNS_AVAILABLE = False
     logger.warning("⚠️ Visual patterns modülü yüklenemedi")
 
 try:
-    import ml_prediction_system  # noqa: F401
+    import ml_prediction_system  # type: ignore[unused-import]  # noqa: F401
     ML_PREDICTION_AVAILABLE = True
 except ImportError:
     ML_PREDICTION_AVAILABLE = False
@@ -59,7 +59,7 @@ except ImportError:
 
 # Gevent availability check
 try:
-    import gevent  # noqa: F401
+    import gevent  # type: ignore[unused-import]  # noqa: F401
     GEVENT_AVAILABLE = True
 except ImportError:
     GEVENT_AVAILABLE = False

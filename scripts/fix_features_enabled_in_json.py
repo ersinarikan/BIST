@@ -2,6 +2,7 @@
 """
 Fix features_enabled in JSON files based on model_choice
 """
+# pyright: reportUnusedVariable=false, reportUnusedImport=false
 
 import sys
 import os

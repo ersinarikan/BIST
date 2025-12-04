@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pyright: reportUnusedVariable=false, reportUnusedImport=false
 """
 Continuous HPO and Training Pipeline
 
@@ -1976,7 +1977,7 @@ class ContinuousHPOPipeline:
             hpo_result: Full HPO result dict (includes best_trial_number, features_enabled, etc.)
         """
         # ✅ FIX: Import os at function level to avoid scope issues
-        import os
+        import os  # type: ignore[unused-import]
         results: Dict[str, Optional[float]] = {'wfv': None, 'online': None}
         total_days = len(df)
         
@@ -1993,7 +1994,7 @@ class ContinuousHPOPipeline:
             return results
 
         # ⚡ NEW: Use multiple splits for walk-forward validation (same as HPO)
-        from scripts.optuna_hpo_with_feature_flags import generate_walkforward_splits, calculate_dynamic_split
+        from scripts.optuna_hpo_with_feature_flags import generate_walkforward_splits, calculate_dynamic_split  # type: ignore[unused-import]
         
         wfv_splits = generate_walkforward_splits(total_days, horizon, n_splits=4)
         
@@ -3678,7 +3679,6 @@ class ContinuousHPOPipeline:
             # This prevents false "insufficient data" when HPO is continuing from previous run
             if not skip_data_check:
                 # Check if symbol has sufficient data for this horizon
-                data_fetch_error = None
                 try:
                     with app.app_context():
                         det = HybridPatternDetector()
@@ -3693,7 +3693,11 @@ class ContinuousHPOPipeline:
                         if df is None:
                             # Check if this is a connection error by trying to get any symbol
                             # If connection fails, we should proceed with HPO (HPO has its own data fetching)
-                            logger.warning(f"⚠️ {symbol} {horizon}d: get_stock_data returned None. This could be due to DB connection issues or missing data. Proceeding with HPO (HPO will handle data fetching)...")
+                            logger.warning(
+                                f"⚠️ {symbol} {horizon}d: get_stock_data returned None. "
+                                f"This could be due to DB connection issues or missing data. "
+                                f"Proceeding with HPO (HPO will handle data fetching)..."
+                            )
                             # Don't skip - let HPO handle it
                         else:
                             # Minimum data requirements per horizon
@@ -3722,8 +3726,10 @@ class ContinuousHPOPipeline:
                 except Exception as e:
                     # ✅ FIX: If data fetch fails (e.g., DB connection error), proceed with HPO
                     # HPO has its own data fetching mechanism that might work better
-                    data_fetch_error = str(e)
-                    logger.warning(f"⚠️ Data quality check failed for {symbol} {horizon}d: {e}. This is likely a DB connection issue. Proceeding with HPO (HPO will handle data fetching)...")
+                    logger.warning(
+                        f"⚠️ Data quality check failed for {symbol} {horizon}d: {e}. "
+                        f"This is likely a DB connection issue. Proceeding with HPO (HPO will handle data fetching)..."
+                    )
                     # Don't skip - let HPO handle it
             
             # Update state: HPO in progress
