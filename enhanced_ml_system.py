@@ -16,7 +16,7 @@ import os
 import math
 import logging
 import threading
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 from bist_pattern.core.config_manager import ConfigManager
 from bist_pattern.utils.error_handler import ErrorHandler
 from sklearn.metrics import mean_squared_error, r2_score
@@ -195,7 +195,7 @@ logger = logging.getLogger(__name__)
 # ATOMIC FILE OPERATIONS HELPERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _atomic_write_json(file_path: str, data: any, indent: int = 2) -> None:
+def _atomic_write_json(file_path: str, data: Any, indent: int = 2) -> None:
     """
     Atomically write JSON file (temp file + rename to prevent corrupt files).
     
@@ -227,7 +227,7 @@ def _atomic_write_json(file_path: str, data: any, indent: int = 2) -> None:
         raise e
 
 
-def _atomic_write_pickle(file_path: str, data: any) -> None:
+def _atomic_write_pickle(file_path: str, data: Any) -> None:
     """
     Atomically write pickle file using joblib (temp file + rename to prevent corrupt files).
     
@@ -736,17 +736,17 @@ class EnhancedMLSystem:
             # Leakage-safe rolling features per row (uses only up-to-date info)
             try:
                 # Binary flags
-                bull_flag = (pats > 0).astype(float)
-                bear_flag = (pats < 0).astype(float)
+                bull_flag: pd.Series = (pats > 0).astype(float)  # type: ignore[assignment]
+                bear_flag: pd.Series = (pats < 0).astype(float)  # type: ignore[assignment]
                 
                 # Pattern strength (pattern'in gücü, 0.0-1.0)
-                pat_strength = np.clip(np.abs(pats) / 100.0, 0.0, 1.0).astype(float)
+                pat_strength: pd.Series = pd.Series(np.clip(np.abs(pats) / 100.0, 0.0, 1.0), index=df.index).astype(float)  # type: ignore[assignment]
                 
                 # Basic counts (existing) - 3-day window
                 df['pat_bull3'] = bull_flag.rolling(3, min_periods=1).sum().astype(float)
                 df['pat_bear3'] = bear_flag.rolling(3, min_periods=1).sum().astype(float)
                 df['pat_net3'] = (df['pat_bull3'] - df['pat_bear3']).astype(float)
-                df['pat_today'] = np.clip(pats / 100.0, -1.0, 1.0).astype(float)
+                df['pat_today'] = pd.Series(np.clip(pats / 100.0, -1.0, 1.0), index=df.index).astype(float)  # type: ignore[assignment]
                 
                 # Extended windows (5-day and 10-day) - MUST be calculated BEFORE confidence features
                 df['pat_bull5'] = bull_flag.rolling(5, min_periods=1).sum().astype(float)
@@ -847,7 +847,7 @@ class EnhancedMLSystem:
         try:
             if df is None or len(df) == 0:
                 return
-            dates = pd.to_datetime(df.index).normalize()
+            dates = pd.to_datetime(df.index).normalize()  # type: ignore[attr-defined]
 
             def _load_csv_safe(path: str) -> pd.DataFrame | None:
                 try:
@@ -859,11 +859,11 @@ class EnhancedMLSystem:
                         tmp['date'] = pd.to_datetime(tmp['date']).dt.normalize()
                         tmp = tmp.set_index('date').sort_index()
                     elif 'timestamp' in tmp.columns:
-                        tmp['timestamp'] = pd.to_datetime(tmp['timestamp']).dt.normalize()
+                        tmp['timestamp'] = pd.to_datetime(tmp['timestamp']).dt.normalize()  # type: ignore[attr-defined]
                         tmp = tmp.set_index('timestamp').sort_index()
                     else:
                         # try to parse index if unnamed
-                        tmp.index = pd.to_datetime(tmp.index).normalize()
+                        tmp.index = pd.to_datetime(tmp.index).normalize()  # type: ignore[attr-defined]
                     return tmp
                 except Exception as _e:
                     logger.debug(f"External feature load failed: {path} → {_e}")
@@ -902,7 +902,7 @@ class EnhancedMLSystem:
                         fdf = fdf.reindex(dates, method='ffill')
                         if score_cols:
                             try:
-                                df['fingpt_sent'] = pd.to_numeric(fdf[score_cols[0]], errors='coerce').fillna(0.0).astype(float)
+                                df['fingpt_sent'] = pd.to_numeric(fdf[score_cols[0]], errors='coerce').fillna(0.0).astype(float)  # type: ignore[attr-defined]
                                 if use_smoothing:
                                     df['fingpt_sent'] = df['fingpt_sent'].ewm(alpha=smooth_alpha, adjust=False).mean()
                             except Exception as e:
@@ -913,7 +913,7 @@ class EnhancedMLSystem:
                             df['fingpt_sent'] = 0.0
                         if count_cols:
                             try:
-                                df['fingpt_news'] = pd.to_numeric(fdf[count_cols[0]], errors='coerce').fillna(0.0).astype(float)
+                                df['fingpt_news'] = pd.to_numeric(fdf[count_cols[0]], errors='coerce').fillna(0.0).astype(float)  # type: ignore[attr-defined]
                                 if use_smoothing:
                                     df['fingpt_news'] = df['fingpt_news'].ewm(alpha=smooth_alpha, adjust=False).mean()
                             except Exception as e:
@@ -942,7 +942,7 @@ class EnhancedMLSystem:
                         ydf = ydf.reindex(dates, method='ffill')
                         if dens_cols:
                             try:
-                                df['yolo_density'] = pd.to_numeric(ydf[dens_cols[0]], errors='coerce').fillna(0.0).astype(float)
+                                df['yolo_density'] = pd.to_numeric(ydf[dens_cols[0]], errors='coerce').fillna(0.0).astype(float)  # type: ignore[attr-defined]
                                 if use_smoothing:
                                     df['yolo_density'] = df['yolo_density'].ewm(alpha=smooth_alpha, adjust=False).mean()
                             except Exception as e:
@@ -953,7 +953,7 @@ class EnhancedMLSystem:
                             df['yolo_density'] = 0.0
                         if bull_cols:
                             try:
-                                df['yolo_bull'] = pd.to_numeric(ydf[bull_cols[0]], errors='coerce').fillna(0.0).astype(float)
+                                df['yolo_bull'] = pd.to_numeric(ydf[bull_cols[0]], errors='coerce').fillna(0.0).astype(float)  # type: ignore[attr-defined]
                                 if use_smoothing:
                                     df['yolo_bull'] = df['yolo_bull'].ewm(alpha=smooth_alpha, adjust=False).mean()
                             except Exception as e:
@@ -964,7 +964,7 @@ class EnhancedMLSystem:
                             df['yolo_bull'] = 0.0
                         if bear_cols:
                             try:
-                                df['yolo_bear'] = pd.to_numeric(ydf[bear_cols[0]], errors='coerce').fillna(0.0).astype(float)
+                                df['yolo_bear'] = pd.to_numeric(ydf[bear_cols[0]], errors='coerce').fillna(0.0).astype(float)  # type: ignore[attr-defined]
                                 if use_smoothing:
                                     df['yolo_bear'] = df['yolo_bear'].ewm(alpha=smooth_alpha, adjust=False).mean()
                             except Exception as e:
@@ -975,7 +975,7 @@ class EnhancedMLSystem:
                             df['yolo_bear'] = 0.0
                         if score_cols:
                             try:
-                                df['yolo_score'] = pd.to_numeric(ydf[score_cols[0]], errors='coerce').fillna(0.0).astype(float)
+                                df['yolo_score'] = pd.to_numeric(ydf[score_cols[0]], errors='coerce').fillna(0.0).astype(float)  # type: ignore[attr-defined]
                                 if use_smoothing:
                                     df['yolo_score'] = df['yolo_score'].ewm(alpha=smooth_alpha, adjust=False).mean()
                             except Exception as e:
@@ -1189,7 +1189,7 @@ class EnhancedMLSystem:
                 minus_di = 100 * minus_dm.rolling(14).mean() / (atr + 1e-10)
                 
                 # ADX
-                dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10)
+                dx: pd.Series = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10)  # type: ignore[assignment]
                 df['adx'] = dx.rolling(14).mean()
                 df['adx_trending'] = (df['adx'] > 25).astype(int)  # 1 if trending, 0 if ranging
                 
@@ -1360,12 +1360,12 @@ class EnhancedMLSystem:
             try:
                 # Try to get date from index (if it's DatetimeIndex)
                 if isinstance(df.index, pd.DatetimeIndex):
-                    start_date = df.index.min().date()
-                    end_date = df.index.max().date()
+                    start_date = df.index.min().date()  # type: ignore[attr-defined]
+                    end_date = df.index.max().date()  # type: ignore[attr-defined]
                 elif hasattr(df.index.min(), 'date'):
                     # Index has date attribute (Timestamp)
-                    start_date = df.index.min().date()
-                    end_date = df.index.max().date()
+                    start_date = df.index.min().date()  # type: ignore[attr-defined]
+                    end_date = df.index.max().date()  # type: ignore[attr-defined]
                 elif 'date' in df.columns:
                     # Use 'date' column
                     start_date = pd.to_datetime(df['date']).min().date()
@@ -1448,9 +1448,9 @@ class EnhancedMLSystem:
                 
                 # Add columns directly (in-place!) + Convert to float64!
                 # ⚡ FIX: Only ffill (no bfill - prevents lookahead!)
-                df['usdtry'] = pd.to_numeric(macro_data['usdtry'], errors='coerce').ffill().fillna(0).astype('float64')
-                df['cds'] = pd.to_numeric(macro_data['cds'], errors='coerce').ffill().fillna(0).astype('float64')
-                df['rate'] = pd.to_numeric(macro_data['rate'], errors='coerce').ffill().fillna(0).astype('float64')
+                df['usdtry'] = pd.to_numeric(macro_data['usdtry'], errors='coerce').ffill().fillna(0).astype('float64')  # type: ignore[attr-defined]
+                df['cds'] = pd.to_numeric(macro_data['cds'], errors='coerce').ffill().fillna(0).astype('float64')  # type: ignore[attr-defined]
+                df['rate'] = pd.to_numeric(macro_data['rate'], errors='coerce').ffill().fillna(0).astype('float64')  # type: ignore[attr-defined]
                 logger.info("✅ Macro base features added: usdtry, cds, rate (dtype=float64)")
                 
                 # Create derivative features
@@ -1532,7 +1532,7 @@ class EnhancedMLSystem:
             logger.debug(f"_should_halt check failed: {e}")
             return False
 
-    def train_enhanced_models(self, symbol, data):
+    def train_enhanced_models(self, symbol, data):  # type: ignore[misc]  # Code is too complex to analyze
         """Gelişmiş modelleri eğit - Adaptive Learning destekli"""
         try:
             logger.info("="*80)
@@ -4057,7 +4057,7 @@ class EnhancedMLSystem:
             logger.error(f"Enhanced model eğitim hatası: {e}")
             return False
     
-    def predict_enhanced(self, symbol, current_data, sentiment_score=None):
+    def predict_enhanced(self, symbol, current_data, sentiment_score=None):  # type: ignore[misc]  # Code is too complex to analyze
         """
         Enhanced predictions with optional sentiment adjustment
         
@@ -4979,7 +4979,7 @@ class EnhancedMLSystem:
                                     # Import smart ensemble utility
                                     import sys
                                     sys.path.insert(0, '/opt/bist-pattern/scripts')
-                                    from ensemble_utils import smart_ensemble
+                                    from ensemble_utils import smart_ensemble  # type: ignore[import]
                                     
                                     # ✅ FIX: Historical R² for performance weighting
                                     # Use raw_r2 from metrics if available, fallback to confidence (converted from R²)

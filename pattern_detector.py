@@ -5,7 +5,7 @@ TA-Lib + YOLOv8 + FinGPT kombinasyonu ile kesin formasyon tespiti
 """
 
 import pandas as pd
-import numpy as np  # type: ignore[unused-import]
+import numpy as np
 from datetime import datetime
 import warnings
 import logging
@@ -13,12 +13,12 @@ import os
 import math
 import time
 import json
-from typing import Any, Callable
+from typing import Any, Callable, Optional, Dict, List, Tuple
 from pathlib import Path
 try:
     import fcntl  # Posix lock
 except Exception:  # pragma: no cover
-    fcntl = None  # type: ignore
+    fcntl: Optional[Any] = None
 from models import Stock  # StockPrice artık kullanılmıyor (doğrudan SQL kullanıyoruz)
 from sqlalchemy import create_engine, text
 from bist_pattern.utils.debug_utils import ddebug as _ddebug
@@ -37,7 +37,7 @@ try:
     ADVANCED_PATTERNS_AVAILABLE = True
 except ImportError:
     ADVANCED_PATTERNS_AVAILABLE = False
-    AdvancedPatternDetector = None  # type: ignore[assignment]
+    AdvancedPatternDetector: Optional[Any] = None
     logger.warning("⚠️ Advanced patterns modülü yüklenemedi")
 
 # Visual pattern detection sistemi (now using async version)
@@ -46,7 +46,7 @@ VISUAL_PATTERNS_AVAILABLE = True  # Always available with async implementation
 # ML Prediction sistemi
 try:
     from ml_prediction_system import get_ml_prediction_system as _real_get_ml_prediction_system
-    get_ml_prediction_system: Callable[[], Any] = _real_get_ml_prediction_system  # type: ignore[assignment]
+    get_ml_prediction_system: Callable[[], Any] = _real_get_ml_prediction_system
     ML_PREDICTION_AVAILABLE = True
 except ImportError:
     ML_PREDICTION_AVAILABLE = False
@@ -784,6 +784,1011 @@ class HybridPatternDetector:
             logger.error(f"Basic pattern detection hatası: {e}")
             return []
     
+    def _check_cache_and_get_data(self, symbol: str) -> Tuple[Optional[Dict], Optional[pd.DataFrame]]:
+        """Cache kontrolü ve veri alma helper metodu"""
+        cache_key = symbol
+        current_time = datetime.now().timestamp()
+        
+        # Cache kontrolü
+        if cache_key in self.cache:
+            cache_entry = self.cache[cache_key]
+            if isinstance(cache_entry, dict) and 'timestamp' in cache_entry:
+                if current_time - cache_entry['timestamp'] < self.cache_ttl:
+                    logger.info(f"Cache hit for {symbol}")
+                    return cache_entry['data'], None
+                else:
+                    del self.cache[cache_key]
+                    logger.info(f"Cache expired for {symbol}")
+            elif isinstance(cache_entry, dict) and 'timestamp' not in cache_entry:
+                logger.info(f"Legacy cache hit for {symbol}")
+                return cache_entry, None
+        
+        # Veri al
+        data = self.get_stock_data(symbol)
+        if data is None or len(data) < 10:
+            return {
+                'symbol': symbol,
+                'status': 'insufficient_data',
+                'message': 'Yeterli veri bulunamadı'
+            }, None
+        
+        return None, data
+    
+    def _collect_all_patterns(self, symbol: str, data: pd.DataFrame) -> Tuple[List[Dict], List[Dict], List[Dict], List[Dict]]:
+        """Tüm pattern kaynaklarından pattern toplama helper metodu"""
+        basic_patterns = []
+        advanced_patterns = []
+        yolo_patterns_raw = []
+        fingpt_patterns = []
+        
+        # Stage 1: Basic TA patterns
+        basic_patterns = self.detect_basic_patterns(data)
+        
+        # Stage 2: Advanced TA patterns
+        try:
+            import os as _os
+            import sys as _sys
+            _argv = ' '.join(_sys.argv) if hasattr(_sys, 'argv') else ''
+            if not os.getenv('DISABLE_ML_PREDICTION_DURING_TRAINING', '0').lower() in ('1', 'true', 'yes', 'on'):
+                logger.warning(f"PROBE before_advanced_ta pid={_os.getpid()} argv={_argv} symbol={symbol}")
+        except Exception as e:
+            logger.debug(f"PROBE logging failed (advanced_ta): {e}")
+        
+        if self.advanced_detector and ADVANCED_PATTERNS_AVAILABLE:
+            try:
+                adv_raw = self.advanced_detector.analyze_all_patterns(data)
+                for ap in (adv_raw or []):
+                    try:
+                        if isinstance(ap, dict):
+                            if 'source' not in ap:
+                                ap['source'] = 'ADVANCED_TA'
+                            rng = ap.get('range') if isinstance(ap.get('range'), dict) else None
+                            if not rng:
+                                ap['range'] = {
+                                    'start_index': int(max(0, len(data) - 30)),
+                                    'end_index': int(len(data) - 1)
+                                }
+                            advanced_patterns.append(ap)
+                        else:
+                            advanced_patterns.append(ap)
+                    except Exception as e:
+                        logger.debug(f"Failed to process advanced pattern range: {e}")
+                        advanced_patterns.append(ap)
+            except Exception as e:
+                logger.error(f"Advanced pattern analysis hatası: {e}")
+        
+        # Stage 3: Visual YOLO patterns (async)
+        if self.visual_detector and ConfigManager.get('ENABLE_YOLO', True):
+            try:
+                import threading
+                from concurrent.futures import ThreadPoolExecutor
+                
+                if getattr(self, '_visual_thread_pool', None) is None:
+                    try:
+                        max_workers = int(os.getenv('VISUAL_THREAD_POOL_WORKERS', '1'))
+                    except Exception as e:
+                        logger.debug(f"Failed to get VISUAL_THREAD_POOL_WORKERS, using 1: {e}")
+                        max_workers = 1
+                    self._visual_thread_pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="YOLO")
+                    self._visual_results = {}
+                    self._visual_lock = threading.Lock()
+                
+                def _async_yolo_analysis():
+                    """Background YOLO analysis"""
+                    try:
+                        from ultralytics import YOLO
+                        from PIL import Image
+                        import matplotlib
+                        matplotlib.use('Agg')
+                        import matplotlib.pyplot as plt
+                        import io
+                        
+                        model_path = os.getenv('YOLO_MODEL_PATH', '/opt/bist-pattern/yolo/patterns_all_v7_rectblend.pt')
+                        min_conf = float(os.getenv('YOLO_MIN_CONF', '0.45'))
+                        
+                        if not hasattr(self, '_yolo_model') or self._yolo_model is None:
+                            self._yolo_model = YOLO(model_path)
+                        
+                        if len(data) >= 20:
+                            fig, ax = plt.subplots(figsize=(6, 3))
+                            recent_data = data.tail(30)
+                            ax.plot(recent_data['close'], linewidth=1, color='blue')
+                            ax.axis('off')
+                            
+                            buf = io.BytesIO()
+                            plt.savefig(buf, format='png', dpi=50, bbox_inches='tight')
+                            buf.seek(0)
+                            img = Image.open(buf)
+                            plt.close(fig)
+                            
+                            results = self._yolo_model.predict(img, conf=min_conf, verbose=False, imgsz=320)
+                            
+                            visual_patterns = []
+                            if results and len(results) > 0:
+                                result = results[0]
+                                if hasattr(result, 'boxes') and result.boxes is not None:
+                                    boxes = result.boxes
+                                    if hasattr(boxes, 'cls') and hasattr(boxes, 'conf'):
+                                        names = getattr(result, 'names', {}) or getattr(self._yolo_model, 'names', {})
+                                        num_detections = len(boxes.cls) if hasattr(boxes, 'cls') else 0
+                                        
+                                        for i in range(min(num_detections, 3)):
+                                            try:
+                                                conf = float(boxes.conf[i])
+                                                cls_idx = int(boxes.cls[i])
+                                                if conf >= min_conf:
+                                                    pattern_name = str(names.get(cls_idx, f'pattern_{cls_idx}'))
+                                                    visual_patterns.append({
+                                                        'pattern': pattern_name,
+                                                        'confidence': conf,
+                                                        'signal': self.get_visual_signal(pattern_name),
+                                                        'strength': int(conf * 100),
+                                                        'source': 'VISUAL_YOLO',
+                                                        'details': {'detection_index': i},
+                                                        'range': {'start_index': max(0, len(data) - 30), 'end_index': len(data) - 1}
+                                                    })
+                                            except Exception as e:
+                                                logger.debug(f"Failed to add range to visual pattern: {e}")
+                                                continue
+                            
+                            if self._visual_lock is not None:
+                                with self._visual_lock:
+                                    self._visual_results[symbol] = {
+                                        'patterns': visual_patterns,
+                                        'timestamp': time.time(),
+                                        'count': len(visual_patterns)
+                                    }
+                            
+                            return len(visual_patterns)
+                    except Exception as e:
+                        logger.warning(f"Background YOLO error for {symbol}: {e}")
+                        return 0
+                
+                if self._visual_thread_pool is not None:
+                    future = self._visual_thread_pool.submit(_async_yolo_analysis)
+                else:
+                    future = None
+                
+                cached_result = None
+                try:
+                    if self._visual_lock is not None:
+                        with self._visual_lock:
+                            cached = self._visual_results.get(symbol)
+                            if cached and (time.time() - cached['timestamp']) < 300:
+                                cached_result = cached
+                except Exception as e:
+                    logger.debug(f"Failed to check cached visual result: {e}")
+                
+                if not cached_result and future is not None:
+                    try:
+                        import concurrent.futures
+                        future.result(timeout=2.0)
+                        if self._visual_lock is not None:
+                            with self._visual_lock:
+                                fresh = self._visual_results.get(symbol)
+                                if fresh:
+                                    cached_result = fresh
+                    except concurrent.futures.TimeoutError:
+                        logger.debug(f"⏱️ YOLO timeout for {symbol}, will use cache next cycle")
+                    except Exception as e:
+                        logger.debug(f"⚠️ YOLO wait error for {symbol}: {e}")
+                
+                if cached_result:
+                    cached_patterns = cached_result.get('patterns', [])
+                    yolo_patterns_raw.extend(cached_patterns)
+                    if len(cached_patterns) > 0:
+                        logger.info(f"📸 YOLO patterns for {symbol}: {len(cached_patterns)} patterns detected")
+                        for p in cached_patterns[:3]:
+                            logger.info(f"   → {p.get('pattern', 'unknown')} ({p.get('signal', 'NEUTRAL')}, conf={p.get('confidence', 0.0):.2f})")
+                    else:
+                        logger.debug(f"📸 YOLO analysis for {symbol}: 0 patterns (model may be too strict or chart unclear)")
+                else:
+                    logger.debug(f"🔄 YOLO analysis queued for {symbol} (background)")
+            except Exception as e:
+                logger.error(f"Async YOLO setup error for {symbol}: {e}")
+        
+        # Stage 4: FinGPT sentiment
+        try:
+            raw_flag = ConfigManager.get('ENABLE_FINGPT', None)
+            if raw_flag is None:
+                try:
+                    from config import config
+                    raw_flag = getattr(config['default'], 'ENABLE_FINGPT', True)
+                except Exception as e:
+                    logger.debug(f"Failed to get ENABLE_FINGPT from config, using True: {e}")
+                    raw_flag = True
+            if isinstance(raw_flag, bool):
+                enable_fingpt = raw_flag
+            elif isinstance(raw_flag, (int, float)):
+                enable_fingpt = bool(int(raw_flag))
+            else:
+                val = str(raw_flag).strip().lower()
+                enable_fingpt = val in ('1', 'true', 'yes', 'on')
+            
+            if enable_fingpt and getattr(self, 'fingpt_available', False) and self.fingpt is not None:
+                news_texts = []
+                try:
+                    if hasattr(self, '_async_rss_provider') and self._async_rss_provider:
+                        news_texts = self._async_rss_provider.get_recent_news_async(symbol) or []
+                        if news_texts:
+                            logger.info(f"📰 Got {len(news_texts)} news items for {symbol}")
+                        else:
+                            logger.info(f"📰 {symbol}: No news items found from RSS (sentiment badge will not appear)")
+                    else:
+                        logger.debug(f"📰 {symbol}: RSS provider not available")
+                except Exception as e:
+                    logger.warning(f"📰 RSS news fetch failed for {symbol}: {e}")
+                    news_texts = []
+                
+                if news_texts:
+                    sent_res = self.fingpt.analyze_stock_news(symbol, news_texts)
+                    sig = 'NEUTRAL'
+                    conf = 0.0
+                    news_count = 0
+                    if isinstance(sent_res, dict):
+                        sig = self.fingpt.get_sentiment_signal(sent_res)
+                        try:
+                            conf = float(sent_res.get('confidence', 0.0) or 0.0)
+                        except Exception as e:
+                            logger.debug(f"Failed to parse FinGPT confidence: {e}")
+                            conf = 0.0
+                        try:
+                            news_count = int(sent_res.get('news_count', 0) or 0)
+                        except Exception as e:
+                            logger.debug(f"Failed to parse FinGPT news_count: {e}")
+                            news_count = 0
+                    else:
+                        logger.debug(f"📰 FinGPT returned invalid result for {symbol}: {type(sent_res)}")
+                    
+                    if sig in ('BULLISH', 'BEARISH') and conf > 0:
+                        logger.info(f"✅ FinGPT sentiment {symbol}: {sig} (conf={conf:.2f}, news={news_count})")
+                        news_items_preview = []
+                        for news_text in news_texts[:5]:
+                            preview = str(news_text)[:200]
+                            if len(str(news_text)) > 200:
+                                preview += "..."
+                            news_items_preview.append(preview)
+                        
+                        fingpt_patterns.append({
+                            'pattern': 'FINGPT_SENTIMENT',
+                            'signal': sig,
+                            'confidence': max(0.3, min(0.9, conf)),
+                            'strength': int(max(0.3, min(0.9, conf)) * 100),
+                            'source': 'FINGPT',
+                            'news_count': news_count,
+                            'news_items': news_items_preview
+                        })
+                    else:
+                        logger.debug(f"📰 FinGPT sentiment {symbol}: {sig} (conf={conf:.2f}, news={news_count}) - below threshold")
+                else:
+                    logger.debug(f"📰 FinGPT skipped for {symbol}: no news items")
+        except Exception as e:
+            logger.error(f"FinGPT sentiment integration hatası {symbol}: {e}")
+        
+        return basic_patterns, advanced_patterns, yolo_patterns_raw, fingpt_patterns
+    
+    def _validate_patterns(self, symbol: str, data: pd.DataFrame, basic_patterns: List[Dict], 
+                          advanced_patterns: List[Dict], yolo_patterns_raw: List[Dict], 
+                          fingpt_patterns: List[Dict]) -> List[Dict]:
+        """Pattern validation helper metodu"""
+        validation_enabled = str(os.getenv('ENABLE_PATTERN_VALIDATION', 'True')).lower() == 'true'
+        
+        if validation_enabled:
+            try:
+                from bist_pattern.core.pattern_validator import get_pattern_validator
+                validator = get_pattern_validator()
+                
+                validated_patterns, validation_stats = validator.validate_patterns(
+                    basic_patterns=basic_patterns,
+                    advanced_patterns=advanced_patterns,
+                    yolo_patterns=yolo_patterns_raw,
+                    data=data
+                )
+                
+                patterns = validated_patterns
+                if fingpt_patterns:
+                    patterns.extend(fingpt_patterns)
+                
+                logger.info(
+                    f"✅ Pattern Validation {symbol}: "
+                    f"{validation_stats['validated']}/{validation_stats['total_basic']} validated "
+                    f"(rejected: {validation_stats['rejected']}, "
+                    f"avg score: {validation_stats.get('avg_validation_score', 0):.2f})"
+                )
+                return patterns
+            except Exception as e:
+                logger.error(f"Pattern validation error for {symbol}: {e}")
+                patterns = [p.copy() for p in basic_patterns + advanced_patterns + yolo_patterns_raw]
+                for p in patterns:
+                    p['confidence'] = p.get('confidence', 0.5) * 0.8
+                if fingpt_patterns:
+                    patterns.extend(fingpt_patterns)
+                return patterns
+        else:
+            patterns = basic_patterns + advanced_patterns + yolo_patterns_raw
+            if fingpt_patterns:
+                patterns.extend(fingpt_patterns)
+            logger.debug(f"Pattern validation disabled for {symbol}")
+            return patterns
+    
+    def _process_ml_predictions(self, symbol: str, data: pd.DataFrame, patterns: List[Dict]) -> Tuple[Dict, Dict]:
+        """ML prediction processing helper metodu"""
+        ml_predictions = {}
+        enhanced_predictions = {}
+        
+        skip_ml_prediction = (
+            os.getenv('DISABLE_ML_PREDICTION_DURING_TRAINING', '0').lower() in ('1', 'true', 'yes', 'on')
+            or os.getenv('WRITE_ENHANCED_DURING_CYCLE', '0').lower() not in ('1', 'true', 'yes', 'on')
+        )
+        
+        try:
+            if not skip_ml_prediction:
+                from bist_pattern.core.ml_coordinator import get_ml_coordinator
+                mlc = get_ml_coordinator()
+                
+                sentiment_score = None
+                try:
+                    fingpt_patterns = [p for p in patterns if p.get('source') == 'FINGPT']
+                    if fingpt_patterns:
+                        fg = fingpt_patterns[0]
+                        conf = fg.get('confidence', 0.5)
+                        if fg.get('signal') == 'BULLISH':
+                            sentiment_score = 0.5 + (conf * 0.5)
+                        elif fg.get('signal') == 'BEARISH':
+                            sentiment_score = 0.5 - (conf * 0.5)
+                        logger.debug(f"FinGPT sentiment for ML: {sentiment_score:.2f} (signal={fg.get('signal')}, conf={conf:.2f})")
+                except Exception as se:
+                    logger.debug(f"Sentiment extraction error: {se}")
+                
+                coord = mlc.predict_with_coordination(symbol, data, sentiment_score=sentiment_score)
+                if not isinstance(coord, dict):
+                    coord = {}
+                ml_predictions = coord.get('basic', {}) if isinstance(coord.get('basic'), dict) else coord.get('basic', {}) or {}
+                enhanced_predictions = coord.get('enhanced', {}) if isinstance(coord.get('enhanced'), dict) else coord.get('enhanced', {}) or {}
+            else:
+                ml_predictions = {}
+                enhanced_predictions = {}
+            
+            # Map results into pattern signals for UI consistency
+            current_px = float(data['close'].iloc[-1])
+            
+            def _calibrate_delta(delta: float) -> float:
+                try:
+                    tau = float(os.getenv('DELTA_CAL_TAU', '0.08'))
+                except Exception as e:
+                    logger.debug(f"Failed to get DELTA_CAL_TAU, using 0.08: {e}")
+                    tau = 0.08
+                try:
+                    return float(math.tanh(delta / max(1e-9, tau)) * tau)
+                except Exception as e:
+                    logger.debug(f"Delta calibration calculation failed: {e}")
+                    return float(delta)
+            
+            def _emit(hkey: str, pred_px: float, source: str, base_w: float = 0.6, reliability: float | None = None):
+                try:
+                    if not isinstance(pred_px, (int, float)) or current_px <= 0:
+                        return
+                    raw_delta = (float(pred_px) - current_px) / current_px
+                    delta_pct = _calibrate_delta(raw_delta)
+                    rel = reliability
+                    if not isinstance(rel, (int, float)):
+                        try:
+                            rel = float(os.getenv('BASIC_RELIABILITY', '0.6')) if source.upper() in ('ML_PREDICTOR', 'ML') else 0.65
+                        except Exception as e:
+                            logger.debug(f"Failed to get BASIC_RELIABILITY, using 0.6: {e}")
+                            rel = 0.6
+                    rel = max(0.0, min(1.0, float(rel)))
+                    if abs(delta_pct) < 0.003:
+                        return
+                    conf = max(0.25, min(0.95, base_w * rel * min(1.0, abs(delta_pct) / 0.05)))
+                    src = 'ML_PREDICTOR' if source.upper() in ('ML', 'ML_PREDICTOR') else (
+                        'ENHANCED_ML' if source.upper() in ('ENH', 'ENHANCED_ML') else source
+                    )
+                    patterns.append({
+                        'pattern': f'{src}_{hkey.upper()}',
+                        'signal': 'BULLISH' if delta_pct > 0 else 'BEARISH',
+                        'confidence': conf,
+                        'strength': int(conf * 100),
+                        'source': src,
+                        'delta_pct': float(delta_pct)
+                    })
+                except Exception as e:
+                    logger.debug(f"Failed to emit pattern: {e}")
+            
+            # Basic ML predictions
+            basic = ml_predictions if isinstance(ml_predictions, dict) else {}
+            basic_count = 0
+            for hk, pobj in basic.items():
+                try:
+                    if not isinstance(pobj, dict):
+                        continue
+                    px = pobj.get('price') or pobj.get('prediction') or pobj.get('target')
+                    if not isinstance(px, (int, float)):
+                        continue
+                    try:
+                        basic_rel = float(os.getenv('BASIC_RELIABILITY', '0.6'))
+                    except Exception as e:
+                        logger.debug(f"Failed to get BASIC_RELIABILITY, using 0.6: {e}")
+                        basic_rel = 0.6
+                    _emit(hk, float(px), 'ML_PREDICTOR', reliability=basic_rel)
+                    basic_count += 1
+                except Exception as e:
+                    logger.debug(f"Failed to process basic ML prediction for {hk}: {e}")
+                    continue
+            
+            if basic_count == 0 and basic:
+                _ddebug(f"⚠️ Basic ML data available but no valid predictions for {symbol}: {list(basic.keys())}", logger)
+            
+            # Enhanced ML predictions
+            enh = enhanced_predictions if isinstance(enhanced_predictions, dict) else {}
+            enh_count = 0
+            for hk, pobj in enh.items():
+                try:
+                    pred_val = None
+                    rel_hint = None
+                    if isinstance(pobj, dict):
+                        pred_val = (
+                            pobj.get('ensemble_prediction')
+                            or pobj.get('prediction')
+                            or pobj.get('price')
+                            or pobj.get('target')
+                        )
+                        try:
+                            raw_conf = pobj.get('confidence')
+                            if isinstance(raw_conf, (int, float)):
+                                r2 = float(raw_conf)
+                                if r2 < 0:
+                                    rel_hint = 0.0
+                                elif r2 < 0.5:
+                                    rel_hint = r2
+                                else:
+                                    rel_hint = 0.5 + (r2 - 0.5) * 0.9
+                                    rel_hint = min(0.95, rel_hint)
+                        except Exception as e:
+                            logger.debug(f"Failed to calculate rel_hint: {e}")
+                            rel_hint = None
+                    elif isinstance(pobj, (int, float)):
+                        pred_val = float(pobj)
+                    if not isinstance(pred_val, (int, float)):
+                        continue
+                    _emit(hk, float(pred_val), 'ENHANCED_ML', base_w=0.7, reliability=rel_hint)
+                    enh_count += 1
+                except Exception as e:
+                    logger.debug(f"Failed to process enhanced ML prediction for {hk}: {e}")
+                    continue
+            
+            if enh_count == 0 and enh:
+                _ddebug(f"⚠️ Enhanced ML data available but no valid predictions for {symbol}: {list(enh.keys())}", logger)
+            elif enh_count > 0:
+                _ddebug(f"✅ Enhanced ML predictions for {symbol}: {enh_count} horizons", logger)
+        except Exception as e:
+            logger.error(f"Coordinated ML prediction integration hatası {symbol}: {e}")
+        
+        return ml_predictions, enhanced_predictions
+    
+    def _build_ml_unified(self, symbol: str, data: pd.DataFrame, ml_predictions: Dict, 
+                         enhanced_predictions: Dict, patterns: List[Dict], 
+                         calib_override: Optional[Dict]) -> Dict:
+        """ML unified schema build helper metodu"""
+        ml_unified = {}
+        current_px = float(data['close'].iloc[-1])
+        
+        def _calibrate_delta(delta: float) -> float:
+            try:
+                tau = float(os.getenv('DELTA_CAL_TAU', '0.08'))
+            except Exception as e:
+                logger.debug(f"Failed to get DELTA_CAL_TAU, using 0.08: {e}")
+                tau = 0.08
+            try:
+                return float(math.tanh(delta / max(1e-9, tau)) * tau)
+            except Exception as e:
+                logger.debug(f"Delta calibration calculation failed: {e}")
+                return float(delta)
+        
+        try:
+            def _norm_basic(basic_map):
+                out = {}
+                if isinstance(basic_map, dict):
+                    for h, v in basic_map.items():
+                        try:
+                            price = None
+                            if isinstance(v, (int, float)):
+                                price = float(v)
+                            elif isinstance(v, dict):
+                                for k in ('price', 'prediction', 'target', 'value', 'y'):
+                                    if isinstance(v.get(k), (int, float)):
+                                        price = float(v[k])
+                                        break
+                            if price is not None:
+                                try:
+                                    basic_rel = float(os.getenv('BASIC_RELIABILITY', '0.6'))
+                                except Exception as e:
+                                    logger.debug(f"Failed to get basic reliability: {e}")
+                                    basic_rel = 0.6
+                                out[str(h).lower()] = {'source': 'basic', 'price': price, 'reliability': float(max(0.0, min(1.0, basic_rel)))}
+                        except Exception as e:
+                            logger.debug(f"Failed to process basic prediction for {h}: {e}")
+                            continue
+                return out
+            
+            def _norm_enh(enh_map):
+                out = {}
+                if isinstance(enh_map, dict):
+                    for h, v in enh_map.items():
+                        try:
+                            price = None
+                            rel = None
+                            if isinstance(v, (int, float)):
+                                price = float(v)
+                            elif isinstance(v, dict):
+                                for k in ('ensemble_prediction', 'prediction', 'price', 'target'):
+                                    if isinstance(v.get(k), (int, float)):
+                                        price = float(v[k])
+                                        break
+                                try:
+                                    raw_conf = v.get('confidence')
+                                    if isinstance(raw_conf, (int, float)):
+                                        r2 = float(raw_conf)
+                                        if r2 < 0:
+                                            rel = 0.0
+                                        elif r2 < 0.5:
+                                            rel = r2
+                                        else:
+                                            rel = min(0.95, 0.5 + (r2 - 0.5) * 0.9)
+                                except Exception as e:
+                                    logger.debug(f"Failed to get enhanced reliability: {e}")
+                                    rel = None
+                            if price is not None:
+                                if not isinstance(rel, (int, float)):
+                                    rel = 0.65
+                                out[str(h).lower()] = {'source': 'enhanced', 'price': price, 'reliability': float(max(0.0, min(1.0, rel)))}
+                        except Exception as e:
+                            logger.debug(f"Failed to process enhanced prediction for {h}: {e}")
+                            continue
+                return out
+            
+            bmap = _norm_basic(ml_predictions)
+            emap = _norm_enh(enhanced_predictions)
+            horizons = set(bmap.keys()) | set(emap.keys())
+            
+            try:
+                enhanced_first = (os.getenv('ENHANCED_FIRST', '1').lower() in ('1', 'true', 'yes', 'on'))
+            except Exception as e:
+                logger.debug(f"Failed to get ENHANCED_FIRST, using True: {e}")
+                enhanced_first = True
+            
+            try:
+                recent_ret = data['close'].pct_change().tail(20)
+                vol20 = float(recent_ret.std()) if len(recent_ret) > 5 else 0.0
+                recent_ret60 = data['close'].pct_change().tail(60)
+                vol60 = float(recent_ret60.std()) if len(recent_ret60) > 5 else 0.0
+                regime = min(1.0, max(0.0, (vol20 / max(1e-6, vol60)) if vol60 > 0 else vol20 / 0.05))
+            except Exception as e:
+                logger.debug(f"Regime score calculation failed: {e}")
+                regime = 0.5
+            
+            # Get thresholds
+            try:
+                enable_yolo_confirm = (os.getenv('ENABLE_YOLO_CONFIRM', '1').lower() in ('1', 'true', 'yes', 'on'))
+            except Exception as e:
+                logger.debug(f"Failed to get ENABLE_YOLO_CONFIRM, using True: {e}")
+                enable_yolo_confirm = True
+            try:
+                yolo_confirm_mult = float(os.getenv('YOLO_CONFIRM_MULT', '1.5'))
+            except Exception as e:
+                logger.debug(f"Failed to get YOLO_CONFIRM_MULT, using 1.5: {e}")
+                yolo_confirm_mult = 1.5
+            try:
+                yolo_min_conf_ev = float(os.getenv('YOLO_MIN_CONF_EVID', '0.25'))
+            except Exception as e:
+                logger.debug(f"Failed to get YOLO_MIN_CONF_EVID, using 0.25: {e}")
+                yolo_min_conf_ev = 0.25
+            try:
+                fingpt_min_conf = float(os.getenv('FINGPT_MIN_CONF', '0.50'))
+            except Exception as e:
+                logger.debug(f"Failed to get FINGPT_MIN_CONF, using 0.50: {e}")
+                fingpt_min_conf = 0.50
+            try:
+                fingpt_min_news = int(os.getenv('FINGPT_MIN_NEWS', '1'))
+            except Exception as e:
+                logger.debug(f"Failed to get FINGPT_MIN_NEWS, using 1: {e}")
+                fingpt_min_news = 1
+            
+            # Visual confirmation flags
+            visual_bullish = False
+            visual_bearish = False
+            try:
+                for _vp in (patterns or []):
+                    if str(_vp.get('source', '')).upper() == 'VISUAL_YOLO':
+                        try:
+                            if float(_vp.get('confidence', 0.0)) < yolo_min_conf_ev:
+                                continue
+                        except Exception as e:
+                            logger.debug(f"Failed to process visual pattern: {e}")
+                            continue
+                        _sig = str(_vp.get('signal', '')).upper()
+                        if _sig == 'BULLISH':
+                            visual_bullish = True
+                        elif _sig == 'BEARISH':
+                            visual_bearish = True
+            except Exception as e:
+                logger.debug(f"Visual confirmation check failed: {e}")
+                visual_bullish = visual_bearish = False
+            
+            def _agg_evidence(h_days: int):
+                try:
+                    pat_score = 0.0
+                    pat_w = 0.0
+                    sent_score = 0.0
+                    sent_w = 0.0
+                    for p in (patterns or []):
+                        try:
+                            src = str(p.get('source', '')).upper()
+                            sig = str(p.get('signal', '')).upper()
+                            sgn = 1.0 if sig == 'BULLISH' else (-1.0 if sig == 'BEARISH' else 0.0)
+                            confp = float(p.get('confidence', (p.get('strength', 50)/100.0)))
+                            confp = max(0.0, min(1.0, confp))
+                            decay_rate = 0.03
+                            h_w = max(0.5, 1.0 * math.exp(-decay_rate * max(0, h_days - 1)))
+                            src_w = 1.1 if src in ('VISUAL_YOLO', 'ADVANCED_TA') else (1.05 if src == 'FINGPT' else 1.0)
+                            if src == 'FINGPT':
+                                try:
+                                    nnews = int(p.get('news_count', 0) or 0)
+                                except Exception as e:
+                                    logger.debug(f"Failed to parse FinGPT news_count: {e}")
+                                    nnews = 0
+                                if (confp >= fingpt_min_conf) and (nnews >= fingpt_min_news):
+                                    w = confp * h_w * src_w
+                                    sent_score += sgn * w
+                                    sent_w += w
+                            else:
+                                w = confp * h_w * src_w
+                                if enable_yolo_confirm and src in ('ADVANCED_TA', 'BASIC'):
+                                    if (sgn > 0 and visual_bullish) or (sgn < 0 and visual_bearish):
+                                        w *= yolo_confirm_mult
+                                pat_score += sgn * w
+                                pat_w += w
+                        except Exception as e:
+                            logger.debug(f"Failed to process pattern evidence: {e}")
+                            continue
+                    pat_val = (pat_score / pat_w) if pat_w > 0 else 0.0
+                    sent_val = (sent_score / sent_w) if sent_w > 0 else 0.0
+                    return max(-1.0, min(1.0, pat_val)), max(-1.0, min(1.0, sent_val))
+                except Exception as e:
+                    logger.warning(f"Evidence aggregation failed: {e}")
+                    return 0.0, 0.0
+            
+            def _compute_1d_booster_prob(df):
+                try:
+                    try:
+                        from sklearn.linear_model import LogisticRegression
+                    except Exception as e:
+                        logger.debug(f"Failed to import LogisticRegression: {e}")
+                        return None
+                    import numpy as np
+                    import pandas as pd
+                    
+                    if not isinstance(df, (pd.DataFrame,)) or len(df) < 140:
+                        return None
+                    d = df[['open', 'high', 'low', 'close', 'volume']].copy().tail(360)
+                    close: pd.Series = d['close']  # type: ignore[assignment]
+                    high: pd.Series = d['high']  # type: ignore[assignment]
+                    low: pd.Series = d['low']  # type: ignore[assignment]
+                    volume: pd.Series = d['volume'].astype(float)  # type: ignore[assignment]
+                    
+                    feats = pd.DataFrame(index=d.index)
+                    feats['overnight'] = (d['open'] / close.shift(1) - 1.0) * 100.0
+                    feats['ret1'] = close.pct_change(1) * 100.0
+                    feats['mom3'] = ((close / close.rolling(3).mean()) - 1.0) * 100.0
+                    log_close: pd.Series = pd.Series(np.log(close.values), index=close.index)  # type: ignore[assignment]
+                    feats['rv5'] = log_close.diff().rolling(5).std() * np.sqrt(252) * 100.0  # type: ignore[attr-defined]
+                    delta: pd.Series = close.diff()  # type: ignore[assignment]
+                    up: pd.Series = delta.clip(lower=0).rolling(3).mean()  # type: ignore[assignment]
+                    down: pd.Series = (-delta.clip(upper=0)).rolling(3).mean()  # type: ignore[assignment]
+                    rs = up / (down + 1e-9)
+                    feats['rsi3'] = 100.0 - (100.0 / (1.0 + rs))
+                    feats['gap'] = ((d['open'] - close.shift(1)) / (close.shift(1) + 1e-9)) * 100.0
+                    feats['tail_up'] = ((high - close) / (close + 1e-9)) * 100.0
+                    feats['tail_dn'] = ((close - low) / (close + 1e-9)) * 100.0
+                    tr1 = (high - low).abs()
+                    tr2 = (high - close.shift(1)).abs()
+                    tr3 = (low - close.shift(1)).abs()
+                    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                    atr5 = tr.rolling(5).mean()
+                    feats['atr5_n'] = (atr5 / (close + 1e-9)) * 100.0
+                    ma20 = close.rolling(20).mean()
+                    sd20 = close.rolling(20).std()
+                    feats['boll_pos'] = (close - ma20) / (sd20 + 1e-9)
+                    ll14 = low.rolling(14).min()
+                    hh14 = high.rolling(14).max()
+                    feats['stoch_k'] = ((close - ll14) / ((hh14 - ll14) + 1e-9)) * 100.0
+                    ema10 = close.ewm(span=10, adjust=False).mean()
+                    feats['ema10_slope'] = ema10.pct_change(1) * 100.0
+                    vol_ma = volume.rolling(20).mean()
+                    vol_sd = volume.rolling(20).std()
+                    feats['vol_z'] = (volume - vol_ma) / (vol_sd + 1e-9)
+                    dow = feats.index.dayofweek  # type: ignore[attr-defined,assignment]
+                    for dval in range(5):
+                        feats[f'dow_{dval}'] = (dow == dval).astype(int)
+                    
+                    y = (close.shift(-1) > close).astype(float)
+                    mask = feats.replace([np.inf, -np.inf], np.nan).notna().all(axis=1) & y.notna()
+                    feats = feats.loc[mask]
+                    y = y.loc[mask]
+                    if len(feats) < 120:
+                        return None
+                    X_train = feats.iloc[:-1]
+                    y_train = y.iloc[:-1]
+                    X_last = feats.iloc[[-1]]
+                    if len(np.unique(y_train)) < 2:
+                        return None
+                    clf = LogisticRegression(max_iter=400, solver='liblinear')
+                    clf.fit(X_train.values, y_train.values)
+                    p_up = float(clf.predict_proba(X_last.values)[0, 1])
+                    return p_up
+                except Exception as e:
+                    logger.debug(f"1D booster probability calculation failed: {e}")
+                    return None
+            
+            # Process each horizon
+            for h in horizons:
+                cur = {}
+                if h in bmap:
+                    cur['basic'] = bmap[h]
+                if h in emap:
+                    cur['enhanced'] = emap[h]
+                
+                entries = []
+                for src in ('basic', 'enhanced'):
+                    if src in cur and isinstance(cur[src], dict):
+                        price = cur[src].get('price')
+                        rel = cur[src].get('reliability')
+                        if isinstance(price, (int, float)) and current_px > 0:
+                            delta = (price - current_px) / current_px
+                            cdelta = _calibrate_delta(delta)
+                            try:
+                                h_days = int(str(h).replace('d', '') or 7)
+                                move_scale = 0.05 * max(1.0, h_days / 7.0)
+                                base_w = (0.6 + 0.2 * regime) if src == 'enhanced' else (0.65 - 0.15 * regime)
+                                rr = float(rel) if isinstance(rel, (int, float)) else (0.65 if src == 'enhanced' else 0.6)
+                                conf = max(0.25, min(0.95, base_w * rr * min(1.0, abs(cdelta) / move_scale)))
+                            except Exception as e:
+                                logger.debug(f"Confidence calculation failed: {e}")
+                                conf = max(0.25, min(0.95, abs(cdelta) / 0.05))
+                            
+                            try:
+                                h_days = int(str(h).replace('d', '') or 7)
+                            except Exception as e:
+                                logger.debug(f"Failed to parse h_days, using 7: {e}")
+                                h_days = 7
+                            
+                            # Evidence-based confidence adjustment
+                            enable_meta = True
+                            try:
+                                enable_meta = (os.getenv('PATTERN_SENTI_META', '1').lower() in ('1', 'true', 'yes', 'on'))
+                            except Exception as e:
+                                logger.debug(f"Failed to get PATTERN_SENTI_META, using True: {e}")
+                                enable_meta = True
+                            pat_s, sent_s = _agg_evidence(h_days)
+                            
+                            w_pat = 0.0
+                            w_sent = 0.0
+                            signed_adj = 0.0
+                            
+                            try:
+                                use_new_validation = (os.getenv('USE_PATTERN_AGREEMENT', '1').lower() in ('1', 'true', 'yes', 'on'))
+                            except Exception as e:
+                                logger.debug(f"Failed to get USE_PATTERN_AGREEMENT, using True: {e}")
+                                use_new_validation = True
+                            
+                            if use_new_validation:
+                                try:
+                                    from bist_pattern.pattern.validation import calculate_pattern_agreement
+                                    pattern_agreement = calculate_pattern_agreement(
+                                        patterns=patterns,
+                                        ml_signal='BULLISH' if cdelta > 0 else 'BEARISH',
+                                        ml_confidence=conf
+                                    )
+                                except Exception as e:
+                                    logger.debug(f"Pattern agreement calculation failed: {e}")
+                                    pattern_agreement = 0.0
+                                evidence_boost = pattern_agreement
+                                try:
+                                    _ps = self._load_param_store() or {}
+                                    _hkey = str(h)
+                                    _wmap = (_ps.get('weights') or {}).get(_hkey) if isinstance(_ps, dict) else None
+                                    if isinstance(_wmap, dict):
+                                        w_pat = float(_wmap.get('w_pat', 0.0)) or 0.0
+                                        w_sent = float(_wmap.get('w_sent', 0.0)) or 0.0
+                                    else:
+                                        raise KeyError('no weights')
+                                except Exception as e:
+                                    logger.debug(f"Failed to load weights from param_store (new validation): {e}")
+                                    if h_days <= 1:
+                                        w_pat, w_sent = 0.12, 0.10
+                                    elif h_days <= 3:
+                                        w_pat, w_sent = 0.10, 0.08
+                                    elif h_days <= 7:
+                                        w_pat, w_sent = 0.06, 0.05
+                                    elif h_days <= 14:
+                                        w_pat, w_sent = 0.04, 0.03
+                                    else:
+                                        w_pat, w_sent = 0.03, 0.02
+                                signed_adj = (w_pat * pat_s + w_sent * sent_s) if enable_meta else 0.0
+                            else:
+                                try:
+                                    _ps = self._load_param_store() or {}
+                                    _hkey = str(h)
+                                    _wmap = (_ps.get('weights') or {}).get(_hkey) if isinstance(_ps, dict) else None
+                                    if isinstance(_wmap, dict):
+                                        w_pat = float(_wmap.get('w_pat', 0.0)) or 0.0
+                                        w_sent = float(_wmap.get('w_sent', 0.0)) or 0.0
+                                    else:
+                                        raise KeyError('no weights')
+                                except Exception as e:
+                                    logger.debug(f"Failed to load weights from param_store (new validation): {e}")
+                                    if h_days <= 1:
+                                        w_pat, w_sent = 0.12, 0.10
+                                    elif h_days <= 3:
+                                        w_pat, w_sent = 0.10, 0.08
+                                    elif h_days <= 7:
+                                        w_pat, w_sent = 0.06, 0.05
+                                    elif h_days <= 14:
+                                        w_pat, w_sent = 0.04, 0.03
+                                    else:
+                                        w_pat, w_sent = 0.03, 0.02
+                                signed_adj = (w_pat * pat_s + w_sent * sent_s) if enable_meta else 0.0
+                                evidence_boost = max(-0.15, min(0.15, signed_adj))
+                            
+                            booster_adj = 0.0
+                            booster_p = None
+                            try:
+                                enable_booster = (os.getenv('ENABLE_1D_BOOSTER', '1').lower() in ('1', 'true', 'yes', 'on'))
+                            except Exception as e:
+                                logger.debug(f"Failed to get ENABLE_1D_BOOSTER, using True: {e}")
+                                enable_booster = True
+                            if enable_booster and h_days <= 1:
+                                booster_p = _compute_1d_booster_prob(data)
+                                if isinstance(booster_p, float):
+                                    agree = (cdelta >= 0 and booster_p >= 0.5) or (cdelta < 0 and booster_p < 0.5)
+                                    strength = abs(booster_p - 0.5) * 2.0
+                                    booster_adj = (0.08 * strength) * (1.0 if agree else -1.0)
+                            
+                            try:
+                                online_adj = self._get_empirical_confidence_adjustment(str(h), conf)
+                            except Exception as e:
+                                logger.debug(f"Empirical confidence adjustment failed: {e}")
+                                online_adj = 0.0
+                            
+                            conf_after_meta = max(0.25, min(0.95, conf + evidence_boost))
+                            conf_after_meta_and_booster = max(0.25, min(0.95, conf_after_meta + booster_adj))
+                            conf_final = max(0.25, min(0.95, conf_after_meta_and_booster + online_adj))
+                            
+                            cdelta_tilted = cdelta
+                            delta_contrib = 0.0
+                            # Define maps outside try block to ensure they're always available
+                            thr_map = {'1d': 0.008, '3d': 0.021, '7d': 0.03, '14d': 0.03, '30d': 0.025}
+                            alpha_map = {'1d': 0.25, '3d': 0.15, '7d': 0.10, '14d': 0.08, '30d': 0.08}
+                            
+                            try:
+                                enable_delta_tilt = (os.getenv('ENABLE_DELTA_TILT', '1').lower() in ('1', 'true', 'yes', 'on'))
+                            except Exception:
+                                enable_delta_tilt = True
+                            
+                            try:
+                                h_key = str(h)
+                                base_thr = float(thr_map.get(h_key, 0.03))
+                                alpha = float(alpha_map.get(h_key, 0.08))
+                                mag = min(1.0, max(0.0, abs(signed_adj) / 0.15 if 0.15 > 0 else 0.0))
+                                sgn = 1.0 if signed_adj >= 0 else -1.0
+                                alignment_strength = (cdelta * sgn) / max(abs(cdelta), 1e-8) if abs(cdelta) > 1e-8 else 0.0
+                                k = 5.0
+                                agreement_score = 1.0 / (1.0 + np.exp(-k * alignment_strength))
+                                agree_factor = agreement_score
+                                base_tilt = (alpha * base_thr * mag) if enable_delta_tilt else 0.0
+                                tilt_ev = base_tilt * (2.0 * agree_factor - 1.0) if agree_factor >= 0.5 else -0.5 * base_tilt * (1.0 - agree_factor * 2.0)
+                                tilt_boost = 0.0
+                                if isinstance(booster_p, float):
+                                    bmag = abs(booster_p - 0.5) * 2.0
+                                    booster_alignment = (cdelta * (booster_p - 0.5)) / max(abs(cdelta), 1e-8) if abs(cdelta) > 1e-8 else 0.0
+                                    booster_agreement = 1.0 / (1.0 + np.exp(-k * booster_alignment))
+                                    bagree_factor = booster_agreement
+                                    tilt_boost = ((0.5 * alpha) * base_thr * bmag * (2.0 * bagree_factor - 1.0)) if enable_delta_tilt else 0.0
+                                cdelta_tilted = cdelta + tilt_ev + tilt_boost
+                                if cdelta_tilted > 0.5:
+                                    cdelta_tilted = 0.5
+                                if cdelta_tilted < -0.5:
+                                    cdelta_tilted = -0.5
+                                delta_contrib = (cdelta_tilted - cdelta)
+                            except Exception as e:
+                                logger.debug(f"Delta tilt calculation failed: {e}")
+                                cdelta_tilted = cdelta
+                                delta_contrib = 0.0
+                            
+                            cur[src]['delta_pct'] = float(cdelta_tilted)
+                            cur[src]['confidence'] = conf_final
+                            cur[src]['evidence'] = {
+                                'pattern_score': float(pat_s),
+                                'sentiment_score': float(sent_s),
+                                'contrib_conf': float(conf_final - conf),
+                                'w_pat': float(w_pat),
+                                'w_sent': float(w_sent),
+                            }
+                            if booster_p is not None:
+                                cur[src]['evidence']['booster_prob'] = float(booster_p)
+                                cur[src]['evidence']['contrib_booster'] = float(booster_adj)
+                            if isinstance(delta_contrib, float) and abs(delta_contrib) > 0:
+                                cur[src]['evidence']['contrib_delta'] = float(delta_contrib)
+                            eff_rel = float(max(0.0, min(1.0, rel))) if isinstance(rel, (int, float)) else (0.65 if src == 'enhanced' else 0.6)
+                            score = abs(cdelta) * eff_rel * (1.0 + (0.15 if (src == 'enhanced' and regime >= 0.6) else 0.0))
+                            entries.append((score, src))
+                
+                # Decide best
+                if enhanced_first and ('enhanced' in cur):
+                    cur['best'] = 'enhanced'
+                elif enhanced_first and ('enhanced' not in cur) and ('basic' in cur):
+                    cur['best'] = 'basic'
+                elif entries:
+                    best_src = sorted(entries, key=lambda x: x[0], reverse=True)[0][1]
+                    cur['best'] = best_src
+                
+                # Apply param_store thresholds
+                try:
+                    store = self._load_param_store() or {}
+                    ps_h = (store.get('horizons') or {}).get(str(h), {})
+                    th = ps_h.get('thresholds') or {}
+                    ab_label = 'ab:prod'
+                    try:
+                        import hashlib
+                        bcfg = ((store.get('bandit') or {}).get('horizons') or {}).get(str(h), {})
+                        traffic = float(bcfg.get('traffic', 0.10))
+                        chall = bcfg.get('challenger') or None
+                        hv = f"{symbol.upper()}|{str(h)}".encode()
+                        hv_int = int(hashlib.sha1(hv).hexdigest()[:8], 16)
+                        frac = (hv_int % 1000) / 1000.0
+                        if chall and frac < max(0.0, min(1.0, traffic)):
+                            th = chall
+                            ab_label = 'ab:chall'
+                    except Exception as e:
+                        logger.debug(f"A/B label calculation failed: {e}")
+                        ab_label = 'ab:prod'
+                    delta_thr = float(th.get('delta_thr') or ConfigManager.get('DEFAULT_DELTA_THR', 0.03))
+                    conf_thr = float(th.get('conf_thr') or ConfigManager.get('DEFAULT_CONF_THR', 0.65))
+                    try:
+                        if isinstance(calib_override, dict) and ('penalty_factor' in calib_override) and calib_override.get('penalty_factor') is not None:
+                            penalty_factor = float(calib_override.get('penalty_factor'))  # type: ignore[arg-type]
+                        else:
+                            penalty_factor = float(os.getenv('THRESHOLD_PENALTY_FACTOR', '0.95'))
+                    except Exception as e:
+                        logger.debug(f"Failed to get THRESHOLD_PENALTY_FACTOR, using 0.95: {e}")
+                        penalty_factor = 0.95
+                    
+                    if 'best' in cur and isinstance(cur.get(cur['best']), dict):
+                        be = cur[cur['best']]
+                        try:
+                            if abs(float(be.get('delta_pct', 0.0))) < delta_thr or float(be.get('confidence', 0.0)) < conf_thr:
+                                be['confidence'] = max(0.25, float(be.get('confidence', 0.0)) * penalty_factor)
+                        except Exception as e:
+                            logger.debug(f"Failed to apply threshold penalty: {e}")
+                        try:
+                            pv = str((store or {}).get('generated_at') or '')
+                            be['param_version'] = (pv + '|' + ab_label) if pv else ab_label
+                        except Exception as e:
+                            logger.debug(f"Failed to tag param_version: {e}")
+                except Exception as e:
+                    logger.debug(f"Confidence adjustment failed: {e}")
+                
+                if cur:
+                    ml_unified[h] = cur
+            
+        except Exception as e:
+            import traceback
+            logger.error(f"❌ {symbol}: ml_unified creation failed: {e}")
+            logger.debug(f"   Traceback:\n{traceback.format_exc()}")
+            ml_unified = {}
+        
+        return ml_unified
+
     def analyze_stock(self, symbol):
         """Hisse analizi yap"""
         try:
@@ -809,26 +1814,17 @@ class HybridPatternDetector:
                     pass
             except Exception as e:
                 logger.debug(f"Progress broadcast failed: {e}")
-            # ✅ FIX: Cache key symbol-based (not minute-based!)
-            # Automation results should be reused by user requests
-            cache_key = symbol  # Simple, effective!
-            current_time = datetime.now().timestamp()
+            # Cache kontrolü ve veri alma
+            cached_result, data = self._check_cache_and_get_data(symbol)
+            if cached_result is not None:
+                return cached_result
             
-            # Cache'de var mı ve TTL süresi geçmemiş mi?
-            if cache_key in self.cache:
-                cache_entry = self.cache[cache_key]
-                if isinstance(cache_entry, dict) and 'timestamp' in cache_entry:
-                    if current_time - cache_entry['timestamp'] < self.cache_ttl:
-                        logger.info(f"Cache hit for {symbol}")
-                        return cache_entry['data']
-                    else:
-                        # TTL süresi geçmiş, cache'den sil
-                        del self.cache[cache_key]
-                        logger.info(f"Cache expired for {symbol}")
-                elif isinstance(cache_entry, dict) and 'timestamp' not in cache_entry:
-                    # Eski format cache, direkt kullan ama sonra güncellenecek
-                    logger.info(f"Legacy cache hit for {symbol}")
-                    return cache_entry
+            if data is None:
+                return {
+                    'symbol': symbol,
+                    'status': 'insufficient_data',
+                    'message': 'Yeterli veri bulunamadı'
+                }
             
             # Persisted calibration override (soft toggle)
             calib_override = None
@@ -842,524 +1838,18 @@ class HybridPatternDetector:
             except Exception as e:
                 logger.debug(f"Failed to load calibration override: {e}")
                 calib_override = None
-
-            # Veri al
-            data = self.get_stock_data(symbol)
-            if data is None or len(data) < 10:
-                return {
-                    'symbol': symbol,
-                    'status': 'insufficient_data',
-                    'message': 'Yeterli veri bulunamadı'
-                }
             
             # Teknik indikatörler
             indicators = self.calculate_technical_indicators(data)
             
-            # ==========================================
-            # PATTERN DETECTION WITH VALIDATION PIPELINE
-            # ==========================================
-            # Collect patterns from all sources, then validate
-            basic_patterns = []
-            advanced_patterns = []
-            yolo_patterns_raw = []
+            # Pattern collection (tüm kaynaklardan)
+            basic_patterns, advanced_patterns, yolo_patterns_raw, fingpt_patterns = self._collect_all_patterns(symbol, data)
             
-            # Stage 1: Basic TA patterns
-            basic_patterns = self.detect_basic_patterns(data)
+            # Pattern validation
+            patterns = self._validate_patterns(symbol, data, basic_patterns, advanced_patterns, yolo_patterns_raw, fingpt_patterns)
             
-            # Stage 2: Advanced TA patterns (if available)
-            # PROBE: before advanced TA step to align with TA-Lib logs
-            # ⚡ SILENT: Only log if not in training mode to reduce log noise
-            try:
-                import os as _os
-                import sys as _sys
-                _argv = ' '.join(_sys.argv) if hasattr(_sys, 'argv') else ''
-                # Only log if not in training mode (DISABLE_ML_PREDICTION_DURING_TRAINING not set)
-                if not os.getenv('DISABLE_ML_PREDICTION_DURING_TRAINING', '0').lower() in ('1', 'true', 'yes', 'on'):
-                    logger.warning(f"PROBE before_advanced_ta pid={_os.getpid()} argv={_argv} symbol={symbol}")
-            except Exception as e:
-                logger.debug(f"PROBE logging failed (advanced_ta): {e}")
-            if self.advanced_detector and ADVANCED_PATTERNS_AVAILABLE:
-                try:
-                    adv_raw = self.advanced_detector.analyze_all_patterns(data)
-                    # Normalize and ensure range info
-                    for ap in (adv_raw or []):
-                        try:
-                            if isinstance(ap, dict):
-                                if 'source' not in ap:
-                                    ap['source'] = 'ADVANCED_TA'
-                                rng = ap.get('range') if isinstance(ap.get('range'), dict) else None
-                                if not rng:
-                                    ap['range'] = {
-                                        'start_index': int(max(0, len(data) - 30)),
-                                        'end_index': int(len(data) - 1)
-                                    }
-                                advanced_patterns.append(ap)
-                            else:
-                                advanced_patterns.append(ap)
-                        except Exception as e:
-                            logger.debug(f"Failed to process advanced pattern range: {e}")
-                            advanced_patterns.append(ap)
-                except Exception as e:
-                    logger.error(f"Advanced pattern analysis hatası: {e}")
-            
-            # Visual pattern analysis - ASYNC NON-BLOCKING VERSION
-            # ✅ FIX: Use ConfigManager for consistent config access
-            if self.visual_detector and ConfigManager.get('ENABLE_YOLO', True):
-                try:
-                    import threading
-                    from concurrent.futures import ThreadPoolExecutor
-                    
-                    # Initialize thread pool if not exists (environment-driven)
-                    if not hasattr(self, '_visual_thread_pool'):
-                        try:
-                            max_workers = int(os.getenv('VISUAL_THREAD_POOL_WORKERS', '1'))
-                        except Exception as e:
-                            logger.debug(f"Failed to get VISUAL_THREAD_POOL_WORKERS, using 1: {e}")
-                            max_workers = 1
-                        self._visual_thread_pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="YOLO")
-                        self._visual_results = {}
-                        self._visual_lock = threading.Lock()
-                    
-                    def _async_yolo_analysis():
-                        """Background YOLO analysis"""
-                        try:
-                            from ultralytics import YOLO
-                            from PIL import Image
-                            import matplotlib
-                            matplotlib.use('Agg')
-                            import matplotlib.pyplot as plt
-                            import io
-                            
-                            model_path = os.getenv('YOLO_MODEL_PATH', '/opt/bist-pattern/yolo/patterns_all_v7_rectblend.pt')
-                            # CRITICAL FIX: Raised from 0.12/0.22 to 0.45 for realistic pattern detection
-                            # Lower values caused excessive false positives in production
-                            min_conf = float(os.getenv('YOLO_MIN_CONF', '0.45'))
-                            
-                            # Load model (cached)
-                            if not hasattr(self, '_yolo_model') or self._yolo_model is None:
-                                self._yolo_model = YOLO(model_path)
-                            
-                            # Create lightweight chart
-                            if len(data) >= 20:
-                                fig, ax = plt.subplots(figsize=(6, 3))  # Very small
-                                recent_data = data.tail(30)  # Only 30 days
-                                ax.plot(recent_data['close'], linewidth=1, color='blue')
-                                ax.axis('off')  # No labels for speed
-                                
-                                buf = io.BytesIO()
-                                plt.savefig(buf, format='png', dpi=50, bbox_inches='tight')  # Very low DPI
-                                buf.seek(0)
-                                img = Image.open(buf)
-                                plt.close(fig)
-                                
-                                # Fast YOLO prediction
-                                results = self._yolo_model.predict(img, conf=min_conf, verbose=False, imgsz=320)  # Small image
-                                
-                                visual_patterns = []
-                                if results and len(results) > 0:
-                                    result = results[0]
-                                    if hasattr(result, 'boxes') and result.boxes is not None:
-                                        boxes = result.boxes
-                                        if hasattr(boxes, 'cls') and hasattr(boxes, 'conf'):
-                                            names = getattr(result, 'names', {}) or getattr(self._yolo_model, 'names', {})
-                                            num_detections = len(boxes.cls) if hasattr(boxes, 'cls') else 0
-                                            
-                                            for i in range(min(num_detections, 3)):  # Max 3 patterns
-                                                try:
-                                                    conf = float(boxes.conf[i])
-                                                    cls_idx = int(boxes.cls[i])
-                                                    if conf >= min_conf:
-                                                        pattern_name = str(names.get(cls_idx, f'pattern_{cls_idx}'))
-                                                        visual_patterns.append({
-                                                            'pattern': pattern_name,
-                                                            'confidence': conf,
-                                                            'signal': self.get_visual_signal(pattern_name),
-                                                            'strength': int(conf * 100),
-                                                            'source': 'VISUAL_YOLO',
-                                                            'details': {'detection_index': i},
-                                                            'range': {'start_index': max(0, len(data) - 30), 'end_index': len(data) - 1}
-                                                        })
-                                                except Exception as e:
-                                                    logger.debug(f"Failed to add range to visual pattern: {e}")
-                                                    continue
-                                
-                                # Store result in thread-safe way
-                                with self._visual_lock:
-                                    self._visual_results[symbol] = {
-                                        'patterns': visual_patterns,
-                                        'timestamp': time.time(),
-                                        'count': len(visual_patterns)
-                                    }
-                                
-                                return len(visual_patterns)
-                            
-                        except Exception as e:
-                            logger.warning(f"Background YOLO error for {symbol}: {e}")
-                            return 0
-                    
-                    # Submit to background thread (non-blocking)
-                    future = self._visual_thread_pool.submit(_async_yolo_analysis)
-                    
-                    # Check for immediate cached result (from previous analysis)
-                    cached_result = None
-                    try:
-                        with self._visual_lock:
-                            cached = self._visual_results.get(symbol)
-                            if cached and (time.time() - cached['timestamp']) < 300:  # 5 min cache
-                                cached_result = cached
-                    except Exception as e:
-                        logger.debug(f"Failed to check cached visual result: {e}")
-                    
-                    # If no cache, wait briefly for fresh result (2 sec timeout)
-                    if not cached_result:
-                        try:
-                            import concurrent.futures
-                            future.result(timeout=2.0)  # Wait up to 2 seconds for YOLO
-                            # After completion, check result immediately
-                            with self._visual_lock:
-                                fresh = self._visual_results.get(symbol)
-                                if fresh:
-                                    cached_result = fresh
-                        except concurrent.futures.TimeoutError:
-                            logger.debug(f"⏱️ YOLO timeout for {symbol}, will use cache next cycle")
-                        except Exception as e:
-                            logger.debug(f"⚠️ YOLO wait error for {symbol}: {e}")
-                    
-                    # Stage 3: Collect YOLO patterns for validation
-                    if cached_result:
-                        cached_patterns = cached_result.get('patterns', [])
-                        yolo_patterns_raw.extend(cached_patterns)
-                        if len(cached_patterns) > 0:
-                            logger.info(f"📸 YOLO patterns for {symbol}: {len(cached_patterns)} patterns detected")
-                            for p in cached_patterns[:3]:  # Log first 3 patterns
-                                logger.info(f"   → {p.get('pattern', 'unknown')} ({p.get('signal', 'NEUTRAL')}, conf={p.get('confidence', 0.0):.2f})")
-                        else:
-                            logger.debug(f"📸 YOLO analysis for {symbol}: 0 patterns (model may be too strict or chart unclear)")
-                    else:
-                        logger.debug(f"🔄 YOLO analysis queued for {symbol} (background)")
-                    
-                except Exception as e:
-                    logger.error(f"Async YOLO setup error for {symbol}: {e}")
-            
-            # ==========================================
-            # VALIDATION PIPELINE: Multi-stage pattern validation
-            # ==========================================
-            patterns = []
-            # ✅ FIX: Initialize FinGPT patterns list before validation (will be populated now)
-            fingpt_patterns = []
-            
-            # FinGPT sentiment (optional) - integrate as additional signal
-            # ✅ FIX: Run FinGPT analysis BEFORE validation pipeline so patterns are available for validation checks
-            try:
-                # ✅ FIX: Use ConfigManager for consistent config access
-                # Check if FinGPT is enabled and available (robust normalization)
-                raw_flag = ConfigManager.get('ENABLE_FINGPT', None)
-                if raw_flag is None:
-                    try:
-                        from config import config
-                        raw_flag = getattr(config['default'], 'ENABLE_FINGPT', True)
-                    except Exception as e:
-                        logger.debug(f"Failed to get ENABLE_FINGPT from config, using True: {e}")
-                        raw_flag = True
-                if isinstance(raw_flag, bool):
-                    enable_fingpt = raw_flag
-                elif isinstance(raw_flag, (int, float)):
-                    enable_fingpt = bool(int(raw_flag))
-                else:
-                    val = str(raw_flag).strip().lower()
-                    if val in ('1', 'true', 'yes', 'on'):
-                        enable_fingpt = True
-                    elif val in ('0', 'false', 'no', 'off', ''):
-                        enable_fingpt = False
-                    else:
-                        enable_fingpt = True
-                if enable_fingpt and getattr(self, 'fingpt_available', False) and self.fingpt is not None:
-                    news_texts = []
-                    try:
-                        # Use async RSS news provider for non-blocking news fetching
-                        if hasattr(self, '_async_rss_provider') and self._async_rss_provider:
-                            news_texts = self._async_rss_provider.get_recent_news_async(symbol) or []
-                            if news_texts:
-                                logger.info(f"📰 Got {len(news_texts)} news items for {symbol}")
-                            else:
-                                # ✅ FIX: Log at INFO level so we can see why no badge appears
-                                logger.info(f"📰 {symbol}: No news items found from RSS (sentiment badge will not appear)")
-                        else:
-                            logger.debug(f"📰 {symbol}: RSS provider not available")
-                    except Exception as e:
-                        logger.warning(f"📰 RSS news fetch failed for {symbol}: {e}")
-                        news_texts = []
-                    if news_texts:
-                        sent_res = self.fingpt.analyze_stock_news(symbol, news_texts)
-                        # ✅ Guard against None/invalid responses from FinGPT
-                        sig = 'NEUTRAL'
-                        conf = 0.0
-                        news_count = 0
-                        if isinstance(sent_res, dict):
-                            # Convert sentiment to trading direction
-                            sig = self.fingpt.get_sentiment_signal(sent_res)
-                            try:
-                                conf = float(sent_res.get('confidence', 0.0) or 0.0)
-                            except Exception as e:
-                                logger.debug(f"Failed to parse FinGPT confidence: {e}")
-                                conf = 0.0
-                            try:
-                                news_count = int(sent_res.get('news_count', 0) or 0)
-                            except Exception as e:
-                                logger.debug(f"Failed to parse FinGPT news_count: {e}")
-                                news_count = 0
-                        else:
-                            logger.debug(f"📰 FinGPT returned invalid result for {symbol}: {type(sent_res)}")
-                        if sig in ('BULLISH', 'BEARISH') and conf > 0:
-                            logger.info(f"✅ FinGPT sentiment {symbol}: {sig} (conf={conf:.2f}, news={news_count})")
-                            # ✅ FIX: Include news texts for tooltip display (limit to 200 chars each)
-                            news_items_preview = []
-                            for news_text in news_texts[:5]:  # Max 5 news items
-                                preview = str(news_text)[:200]  # Limit to 200 chars
-                                if len(str(news_text)) > 200:
-                                    preview += "..."
-                                news_items_preview.append(preview)
-                            
-                            fingpt_patterns.append({
-                                'pattern': 'FINGPT_SENTIMENT',
-                                'signal': sig,
-                                'confidence': max(0.3, min(0.9, conf)),
-                                'strength': int(max(0.3, min(0.9, conf)) * 100),
-                                'source': 'FINGPT',
-                                'news_count': news_count,
-                                'news_items': news_items_preview  # ✅ FIX: Add news items for tooltip
-                            })
-                        else:
-                            logger.debug(f"📰 FinGPT sentiment {symbol}: {sig} (conf={conf:.2f}, news={news_count}) - below threshold")
-                    else:
-                        logger.debug(f"📰 FinGPT skipped for {symbol}: no news items")
-            except Exception as e:
-                logger.error(f"FinGPT sentiment integration hatası {symbol}: {e}")
-            
-            # ✅ Pattern Validation with standalone ADVANCED/YOLO support
-            validation_enabled = str(os.getenv('ENABLE_PATTERN_VALIDATION', 'True')).lower() == 'true'
-            
-            if validation_enabled:
-                try:
-                    from bist_pattern.core.pattern_validator import get_pattern_validator
-                    validator = get_pattern_validator()
-                    
-                    # Validate patterns through 3-stage pipeline
-                    validated_patterns, validation_stats = validator.validate_patterns(
-                        basic_patterns=basic_patterns,
-                        advanced_patterns=advanced_patterns,
-                        yolo_patterns=yolo_patterns_raw,
-                        data=data
-                    )
-                    
-                    patterns = validated_patterns
-                    # ✅ FIX: Add FinGPT patterns after validation (they don't go through validation pipeline)
-                    if fingpt_patterns:
-                        patterns.extend(fingpt_patterns)
-                    
-                    logger.info(
-                        f"✅ Pattern Validation {symbol}: "
-                        f"{validation_stats['validated']}/{validation_stats['total_basic']} validated "
-                        f"(rejected: {validation_stats['rejected']}, "
-                        f"avg score: {validation_stats.get('avg_validation_score', 0):.2f})"
-                    )
-                    
-                except Exception as e:
-                    logger.error(f"Pattern validation error for {symbol}: {e}")
-                    # Fallback: use all patterns with reduced confidence (preserve YOLO patterns for graceful degradation)
-                    # Use copy() to prevent in-place modification of original pattern objects (which causes confidence degradation on reuse)
-                    patterns = [p.copy() for p in basic_patterns + advanced_patterns + yolo_patterns_raw]
-                    for p in patterns:
-                        p['confidence'] = p.get('confidence', 0.5) * 0.8
-                    # ✅ FIX: Add FinGPT patterns even in fallback
-                    if fingpt_patterns:
-                        patterns.extend(fingpt_patterns)
-            else:
-                # Validation disabled: use all patterns without filtering
-                patterns = basic_patterns + advanced_patterns + yolo_patterns_raw
-                # ✅ FIX: Add FinGPT patterns even when validation is disabled
-                if fingpt_patterns:
-                    patterns.extend(fingpt_patterns)
-                logger.debug(f"Pattern validation disabled for {symbol}")
-            
-            # ML predictions: coordinated (Basic + Enhanced) in one place
-            # Initialize variables first to avoid UnboundLocalError
-            ml_predictions = {}
-            enhanced_predictions = {}
-            
-            # ⚡ CRITICAL: Skip ML prediction during training to prevent horizon features not found errors
-            # Training script'inde prediction yapmamalıyız çünkü model henüz eğitilmemiş
-            # WRITE_ENHANCED_DURING_CYCLE=0 kontrolü yeterli değil, çünkü prediction yapılıyor ama yazılmıyor
-            # DISABLE_ML_PREDICTION_DURING_TRAINING kontrolü ekliyoruz
-            skip_ml_prediction = (
-                os.getenv('DISABLE_ML_PREDICTION_DURING_TRAINING', '0').lower() in ('1', 'true', 'yes', 'on')
-                or os.getenv('WRITE_ENHANCED_DURING_CYCLE', '0').lower() not in ('1', 'true', 'yes', 'on')
-            )
-            
-            try:
-                if not skip_ml_prediction:
-                    from bist_pattern.core.ml_coordinator import get_ml_coordinator
-                    mlc = get_ml_coordinator()
-                    
-                    # Extract FinGPT sentiment score for ML prediction adjustment
-                    sentiment_score = None
-                    try:
-                        fingpt_patterns = [p for p in patterns if p.get('source') == 'FINGPT']
-                        if fingpt_patterns:
-                            # Use confidence as sentiment score (0-1 range)
-                            # BULLISH: high confidence = bullish score (>0.5)
-                            # BEARISH: high confidence = bearish score (<0.5)
-                            fg = fingpt_patterns[0]
-                            conf = fg.get('confidence', 0.5)
-                            if fg.get('signal') == 'BULLISH':
-                                sentiment_score = 0.5 + (conf * 0.5)  # Map to 0.5-1.0 range
-                            elif fg.get('signal') == 'BEARISH':
-                                sentiment_score = 0.5 - (conf * 0.5)  # Map to 0.0-0.5 range
-                            logger.debug(f"FinGPT sentiment for ML: {sentiment_score:.2f} (signal={fg.get('signal')}, conf={conf:.2f})")
-                    except Exception as se:
-                        logger.debug(f"Sentiment extraction error: {se}")
-                    
-                    coord = mlc.predict_with_coordination(symbol, data, sentiment_score=sentiment_score)
-                    # Extract raw predictions for response payload
-                    if not isinstance(coord, dict):
-                        coord = {}
-                    ml_predictions = coord.get('basic', {}) if isinstance(coord.get('basic'), dict) else coord.get('basic', {}) or {}
-                    enhanced_predictions = coord.get('enhanced', {}) if isinstance(coord.get('enhanced'), dict) else coord.get('enhanced', {}) or {}
-                else:
-                    # Skip ML prediction during training
-                    # ⚡ SILENT: Don't log every skip during training to reduce log noise
-                    # logger.debug(f"🔒 ML prediction skipped for {symbol} (training mode)")
-                    ml_predictions = {}
-                    enhanced_predictions = {}
-                
-                # Map results into pattern signals for UI consistency
-                current_px = float(data['close'].iloc[-1])
-                
-                # Calibration helper: squash extreme deltas smoothly
-                def _calibrate_delta(delta: float) -> float:
-                    try:
-                        tau = float(os.getenv('DELTA_CAL_TAU', '0.08'))
-                    except Exception as e:
-                        logger.debug(f"Failed to get DELTA_CAL_TAU, using 0.08: {e}")
-                        tau = 0.08
-                    try:
-                        return float(math.tanh(delta / max(1e-9, tau)) * tau)
-                    except Exception as e:
-                        logger.debug(f"Delta calibration calculation failed: {e}")
-                        return float(delta)
-                
-                def _emit(hkey: str, pred_px: float, source: str, base_w: float = 0.6, reliability: float | None = None):
-                    try:
-                        if not isinstance(pred_px, (int, float)) or current_px <= 0:
-                            return
-                        raw_delta = (float(pred_px) - current_px) / current_px
-                        delta_pct = _calibrate_delta(raw_delta)
-                        # Reliability defaults
-                        rel = reliability
-                        if not isinstance(rel, (int, float)):
-                            try:
-                                rel = float(os.getenv('BASIC_RELIABILITY', '0.6')) if source.upper() in ('ML_PREDICTOR', 'ML') else 0.65
-                            except Exception as e:
-                                logger.debug(f"Failed to get BASIC_RELIABILITY, using 0.6: {e}")
-                                rel = 0.6
-                        rel = max(0.0, min(1.0, float(rel)))
-                        if abs(delta_pct) < 0.003:
-                            return
-                        conf = max(0.25, min(0.95, base_w * rel * min(1.0, abs(delta_pct) / 0.05)))
-                        # Canonicalize source names for downstream counters
-                        src = 'ML_PREDICTOR' if source.upper() in ('ML', 'ML_PREDICTOR') else (
-                            'ENHANCED_ML' if source.upper() in ('ENH', 'ENHANCED_ML') else source
-                        )
-                        patterns.append({
-                            'pattern': f'{src}_{hkey.upper()}',
-                            'signal': 'BULLISH' if delta_pct > 0 else 'BEARISH',
-                            'confidence': conf,
-                            'strength': int(conf * 100),
-                            'source': src,
-                            'delta_pct': float(delta_pct)
-                        })
-                    except Exception as e:
-                        logger.debug(f"Failed to emit pattern: {e}")
-                # Basic ML predictions: ignore metadata keys like 'timestamp'/'model'
-                basic = ml_predictions if isinstance(ml_predictions, dict) else {}
-                basic_count = 0
-                for hk, pobj in basic.items():
-                    try:
-                        if not isinstance(pobj, dict):
-                            # Skip non-dict values such as 'timestamp' or 'model'
-                            continue
-                        px = pobj.get('price') or pobj.get('prediction') or pobj.get('target')
-                        if not isinstance(px, (int, float)):
-                            continue
-                        # Basic reliability from env (no per-horizon metric)
-                        try:
-                            basic_rel = float(os.getenv('BASIC_RELIABILITY', '0.6'))
-                        except Exception as e:
-                            logger.debug(f"Failed to get BASIC_RELIABILITY, using 0.6: {e}")
-                            basic_rel = 0.6
-                        _emit(hk, float(px), 'ML_PREDICTOR', reliability=basic_rel)
-                        basic_count += 1
-                    except Exception as e:
-                        logger.debug(f"Failed to process basic ML prediction for {hk}: {e}")
-                        continue
-                
-                # Debug: Log basic ML status
-                if basic_count == 0 and basic:
-                    _ddebug(f"⚠️ Basic ML data available but no valid predictions for {symbol}: {list(basic.keys())}", logger)
-
-                # Enhanced ML predictions: map ensemble structure to a numeric prediction
-                enh = enhanced_predictions if isinstance(enhanced_predictions, dict) else {}
-                enh_count = 0
-                for hk, pobj in enh.items():
-                    try:
-                        pred_val = None
-                        rel_hint = None
-                        if isinstance(pobj, dict):
-                            pred_val = (
-                                pobj.get('ensemble_prediction')
-                                or pobj.get('prediction')
-                                or pobj.get('price')
-                                or pobj.get('target')
-                            )
-                            # CRITICAL FIX: Proper R² to confidence conversion
-                            # R² can be negative (model worse than baseline)
-                            # Previous linear mapping was incorrect
-                            try:
-                                raw_conf = pobj.get('confidence')
-                                if isinstance(raw_conf, (int, float)):
-                                    r2 = float(raw_conf)
-                                    if r2 < 0:
-                                        # Negative R² = model is worse than baseline → no confidence
-                                        rel_hint = 0.0
-                                    elif r2 < 0.5:
-                                        # Weak model: use R² directly as confidence
-                                        rel_hint = r2
-                                    else:
-                                        # Good model: scale 0.5-1.0 R² → 0.5-0.95 confidence
-                                        # Cap at 0.95 to remain conservative
-                                        rel_hint = 0.5 + (r2 - 0.5) * 0.9
-                                        rel_hint = min(0.95, rel_hint)
-                            except Exception as e:
-                                logger.debug(f"Failed to calculate rel_hint: {e}")
-                                rel_hint = None
-                        elif isinstance(pobj, (int, float)):
-                            pred_val = float(pobj)
-                        if not isinstance(pred_val, (int, float)):
-                            continue
-                        _emit(hk, float(pred_val), 'ENHANCED_ML', base_w=0.7, reliability=rel_hint)
-                        enh_count += 1
-                    except Exception as e:
-                        logger.debug(f"Failed to process enhanced ML prediction for {hk}: {e}")
-                        continue
-                
-                # Debug: Log enhanced ML status
-                if enh_count == 0 and enh:
-                    _ddebug(f"⚠️ Enhanced ML data available but no valid predictions for {symbol}: {list(enh.keys())}", logger)
-                elif enh_count > 0:
-                    _ddebug(f"✅ Enhanced ML predictions for {symbol}: {enh_count} horizons", logger)
-                    
-            except Exception as e:
-                logger.error(f"Coordinated ML prediction integration hatası {symbol}: {e}")
+            # ML predictions processing
+            ml_predictions, enhanced_predictions = self._process_ml_predictions(symbol, data, patterns)
 
             # Overall signal generation
             overall_signal = self.generate_overall_signal(indicators, patterns)
@@ -1379,568 +1869,9 @@ class HybridPatternDetector:
                 return obj
             
             # ML unified schema build (basic + enhanced → per-horizon)
-            ml_unified = {}
-            try:
-                
-                def _norm_basic(basic_map):
-                    out = {}
-                    if isinstance(basic_map, dict):
-                        for h, v in basic_map.items():
-                            try:
-                                price = None
-                                if isinstance(v, (int, float)):
-                                    price = float(v)
-                                elif isinstance(v, dict):
-                                    for k in ('price', 'prediction', 'target', 'value', 'y'):
-                                        if isinstance(v.get(k), (int, float)):
-                                            price = float(v[k])
-                                            break
-                                if price is not None:
-                                    try:
-                                        basic_rel = float(os.getenv('BASIC_RELIABILITY', '0.6'))
-                                    except Exception as e:
-                                        logger.debug(f"Failed to get basic reliability: {e}")
-                                        basic_rel = 0.6
-                                    out[str(h).lower()] = {'source': 'basic', 'price': price, 'reliability': float(max(0.0, min(1.0, basic_rel)))}
-                            except Exception as e:
-                                logger.debug(f"Failed to process basic prediction for {h}: {e}")
-                                continue
-                    return out
-                
-                def _norm_enh(enh_map):
-                    out = {}
-                    if isinstance(enh_map, dict):
-                        for h, v in enh_map.items():
-                            try:
-                                price = None
-                                rel = None
-                                if isinstance(v, (int, float)):
-                                    price = float(v)
-                                elif isinstance(v, dict):
-                                    for k in ('ensemble_prediction', 'prediction', 'price', 'target'):
-                                        if isinstance(v.get(k), (int, float)):
-                                            price = float(v[k])
-                                            break
-                                    try:
-                                        raw_conf = v.get('confidence')
-                                        if isinstance(raw_conf, (int, float)):
-                                            # Same R² conversion as above
-                                            r2 = float(raw_conf)
-                                            if r2 < 0:
-                                                rel = 0.0
-                                            elif r2 < 0.5:
-                                                rel = r2
-                                            else:
-                                                rel = min(0.95, 0.5 + (r2 - 0.5) * 0.9)
-                                    except Exception as e:
-                                        logger.debug(f"Failed to get enhanced reliability: {e}")
-                                        rel = None
-                                if price is not None:
-                                    if not isinstance(rel, (int, float)):
-                                        rel = 0.65
-                                    out[str(h).lower()] = {'source': 'enhanced', 'price': price, 'reliability': float(max(0.0, min(1.0, rel)))}
-                            except Exception as e:
-                                logger.debug(f"Failed to process enhanced prediction for {h}: {e}")
-                                continue
-                    return out
-                bmap = _norm_basic(ml_predictions)
-                emap = _norm_enh(enhanced_predictions)
-                # Merge per horizon and compute delta/confidence
-                horizons = set(bmap.keys()) | set(emap.keys())
-                # Policy: enhanced-first if available (env-driven)
-                try:
-                    enhanced_first = (os.getenv('ENHANCED_FIRST', '1').lower() in ('1', 'true', 'yes', 'on'))
-                except Exception as e:
-                    logger.debug(f"Failed to get ENHANCED_FIRST, using True: {e}")
-                    enhanced_first = True
-                # Regime score: use realized volatility to modulate weights (higher vol → favor enhanced)
-                try:
-                    recent_ret = data['close'].pct_change().tail(20)
-                    vol20 = float(recent_ret.std()) if len(recent_ret) > 5 else 0.0
-                    recent_ret60 = data['close'].pct_change().tail(60)
-                    vol60 = float(recent_ret60.std()) if len(recent_ret60) > 5 else 0.0
-                    regime = min(1.0, max(0.0, (vol20 / max(1e-6, vol60)) if vol60 > 0 else vol20 / 0.05))
-                except Exception as e:
-                    logger.debug(f"Regime score calculation failed: {e}")
-                    regime = 0.5
-
-                # Aggregate evidence from patterns and sentiment
-                # Pre-compute visual confirmation and sentiment gating thresholds
-                try:
-                    enable_yolo_confirm = (os.getenv('ENABLE_YOLO_CONFIRM', '1').lower() in ('1', 'true', 'yes', 'on'))
-                except Exception as e:
-                    logger.debug(f"Failed to get ENABLE_YOLO_CONFIRM, using True: {e}")
-                    enable_yolo_confirm = True
-                try:
-                    yolo_confirm_mult = float(os.getenv('YOLO_CONFIRM_MULT', '1.5'))
-                except Exception as e:
-                    logger.debug(f"Failed to get YOLO_CONFIRM_MULT, using 1.5: {e}")
-                    yolo_confirm_mult = 1.5
-                try:
-                    yolo_min_conf_ev = float(os.getenv('YOLO_MIN_CONF_EVID', '0.25'))
-                except Exception as e:
-                    logger.debug(f"Failed to get YOLO_MIN_CONF_EVID, using 0.25: {e}")
-                    yolo_min_conf_ev = 0.25
-                try:
-                    # ⚡ IMPROVED: Lowered threshold from 0.65 to 0.50 for better Turkish model compatibility
-                    # Turkish BERT produces lower confidence scores than English FinBERT
-                    # 0.50 threshold allows 45% more sentiment data to impact ML predictions
-                    fingpt_min_conf = float(os.getenv('FINGPT_MIN_CONF', '0.50'))
-                except Exception as e:
-                    logger.debug(f"Failed to get FINGPT_MIN_CONF, using 0.50: {e}")
-                    fingpt_min_conf = 0.50
-                try:
-                    fingpt_min_news = int(os.getenv('FINGPT_MIN_NEWS', '1'))
-                except Exception as e:
-                    logger.debug(f"Failed to get FINGPT_MIN_NEWS, using 1: {e}")
-                    fingpt_min_news = 1
-
-                # Visual confirmation flags (recent YOLO detections)
-                visual_bullish = False
-                visual_bearish = False
-                try:
-                    for _vp in (patterns or []):
-                        if str(_vp.get('source', '')).upper() == 'VISUAL_YOLO':
-                            try:
-                                if float(_vp.get('confidence', 0.0)) < yolo_min_conf_ev:
-                                    continue
-                            except Exception as e:
-                                logger.debug(f"Failed to process visual pattern: {e}")
-                                continue
-                            _sig = str(_vp.get('signal', '')).upper()
-                            if _sig == 'BULLISH':
-                                visual_bullish = True
-                            elif _sig == 'BEARISH':
-                                visual_bearish = True
-                except Exception as e:
-                    logger.debug(f"Visual confirmation check failed: {e}")
-                    visual_bullish = visual_bearish = False
-
-                def _agg_evidence(h_days: int):
-                    try:
-                        pat_score = 0.0
-                        pat_w = 0.0
-                        sent_score = 0.0
-                        sent_w = 0.0
-                        for p in (patterns or []):
-                            try:
-                                src = str(p.get('source', '')).upper()
-                                sig = str(p.get('signal', '')).upper()
-                                sgn = 1.0 if sig == 'BULLISH' else (-1.0 if sig == 'BEARISH' else 0.0)
-                                confp = float(p.get('confidence', (p.get('strength', 50)/100.0)))
-                                confp = max(0.0, min(1.0, confp))
-                                # ✅ FIX: Horizon weighting with smooth exponential decay instead of sharp steps
-                                # Exponential decay: h_w = 1.0 * exp(-decay_rate * (h_days - 1))
-                                # Adjust decay_rate to match approximate values: h_w(3)≈0.95, h_w(7)≈0.8, h_w(14)≈0.6
-                                # Use decay_rate ≈ 0.03 for smooth transitions
-                                decay_rate = 0.03
-                                h_w = max(0.5, 1.0 * math.exp(-decay_rate * max(0, h_days - 1)))
-                                # ✅ FIX: Source weighting - YOLO and Advanced TA get boost, FinGPT gets slight boost
-                                src_w = 1.1 if src in ('VISUAL_YOLO', 'ADVANCED_TA') else (1.05 if src == 'FINGPT' else 1.0)
-                                # FinGPT gating: require sufficient confidence and news count
-                                if src == 'FINGPT':
-                                    try:
-                                        nnews = int(p.get('news_count', 0) or 0)
-                                    except Exception as e:
-                                        logger.debug(f"Failed to parse FinGPT news_count: {e}")
-                                        nnews = 0
-                                    if (confp >= fingpt_min_conf) and (nnews >= fingpt_min_news):
-                                        w = confp * h_w * src_w
-                                        sent_score += sgn * w
-                                        sent_w += w
-                                    else:
-                                        # Ignore weak/insufficient sentiment
-                                        pass
-                                else:
-                                    w = confp * h_w * src_w
-                                    # YOLO confirmation: if TA pattern direction matches YOLO, amplify
-                                    if enable_yolo_confirm and src in ('ADVANCED_TA', 'BASIC'):
-                                        if (sgn > 0 and visual_bullish) or (sgn < 0 and visual_bearish):
-                                            w *= yolo_confirm_mult
-                                    pat_score += sgn * w
-                                    pat_w += w
-                            except Exception as e:
-                                logger.debug(f"Failed to process pattern evidence: {e}")
-                                continue
-                        pat_val = (pat_score / pat_w) if pat_w > 0 else 0.0
-                        sent_val = (sent_score / sent_w) if sent_w > 0 else 0.0
-                        return max(-1.0, min(1.0, pat_val)), max(-1.0, min(1.0, sent_val))
-                    except Exception as e:
-                        logger.warning(f"Evidence aggregation failed: {e}")
-                        return 0.0, 0.0
-
-                # --- Helper: 1D directional booster (lightweight, on-cycle) ---
-                def _compute_1d_booster_prob(df):
-                    try:
-                        try:
-                            from sklearn.linear_model import LogisticRegression
-                        except Exception as e:
-                            logger.debug(f"Failed to import LogisticRegression: {e}")
-                            return None
-                        import numpy as np  # local import
-                        import pandas as pd  # local import
-
-                        if not isinstance(df, (pd.DataFrame,)) or len(df) < 140:
-                            return None
-                        # Use last ~360 bars to keep fit light
-                        d = df[['open', 'high', 'low', 'close', 'volume']].copy().tail(360)
-                        close = d['close']
-                        high = d['high']
-                        low = d['low']
-                        volume = d['volume'].astype(float)
-
-                        feats = pd.DataFrame(index=d.index)
-                        # overnight proxy
-                        feats['overnight'] = (d['open'] / close.shift(1) - 1.0) * 100.0
-                        feats['ret1'] = close.pct_change(1) * 100.0
-                        feats['mom3'] = ((close / close.rolling(3).mean()) - 1.0) * 100.0
-                        feats['rv5'] = np.log(close).diff().rolling(5).std() * np.sqrt(252) * 100.0
-                        # RSI(3)
-                        delta = close.diff()
-                        up = delta.clip(lower=0).rolling(3).mean()
-                        down = (-delta.clip(upper=0)).rolling(3).mean()
-                        rs = up / (down + 1e-9)
-                        feats['rsi3'] = 100.0 - (100.0 / (1.0 + rs))
-                        feats['gap'] = ((d['open'] - close.shift(1)) / (close.shift(1) + 1e-9)) * 100.0
-                        feats['tail_up'] = ((high - close) / (close + 1e-9)) * 100.0
-                        feats['tail_dn'] = ((close - low) / (close + 1e-9)) * 100.0
-                        tr1 = (high - low).abs()
-                        tr2 = (high - close.shift(1)).abs()
-                        tr3 = (low - close.shift(1)).abs()
-                        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-                        atr5 = tr.rolling(5).mean()
-                        feats['atr5_n'] = (atr5 / (close + 1e-9)) * 100.0
-                        ma20 = close.rolling(20).mean()
-                        sd20 = close.rolling(20).std()
-                        feats['boll_pos'] = (close - ma20) / (sd20 + 1e-9)
-                        ll14 = low.rolling(14).min()
-                        hh14 = high.rolling(14).max()
-                        feats['stoch_k'] = ((close - ll14) / ((hh14 - ll14) + 1e-9)) * 100.0
-                        ema10 = close.ewm(span=10, adjust=False).mean()
-                        feats['ema10_slope'] = ema10.pct_change(1) * 100.0
-                        vol_ma = volume.rolling(20).mean()
-                        vol_sd = volume.rolling(20).std()
-                        feats['vol_z'] = (volume - vol_ma) / (vol_sd + 1e-9)
-                        # day of week one-hot
-                        dow = feats.index.dayofweek
-                        for dval in range(5):
-                            feats[f'dow_{dval}'] = (dow == dval).astype(int)
-
-                        # target (t+1 up?)
-                        y = (close.shift(-1) > close).astype(float)
-                        mask = feats.replace([np.inf, -np.inf], np.nan).notna().all(axis=1) & y.notna()
-                        feats = feats.loc[mask]
-                        y = y.loc[mask]
-                        if len(feats) < 120:
-                            return None
-                        # Train on all but last row; predict last row prob for up move
-                        X_train = feats.iloc[:-1]
-                        y_train = y.iloc[:-1]
-                        X_last = feats.iloc[[-1]]
-                        if len(np.unique(y_train)) < 2:
-                            return None
-                        clf = LogisticRegression(max_iter=400, solver='liblinear')
-                        clf.fit(X_train.values, y_train.values)
-                        p_up = float(clf.predict_proba(X_last.values)[0, 1])
-                        return p_up
-                    except Exception as e:
-                        logger.debug(f"1D booster probability calculation failed: {e}")
-                        return None
-
-                for h in horizons:
-                    cur = {}
-                    if h in bmap:
-                        cur['basic'] = bmap[h]
-                    if h in emap:
-                        cur['enhanced'] = emap[h]
-                    # Pick best: enhanced-first if available; otherwise by calibrated |delta| × reliability
-                    entries = []
-                    for src in ('basic', 'enhanced'):
-                        if src in cur and isinstance(cur[src], dict):
-                            price = cur[src].get('price')
-                            rel = cur[src].get('reliability')
-                            if isinstance(price, (int, float)) and current_px > 0:
-                                delta = (price - current_px) / current_px
-                                cdelta = _calibrate_delta(delta)
-                                try:
-                                    # Horizon-specific calibration: longer horizons need stronger move for same confidence
-                                    h_days = int(str(h).replace('d', '') or 7)
-                                    move_scale = 0.05 * max(1.0, h_days / 7.0)
-                                    # Regime-weighted base (more volatile → prioritize enhanced)
-                                    base_w = (0.6 + 0.2 * regime) if src == 'enhanced' else (0.65 - 0.15 * regime)
-                                    rr = float(rel) if isinstance(rel, (int, float)) else (0.65 if src == 'enhanced' else 0.6)
-                                    conf = max(0.25, min(0.95, base_w * rr * min(1.0, abs(cdelta) / move_scale)))
-                                except Exception as e:
-                                    logger.debug(f"Confidence calculation failed: {e}")
-                                    conf = max(0.25, min(0.95, abs(cdelta) / 0.05))
-                                
-                                # Evidence-based confidence adjustment (applied to base model confidence)
-                                try:
-                                    h_days = int(str(h).replace('d', '') or 7)
-                                except Exception as e:
-                                    logger.debug(f"Failed to parse h_days, using 7: {e}")
-                                    h_days = 7
-                                # Gate by env: PATTERN_SENTI_META (default on)
-                                enable_meta = True
-                                try:
-                                    enable_meta = (os.getenv('PATTERN_SENTI_META', '1').lower() in ('1', 'true', 'yes', 'on'))
-                                except Exception as e:
-                                    logger.debug(f"Failed to get PATTERN_SENTI_META, using True: {e}")
-                                    enable_meta = True
-                                pat_s, sent_s = _agg_evidence(h_days)
-                                
-                                # 🎯 NEW: ML Primary + Pattern Confirmation System
-                                # Instead of fixed weights, use agreement-based boost/penalty
-                                # ✅ FIX: Initialize w_pat, w_sent, signed_adj for all code paths
-                                w_pat = 0.0
-                                w_sent = 0.0
-                                signed_adj = 0.0
-                                
-                                try:
-                                    use_new_validation = (os.getenv('USE_PATTERN_AGREEMENT', '1').lower() in ('1', 'true', 'yes', 'on'))
-                                except Exception as e:
-                                    logger.debug(f"Failed to get USE_PATTERN_AGREEMENT, using True: {e}")
-                                    use_new_validation = True
-                                
-                                if use_new_validation:
-                                    # Calculate pattern agreement score (extracted)
-                                    try:
-                                        from bist_pattern.pattern.validation import calculate_pattern_agreement
-                                        pattern_agreement = calculate_pattern_agreement(
-                                            patterns=patterns,
-                                            ml_signal='BULLISH' if cdelta > 0 else 'BEARISH',
-                                            ml_confidence=conf
-                                        )
-                                    except Exception as e:
-                                        logger.debug(f"Pattern agreement calculation failed: {e}")
-                                        pattern_agreement = 0.0
-                                    evidence_boost = pattern_agreement  # Already clamped in function
-                                    # ✅ FIX: Calculate signed_adj for delta tilt even when using new validation
-                                    try:
-                                        _ps = self._load_param_store() or {}
-                                        _hkey = str(h)
-                                        _wmap = (_ps.get('weights') or {}).get(_hkey) if isinstance(_ps, dict) else None
-                                        if isinstance(_wmap, dict):
-                                            w_pat = float(_wmap.get('w_pat', 0.0)) or 0.0
-                                            w_sent = float(_wmap.get('w_sent', 0.0)) or 0.0
-                                        else:
-                                            raise KeyError('no weights')
-                                    except Exception as e:
-                                        logger.debug(f"Failed to load weights from param_store (new validation): {e}")
-                                        if h_days <= 1:
-                                            w_pat, w_sent = 0.12, 0.10
-                                        elif h_days <= 3:
-                                            w_pat, w_sent = 0.10, 0.08
-                                        elif h_days <= 7:
-                                            w_pat, w_sent = 0.06, 0.05
-                                        elif h_days <= 14:
-                                            w_pat, w_sent = 0.04, 0.03
-                                        else:
-                                            w_pat, w_sent = 0.03, 0.02
-                                    signed_adj = (w_pat * pat_s + w_sent * sent_s) if enable_meta else 0.0
-                                else:
-                                    # OLD SYSTEM: Fixed weights
-                                    try:
-                                        _ps = self._load_param_store() or {}
-                                        _hkey = str(h)
-                                        _wmap = (_ps.get('weights') or {}).get(_hkey) if isinstance(_ps, dict) else None
-                                        if isinstance(_wmap, dict):
-                                            w_pat = float(_wmap.get('w_pat', 0.0)) or 0.0
-                                            w_sent = float(_wmap.get('w_sent', 0.0)) or 0.0
-                                        else:
-                                            raise KeyError('no weights')
-                                    except Exception as e:
-                                        logger.debug(f"Failed to load weights from param_store (new validation): {e}")
-                                        if h_days <= 1:
-                                            w_pat, w_sent = 0.12, 0.10
-                                        elif h_days <= 3:
-                                            w_pat, w_sent = 0.10, 0.08
-                                        elif h_days <= 7:
-                                            w_pat, w_sent = 0.06, 0.05
-                                        elif h_days <= 14:
-                                            w_pat, w_sent = 0.04, 0.03
-                                        else:
-                                            w_pat, w_sent = 0.03, 0.02
-                                    signed_adj = (w_pat * pat_s + w_sent * sent_s) if enable_meta else 0.0
-                                    evidence_boost = max(-0.15, min(0.15, signed_adj))  # Clamped evidence contribution
-
-                                # Optional: 1D directional booster (confidence alignment)
-                                booster_adj = 0.0
-                                booster_p = None
-                                try:
-                                    enable_booster = (os.getenv('ENABLE_1D_BOOSTER', '1').lower() in ('1', 'true', 'yes', 'on'))
-                                except Exception as e:
-                                    logger.debug(f"Failed to get ENABLE_1D_BOOSTER, using True: {e}")
-                                    enable_booster = True
-                                if enable_booster and h_days <= 1:
-                                    booster_p = _compute_1d_booster_prob(data)
-                                    if isinstance(booster_p, float):
-                                        # alignment: if booster agrees with direction, increase confidence up to ~0.08
-                                        agree = (cdelta >= 0 and booster_p >= 0.5) or (cdelta < 0 and booster_p < 0.5)
-                                        strength = abs(booster_p - 0.5) * 2.0  # [0..1]
-                                        booster_adj = (0.08 * strength) * (1.0 if agree else -1.0)
-
-                                # ⚡ ONLINE CONFIDENCE ADJUSTMENT: Gerçekleşmelere bakarak confidence'ı düzelt
-                                # Modeli yeniden eğitmeden, son 30-60 gün içinde benzer confidence seviyesinde
-                                # yapılan tahminlerin gerçekleşme oranına (dir_hit rate) göre confidence'ı ayarlar.
-                                try:
-                                    online_adj = self._get_empirical_confidence_adjustment(str(h), conf)
-                                except Exception as e:
-                                    logger.debug(f"Empirical confidence adjustment failed: {e}")
-                                    online_adj = 0.0
-                                
-                                # Add evidence boost directly to base model confidence
-                                conf_after_meta = max(0.25, min(0.95, conf + evidence_boost))
-                                conf_after_meta_and_booster = max(0.25, min(0.95, conf_after_meta + booster_adj))
-                                
-                                # ⚡ Apply online adjustment AFTER evidence/booster (so it adjusts the final confidence)
-                                # This ensures the adjustment is based on the model's actual performance, not just raw confidence
-                                conf_final = max(0.25, min(0.95, conf_after_meta_and_booster + online_adj))
-
-                                # Small horizon-aware delta tilt using evidence alignment (strictly bounded)
-                                # ✅ FIX: Initialize cdelta_tilted before try block to avoid UnboundLocalError
-                                cdelta_tilted = cdelta
-                                delta_contrib = 0.0
-                                try:
-                                    enable_delta_tilt = (os.getenv('ENABLE_DELTA_TILT', '1').lower() in ('1', 'true', 'yes', 'on'))
-                                except Exception as e:
-                                    logger.debug(f"Failed to get ENABLE_DELTA_TILT, using True: {e}")
-                                    enable_delta_tilt = True
-                                    thr_map = {'1d': 0.008, '3d': 0.021, '7d': 0.03, '14d': 0.03, '30d': 0.025}
-                                    alpha_map = {'1d': 0.25, '3d': 0.15, '7d': 0.10, '14d': 0.08, '30d': 0.08}
-                                    h_key = str(h)
-                                    base_thr = float(thr_map.get(h_key, 0.03))
-                                    alpha = float(alpha_map.get(h_key, 0.08))
-                                    # Normalize signed_adj to [-1,1] scale via conf clip used (0.15 window)
-                                    mag = min(1.0, max(0.0, abs(signed_adj) / 0.15 if 0.15 > 0 else 0.0))
-                                    sgn = 1.0 if signed_adj >= 0 else -1.0
-                                    # ✅ FIX: Smooth agreement instead of binary
-                                    # Calculate alignment strength: how well evidence aligns with prediction
-                                    alignment_strength = (cdelta * sgn) / max(abs(cdelta), 1e-8) if abs(cdelta) > 1e-8 else 0.0
-                                    # Sigmoid function for smooth agreement (k=5 for sharp but smooth transition)
-                                    k = 5.0
-                                    agreement_score = 1.0 / (1.0 + np.exp(-k * alignment_strength))
-                                    # Convert to agree factor (0.0 = disagree, 1.0 = agree) with smooth transition
-                                    agree_factor = agreement_score
-                                    # Primary tilt follows evidence with smooth agreement
-                                    base_tilt = (alpha * base_thr * mag) if enable_delta_tilt else 0.0
-                                    # Smooth interpolation: full agree → +base_tilt, full disagree → -0.5*base_tilt
-                                    tilt_ev = base_tilt * (2.0 * agree_factor - 1.0) if agree_factor >= 0.5 else -0.5 * base_tilt * (1.0 - agree_factor * 2.0)
-                                    # Booster tilt (lighter than confidence impact)
-                                    tilt_boost = 0.0
-                                    if isinstance(booster_p, float):
-                                        bmag = abs(booster_p - 0.5) * 2.0
-                                        # ✅ FIX: Smooth booster agreement instead of binary
-                                        booster_alignment = (cdelta * (booster_p - 0.5)) / max(abs(cdelta), 1e-8) if abs(cdelta) > 1e-8 else 0.0
-                                        booster_agreement = 1.0 / (1.0 + np.exp(-k * booster_alignment))
-                                        bagree_factor = booster_agreement
-                                        # Smooth interpolation for booster agreement
-                                        tilt_boost = ((0.5 * alpha) * base_thr * bmag * (2.0 * bagree_factor - 1.0)) if enable_delta_tilt else 0.0
-                                    cdelta_tilted = cdelta + tilt_ev + tilt_boost
-                                    # Safety clamp
-                                    if cdelta_tilted > 0.5:
-                                        cdelta_tilted = 0.5
-                                    if cdelta_tilted < -0.5:
-                                        cdelta_tilted = -0.5
-                                    delta_contrib = (cdelta_tilted - cdelta)
-                                except Exception as e:
-                                    logger.debug(f"Delta tilt calculation failed: {e}")
-                                    cdelta_tilted = cdelta
-                                    delta_contrib = 0.0
-
-                                cur[src]['delta_pct'] = float(cdelta_tilted)
-                                cur[src]['confidence'] = conf_final
-                                cur[src]['evidence'] = {
-                                    'pattern_score': float(pat_s),
-                                    'sentiment_score': float(sent_s),
-                                    'contrib_conf': float(conf_final - conf),
-                                    'w_pat': float(w_pat),
-                                    'w_sent': float(w_sent),
-                                }
-                                if booster_p is not None:
-                                    cur[src]['evidence']['booster_prob'] = float(booster_p)
-                                    cur[src]['evidence']['contrib_booster'] = float(booster_adj)
-                                if isinstance(delta_contrib, float) and abs(delta_contrib) > 0:
-                                    cur[src]['evidence']['contrib_delta'] = float(delta_contrib)
-                                # Regime-aware score for best-of selection
-                                eff_rel = float(max(0.0, min(1.0, rel))) if isinstance(rel, (int, float)) else (0.65 if src == 'enhanced' else 0.6)
-                                score = abs(cdelta) * eff_rel * (1.0 + (0.15 if (src == 'enhanced' and regime >= 0.6) else 0.0))
-                                entries.append((score, src))
-                    # Decide best
-                    if enhanced_first and ('enhanced' in cur):
-                        cur['best'] = 'enhanced'
-                    elif enhanced_first and ('enhanced' not in cur) and ('basic' in cur):
-                        cur['best'] = 'basic'
-                    elif entries:
-                        best_src = sorted(entries, key=lambda x: x[0], reverse=True)[0][1]
-                        cur['best'] = best_src
-                    
-                    # Apply param_store thresholds (delta_thr, conf_thr for gating small signals)
-                    try:
-                        store = self._load_param_store() or {}
-                        ps_h = (store.get('horizons') or {}).get(str(h), {})
-                        th = ps_h.get('thresholds') or {}
-                        # --- Bandit A/B: optionally use challenger thresholds for a stable subset of symbols ---
-                        ab_label = 'ab:prod'
-                        try:
-                            import hashlib
-                            bcfg = ((store.get('bandit') or {}).get('horizons') or {}).get(str(h), {})
-                            traffic = float(bcfg.get('traffic', 0.10))
-                            chall = bcfg.get('challenger') or None
-                            # Stable assignment by symbol×horizon hash
-                            hv = f"{symbol.upper()}|{str(h)}".encode()
-                            hv_int = int(hashlib.sha1(hv).hexdigest()[:8], 16)
-                            frac = (hv_int % 1000) / 1000.0
-                            if chall and frac < max(0.0, min(1.0, traffic)):
-                                th = chall
-                                ab_label = 'ab:chall'
-                        except Exception as e:
-                            logger.debug(f"A/B label calculation failed: {e}")
-                            ab_label = 'ab:prod'
-                        # ✅ FIX: Use sensible defaults if thresholds are missing (0.0 would disable thresholds)
-                        # Default to conservative thresholds if not found in param_store
-                        delta_thr = float(th.get('delta_thr') or ConfigManager.get('DEFAULT_DELTA_THR', 0.03))
-                        conf_thr = float(th.get('conf_thr') or ConfigManager.get('DEFAULT_CONF_THR', 0.65))
-                        # If best exists, gate tiny signals by thresholds
-                        # ⚡ REMOVED: Isotonic bypass check (isotonic calibration removed from prediction)
-                        try:
-                            if isinstance(calib_override, dict) and ('penalty_factor' in calib_override) and calib_override.get('penalty_factor') is not None:
-                                penalty_factor = float(calib_override.get('penalty_factor'))
-                            else:
-                                penalty_factor = float(os.getenv('THRESHOLD_PENALTY_FACTOR', '0.95'))
-                        except Exception as e:
-                            logger.debug(f"Failed to get THRESHOLD_PENALTY_FACTOR, using 0.95: {e}")
-                            penalty_factor = 0.95
-                        
-                        # Apply threshold penalty if signal is below thresholds
-                        if 'best' in cur and isinstance(cur.get(cur['best']), dict):
-                            be = cur[cur['best']]
-                            try:
-                                if abs(float(be.get('delta_pct', 0.0))) < delta_thr or float(be.get('confidence', 0.0)) < conf_thr:
-                                    # Demote confidence smoothly (softer penalty temporarily)
-                                    be['confidence'] = max(0.25, float(be.get('confidence', 0.0)) * penalty_factor)
-                            except Exception as e:
-                                logger.debug(f"Failed to apply threshold penalty: {e}")
-                            # Tag param version used for A/B attribution
-                            try:
-                                pv = str((store or {}).get('generated_at') or '')
-                                be['param_version'] = (pv + '|' + ab_label) if pv else ab_label
-                            except Exception as e:
-                                logger.debug(f"Failed to tag param_version: {e}")
-                        # ⚡ REMOVED: Isotonic calibration (removed from both training and prediction for consistency)
-                    except Exception as e:
-                        logger.debug(f"Confidence adjustment failed: {e}")
-                    
-                    # ✅ FIX: Add current horizon to ml_unified dictionary (inside loop scope)
-                    # Only add if there's actual data
-                    if cur:  # Only add if there's actual data
-                        ml_unified[h] = cur
-            except Exception as e:
-                # ✅ FIX: Log exception to diagnose ml_unified creation failures
-                import traceback
-                logger.error(f"❌ {symbol}: ml_unified creation failed: {e}")
-                logger.debug(f"   Traceback:\n{traceback.format_exc()}")
-                ml_unified = {}
+            ml_unified = self._build_ml_unified(symbol, data, ml_predictions, enhanced_predictions, patterns, calib_override)
+            
+            # Prediction logging ve result building
 
             # ✅ FIX: Debug log to verify FinGPT and YOLO patterns are in the list before caching
             fingpt_count = len([p for p in patterns if p.get('source') == 'FINGPT'])
@@ -2103,8 +2034,10 @@ class HybridPatternDetector:
                             delta = src_entry.get('delta_pct')
                             try:
                                 ev = src_entry.get('evidence') or {}
-                                pscore = float(ev.get('pattern_score')) if isinstance(ev.get('pattern_score'), (int, float)) else None
-                                sscore = float(ev.get('sentiment_score')) if isinstance(ev.get('sentiment_score'), (int, float)) else None
+                                pattern_score_val = ev.get('pattern_score')
+                                sentiment_score_val = ev.get('sentiment_score')
+                                pscore = float(pattern_score_val) if isinstance(pattern_score_val, (int, float)) else None  # type: ignore[arg-type]
+                                sscore = float(sentiment_score_val) if isinstance(sentiment_score_val, (int, float)) else None  # type: ignore[arg-type]
                             except Exception as e:
                                 logger.debug(f"Failed to extract evidence scores: {e}")
                                 pscore = sscore = None
@@ -2207,13 +2140,15 @@ class HybridPatternDetector:
                         try:
                             from bist_pattern.core.ml_coordinator import get_ml_coordinator as _get_mlc
                             mlc_for_write = _get_mlc()
-                            if getattr(mlc_for_write, 'enhanced_ml', None) and mlc_for_write.enhanced_ml.has_trained_models(symbol):
-                                try:
-                                    mlc_for_write.enhanced_ml.load_trained_models(symbol)
-                                except Exception as e:
-                                    logger.debug(f"Failed to load trained models for enhanced write: {e}")
-                                # Use same data frame
-                                cur_enhanced = mlc_for_write.enhanced_ml.predict_enhanced(symbol, data) or {}
+                            enhanced_ml = getattr(mlc_for_write, 'enhanced_ml', None)
+                            if enhanced_ml is not None:
+                                if enhanced_ml.has_trained_models(symbol):  # type: ignore[union-attr,attr-defined]
+                                    try:
+                                        enhanced_ml.load_trained_models(symbol)  # type: ignore[union-attr,attr-defined]
+                                    except Exception as e:
+                                        logger.debug(f"Failed to load trained models for enhanced write: {e}")
+                                    # Use same data frame
+                                    cur_enhanced = enhanced_ml.predict_enhanced(symbol, data) or {}  # type: ignore[union-attr,attr-defined]
                         except Exception as e:
                             logger.debug(f"Failed to get cur_enhanced: {e}")
                             cur_enhanced = {}
@@ -2404,10 +2339,11 @@ class HybridPatternDetector:
             except Exception as e:
                 logger.debug(f"User signal broadcast failed: {e}")
             
-            # Cache'e TTL ile kaydet
-            self.cache[cache_key] = {
+            # Cache'e TTL ile kaydet (use completion time, not start time)
+            cache_timestamp = datetime.now().timestamp()
+            self.cache[symbol] = {
                 'data': result,
-                'timestamp': current_time
+                'timestamp': cache_timestamp
             }
 
             # Persist file cache for cross-process reuse (used by batch API)
@@ -2546,68 +2482,61 @@ class HybridPatternDetector:
             
             # WEIGHTED CONSENSUS: Quality-based (not just count)
             # Uses confidence × reliability for ML/Enhanced predictions
+            # Weighted threshold (environment-driven)
+            # Default 2.0 = requires strong combined confidence
             try:
-                import os  # type: ignore
-                try:
-                    # Weighted threshold (environment-driven)
-                    # Default 2.0 = requires strong combined confidence
-                    weighted_threshold = float(os.getenv('WEIGHTED_CONSENSUS_THRESHOLD', '2.0'))
-                except Exception as e:
-                    logger.debug(f"Failed to get WEIGHTED_CONSENSUS_THRESHOLD, using 2.0: {e}")
-                    weighted_threshold = 2.0
-                
-                # Collect ML/Enhanced patterns with weights
-                weighted_bull = 0.0
-                weighted_bear = 0.0
-                
-                for p in patterns:
-                    if not isinstance(p.get('pattern'), str):
-                        continue
-                    
-                    # Only ML and Enhanced ML patterns
-                    if not (p['pattern'].startswith('ML_') or p['pattern'].startswith('ENH_')):
-                        continue
-                    
-                    signal = p.get('signal', '')
-                    if signal not in ('BULLISH', 'BEARISH'):
-                        continue
-                    
-                    # Weight = confidence × reliability × validation_score
-                    confidence = float(p.get('confidence', 0.5))
-                    reliability = float(p.get('reliability', 0.6))  # From ML system
-                    validation_score = float(p.get('validation_score', 1.0))  # From pattern validator
-                    
-                    weight = confidence * reliability * validation_score
-                    
-                    if signal == 'BULLISH':
-                        weighted_bull += weight
-                    else:
-                        weighted_bear += weight
-                
-                # Consensus signal if weighted difference exceeds threshold
-                weighted_diff = abs(weighted_bull - weighted_bear)
-                
-                if weighted_diff > weighted_threshold:
-                    # Consensus confidence proportional to weight difference
-                    # Cap at 0.9 for humility
-                    consensus_conf = min(0.9, weighted_diff / 5.0)
-                    
-                    if weighted_bull > weighted_bear:
-                        signals.append(('BULLISH', consensus_conf, 'WEIGHTED_CONSENSUS'))
-                        logger.debug(f"🎯 Weighted Consensus: BULLISH (weight: {weighted_bull:.2f} vs {weighted_bear:.2f})")
-                    else:
-                        signals.append(('BEARISH', consensus_conf, 'WEIGHTED_CONSENSUS'))
-                        logger.debug(f"🎯 Weighted Consensus: BEARISH (weight: {weighted_bear:.2f} vs {weighted_bull:.2f})")
-                        
+                weighted_threshold = float(os.getenv('WEIGHTED_CONSENSUS_THRESHOLD', '2.0'))
             except Exception as e:
-                logger.warning(f"Weighted consensus calculation error: {e}")
-                pass
+                logger.debug(f"Failed to get WEIGHTED_CONSENSUS_THRESHOLD, using 2.0: {e}")
+                weighted_threshold = 2.0
+            
+            # Collect ML/Enhanced patterns with weights
+            weighted_bull = 0.0
+            weighted_bear = 0.0
+            
+            for p in patterns:
+                if not isinstance(p.get('pattern'), str):
+                    continue
+                
+                # Only ML and Enhanced ML patterns
+                if not (p['pattern'].startswith('ML_') or p['pattern'].startswith('ENH_')):
+                    continue
+                
+                signal = p.get('signal', '')
+                if signal not in ('BULLISH', 'BEARISH'):
+                    continue
+                
+                # Weight = confidence × reliability × validation_score
+                confidence = float(p.get('confidence', 0.5))
+                reliability = float(p.get('reliability', 0.6))  # From ML system
+                validation_score = float(p.get('validation_score', 1.0))  # From pattern validator
+                
+                weight = confidence * reliability * validation_score
+                
+                if signal == 'BULLISH':
+                    weighted_bull += weight
+                else:
+                    weighted_bear += weight
+            
+            # Consensus signal if weighted difference exceeds threshold
+            weighted_diff = abs(weighted_bull - weighted_bear)
+            
+            if weighted_diff > weighted_threshold:
+                # Consensus confidence proportional to weight difference
+                # Cap at 0.9 for humility
+                consensus_conf = min(0.9, weighted_diff / 5.0)
+                
+                if weighted_bull > weighted_bear:
+                    signals.append(('BULLISH', consensus_conf, 'WEIGHTED_CONSENSUS'))
+                    logger.debug(f"🎯 Weighted Consensus: BULLISH (weight: {weighted_bull:.2f} vs {weighted_bear:.2f})")
+                else:
+                    signals.append(('BEARISH', consensus_conf, 'WEIGHTED_CONSENSUS'))
+                    logger.debug(f"🎯 Weighted Consensus: BEARISH (weight: {weighted_bear:.2f} vs {weighted_bull:.2f})")
 
             # Volatility-aware weighting (using Bollinger band width proxy)
             try:
                 upper = indicators.get('bb_upper')
                 lower = indicators.get('bb_lower')
-                import os  # type: ignore
                 try:
                     vol_high = float(os.getenv('VOL_HIGH_THRESHOLD', '0.10'))
                 except Exception as e:
@@ -2775,7 +2704,11 @@ class HybridPatternDetector:
                 # Not in Flask context (e.g., during training) → skip
                 return 0.0
             
-            with current_app.app_context():
+            from contextlib import AbstractContextManager
+            from typing import cast
+            # current_app is checked above, so it's not None here
+            app_ctx = cast(AbstractContextManager[None], current_app.app_context())  # type: ignore[union-attr]
+            with app_ctx:
                 from models import db, PredictionsLog, OutcomesLog
                 from datetime import datetime, timedelta
                 
