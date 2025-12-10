@@ -21,7 +21,9 @@ class _VisualPatternSystem:
         self._model = None
         self._model_path = os.getenv('YOLO_MODEL_PATH')
         # Feature toggle
-        self._enable_yolo = str(os.getenv('ENABLE_YOLO', 'true')).lower() in ('1', 'true', 'yes')
+        self._enable_yolo = str(
+            os.getenv('ENABLE_YOLO', 'true')
+        ).lower() in ('1', 'true', 'yes')
         try:
             self._min_conf = float(os.getenv('YOLO_MIN_CONF', '0.33'))
         except Exception as e:
@@ -45,14 +47,15 @@ class _VisualPatternSystem:
             self.yolo_available = False
 
     def _ensure_model_loaded(self):
-        # REDIRECTED to async system: Heavy YOLO model loading moved to background
+        # REDIRECTED to async system: Heavy YOLO model loading moved to
+        # background
         # This method now just checks if async system is available
         if not self.yolo_available:
             # Retry import lazily
             self._try_import_backend()
             if not self.yolo_available:
                 return False
-        
+
         # Check if async visual system is available
         try:
             from visual_pattern_async import get_async_visual_pattern_system
@@ -79,13 +82,16 @@ class _VisualPatternSystem:
             }
 
     def _render_chart_image(self, stock_data):
-        """Render a simple price chart (close line) to a numpy RGB image for YOLO.
+        """Render a simple price chart (close line) to a numpy RGB image
+        for YOLO.
         Returns numpy array or None on failure.
         """
-        # Defensive: sanitize data (drop NaN/inf, ensure at least some variance)
+        # Defensive: sanitize data (drop NaN/inf, ensure at least some
+        # variance)
         def _sanitize_close(series):
             try:
-                import numpy as _np  # local import to avoid top-level hard dep
+                # local import to avoid top-level hard dep
+                import numpy as _np
                 vals = series.astype(float).values
                 mask = _np.isfinite(vals)
                 vals = vals[mask]
@@ -110,7 +116,11 @@ class _VisualPatternSystem:
             if stock_data is None or len(stock_data) < 20:
                 raise RuntimeError("insufficient_data_matplotlib")
 
-            close = stock_data['close'] if 'close' in getattr(stock_data, 'columns', []) else stock_data.get('Close')
+            close = (
+                stock_data['close']
+                if 'close' in getattr(stock_data, 'columns', [])
+                else stock_data.get('Close')
+            )
             if close is None:
                 raise RuntimeError("no_close_column_matplotlib")
             series = close.tail(180)
@@ -144,7 +154,11 @@ class _VisualPatternSystem:
 
                 if stock_data is None or len(stock_data) < 20:
                     return None
-                close = stock_data['close'] if 'close' in getattr(stock_data, 'columns', []) else stock_data.get('Close')
+                close = (
+                    stock_data['close']
+                    if 'close' in getattr(stock_data, 'columns', [])
+                    else stock_data.get('Close')
+                )
                 if close is None:
                     return None
                 series = close.tail(180)
@@ -174,7 +188,9 @@ class _VisualPatternSystem:
                             if y + 1 < H:
                                 img[y + 1, x, :] = [31, 119, 180]
             except Exception as e:
-                logger.debug(f"Failed to render chart with numpy fallback: {e}")
+                logger.debug(
+                    f"Failed to render chart with numpy fallback: {e}"
+                )
                 img = None
         return img
 
@@ -190,21 +206,25 @@ class _VisualPatternSystem:
                 'timestamp': datetime.now().isoformat(),
                 'visual_analysis': {'patterns': []}
             }
-        
+
         # Use async visual pattern system to prevent blocking
         try:
             from visual_pattern_async import get_async_visual_pattern_system
             async_system = get_async_visual_pattern_system()
-            
+
             # Request async analysis
-            request_id = async_system.request_visual_analysis_async(symbol, stock_data)
-            
+            request_id = async_system.request_visual_analysis_async(
+                symbol, stock_data
+            )
+
             # Wait briefly for immediate results (non-blocking check)
             import time
             time.sleep(0.1)  # Brief wait for fast completions
-            
+
             result = async_system.get_visual_analysis_result(request_id)
-            if result and result.get('status') in ('completed', 'error', 'disabled', 'unavailable'):
+            if result and result.get('status') in (
+                'completed', 'error', 'disabled', 'unavailable'
+            ):
                 # Add timestamp for compatibility
                 result['timestamp'] = datetime.now().isoformat()
                 result['symbol'] = symbol
@@ -219,7 +239,7 @@ class _VisualPatternSystem:
                     'request_id': request_id,
                     'visual_analysis': {'patterns': []}
                 }
-                
+
         except ImportError:
             return {
                 'status': 'error',

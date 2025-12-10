@@ -1,6 +1,7 @@
 """
 Advanced Pattern Detector
-- Classic TA patterns: DOUBLE_TOP, DOUBLE_BOTTOM, HEAD_AND_SHOULDERS, INVERSE_HEAD_AND_SHOULDERS
+- Classic TA patterns: DOUBLE_TOP, DOUBLE_BOTTOM, HEAD_AND_SHOULDERS,
+  INVERSE_HEAD_AND_SHOULDERS
 - TA-Lib candlestick patterns (60+ patterns)
 - Enhanced with professional pattern recognition
 """
@@ -45,17 +46,18 @@ class AdvancedPatternDetector:
                 return []
 
             patterns: List[Dict] = []
-            
+
             # Classic TA patterns (heuristic-based)
             patterns.extend(self._detect_double_top_bottom(df))
             patterns.extend(self._detect_head_shoulders(df))
-            
+
             # ✨ NEW: TA-Lib candlestick patterns (60+ professional patterns)
             if TALIB_AVAILABLE:
                 patterns.extend(self._detect_talib_patterns(df))
 
             # Cap list size and prioritize by confidence
-            if len(patterns) > 12:  # Increased from 8 to accommodate TA-Lib patterns
+            # Increased from 8 to accommodate TA-Lib patterns
+            if len(patterns) > 12:
                 patterns = sorted(
                     patterns,
                     key=lambda p: p.get('confidence', 0),
@@ -102,14 +104,18 @@ class AdvancedPatternDetector:
                 max_val = segment[max_idx]
                 # Search second top before or after
                 tolerance = max_val * 0.01  # 1%
-                for j in range(max(0, max_idx - 15), min(len(segment), max_idx + 15)):
+                for j in range(
+                    max(0, max_idx - 15),
+                    min(len(segment), max_idx + 15)
+                ):
                     if j == max_idx:
                         continue
                     if abs(segment[j] - max_val) <= tolerance:
                         # ensure a dip between peaks
                         left, right = sorted([j, max_idx])
                         valley = (
-                            np.min(segment[left:right]) if right - left > 2 else max_val
+                            np.min(segment[left:right])
+                            if right - left > 2 else max_val
                         )
                         if valley < max_val * 0.985:  # at least 1.5% dip
                             conf = min(
@@ -127,19 +133,25 @@ class AdvancedPatternDetector:
                 min_idx = np.argmin(segment)
                 min_val = segment[min_idx]
                 tolerance_b = min_val * 0.01 if min_val != 0 else 0.01
-                for j in range(max(0, min_idx - 15), min(len(segment), min_idx + 15)):
+                for j in range(
+                    max(0, min_idx - 15),
+                    min(len(segment), min_idx + 15)
+                ):
                     if j == min_idx:
                         continue
                     if abs(segment[j] - min_val) <= tolerance_b:
                         left, right = sorted([j, min_idx])
                         peak = (
-                            np.max(segment[left:right]) if right - left > 2 else min_val
+                            np.max(segment[left:right])
+                            if right - left > 2 else min_val
                         )
                         if peak > min_val * 1.015:
                             conf = min(
                                 0.9,
                                 0.6
-                                + float((peak - min_val) / (abs(min_val) + 1e-8)) * 5,
+                                + float(
+                                    (peak - min_val) / (abs(min_val) + 1e-8)
+                                ) * 5,
                             )
                             patterns.append({
                                 'pattern': 'DOUBLE_BOTTOM',
@@ -159,7 +171,8 @@ class AdvancedPatternDetector:
         if len(close) < 30:
             return patterns
         try:
-            # Extremely simple H&S detection using three-peak shape on last ~50 bars
+            # Extremely simple H&S detection using three-peak shape on last
+            # ~50 bars
             segment = close[-50:]
             peaks_idx = self._find_peaks(segment, distance=3)
             if len(peaks_idx) >= 3:
@@ -175,7 +188,9 @@ class AdvancedPatternDetector:
                         # Head & Shoulders
                         conf = min(
                             0.9,
-                            0.55 + float((head - (left + right) / 2) / (head + 1e-8)) * 5,
+                            0.55 + float(
+                                (head - (left + right) / 2) / (head + 1e-8)
+                            ) * 5,
                         )
                         patterns.append({
                             'pattern': 'HEAD_AND_SHOULDERS',
@@ -192,8 +207,10 @@ class AdvancedPatternDetector:
                         # Inverse H&S
                         conf = min(
                             0.9,
-                            0.55
-                            + float(((left + right) / 2 - head) / (abs(head) + 1e-8)) * 5,
+                            0.55 + float(
+                                ((left + right) / 2 - head) /
+                                (abs(head) + 1e-8)
+                            ) * 5,
                         )
                         patterns.append({
                             'pattern': 'INVERSE_HEAD_AND_SHOULDERS',
@@ -205,7 +222,7 @@ class AdvancedPatternDetector:
         except Exception as e:
             logger.debug(f"Head & Shoulders detection failed: {e}")
         return patterns
-            
+
     def _find_peaks(self, array: np.ndarray, distance: int = 3) -> List[int]:
         idx: List[int] = []
         for i in range(distance, len(array) - distance):
@@ -213,12 +230,13 @@ class AdvancedPatternDetector:
             if array[i] == window.max() and (window.argmax() == distance):
                 idx.append(i)
         return idx
-    
+
     def _detect_talib_patterns(self, df: pd.DataFrame) -> List[Dict]:
         """
         Detect candlestick patterns using TA-Lib
-        
-        TA-Lib provides 60+ professional candlestick pattern recognition functions.
+
+        TA-Lib provides 60+ professional candlestick pattern recognition
+        functions.
         Each returns integer values:
         - 100: Bullish pattern
         - -100: Bearish pattern
@@ -226,82 +244,130 @@ class AdvancedPatternDetector:
         """
         if not TALIB_AVAILABLE:
             return []
-        
+
         patterns: List[Dict] = []
-        
+
         try:
             # Extract OHLC arrays
             open_prices = df['open'].values.astype(float)
             high_prices = df['high'].values.astype(float)
             low_prices = df['low'].values.astype(float)
             close_prices = df['close'].values.astype(float)
-            
+
             # Check if we have enough data
             if len(close_prices) < 10:
                 return []
-            
+
             # Key reversal patterns (high confidence)
+            # Type assertion: talib is not None when TALIB_AVAILABLE is True
+            assert talib is not None, "talib should not be None here"
+            # type: ignore[attr-defined]
             talib_patterns_high_priority = {
-                'HAMMER': (talib.CDLHAMMER, 'BULLISH', 0.75),  # type: ignore
-                'SHOOTING_STAR': (talib.CDLSHOOTINGSTAR, 'BEARISH', 0.75),  # type: ignore
-                'DOJI': (talib.CDLDOJI, 'NEUTRAL', 0.60),  # type: ignore
-                'ENGULFING_BULLISH': (talib.CDLENGULFING, 'BULLISH', 0.80),  # type: ignore
-                'MORNING_STAR': (talib.CDLMORNINGSTAR, 'BULLISH', 0.85),  # type: ignore
-                'EVENING_STAR': (talib.CDLEVENINGSTAR, 'BEARISH', 0.85),  # type: ignore
-                'PIERCING_LINE': (talib.CDLPIERCING, 'BULLISH', 0.70),  # type: ignore
-                'DARK_CLOUD_COVER': (talib.CDLDARKCLOUDCOVER, 'BEARISH', 0.70),  # type: ignore
-                'THREE_WHITE_SOLDIERS': (talib.CDL3WHITESOLDIERS, 'BULLISH', 0.85),  # type: ignore
-                'THREE_BLACK_CROWS': (talib.CDL3BLACKCROWS, 'BEARISH', 0.85),  # type: ignore
+                'HAMMER': (talib.CDLHAMMER, 'BULLISH', 0.75),
+                'SHOOTING_STAR': (
+                    talib.CDLSHOOTINGSTAR, 'BEARISH', 0.75
+                ),
+                'DOJI': (talib.CDLDOJI, 'NEUTRAL', 0.60),
+                'ENGULFING_BULLISH': (
+                    talib.CDLENGULFING, 'BULLISH', 0.80
+                ),
+                'MORNING_STAR': (
+                    talib.CDLMORNINGSTAR, 'BULLISH', 0.85
+                ),
+                'EVENING_STAR': (
+                    talib.CDLEVENINGSTAR, 'BEARISH', 0.85
+                ),
+                'PIERCING_LINE': (
+                    talib.CDLPIERCING, 'BULLISH', 0.70
+                ),
+                'DARK_CLOUD_COVER': (
+                    talib.CDLDARKCLOUDCOVER, 'BEARISH', 0.70
+                ),
+                'THREE_WHITE_SOLDIERS': (
+                    talib.CDL3WHITESOLDIERS, 'BULLISH', 0.85
+                ),
+                'THREE_BLACK_CROWS': (
+                    talib.CDL3BLACKCROWS, 'BEARISH', 0.85
+                ),
             }
-            
+
             # Medium priority patterns
+            # type: ignore[attr-defined]
             talib_patterns_medium = {
-                'HANGING_MAN': (talib.CDLHANGINGMAN, 'BEARISH', 0.65),  # type: ignore
-                'INVERTED_HAMMER': (talib.CDLINVERTEDHAMMER, 'BULLISH', 0.65),  # type: ignore
-                'HARAMI': (talib.CDLHARAMI, 'NEUTRAL', 0.60),  # type: ignore
-                'HARAMI_CROSS': (talib.CDLHARAMICROSS, 'NEUTRAL', 0.65),  # type: ignore
-                'MARUBOZU': (talib.CDLMARUBOZU, 'NEUTRAL', 0.60),  # type: ignore
+                'HANGING_MAN': (
+                    talib.CDLHANGINGMAN, 'BEARISH', 0.65
+                ),
+                'INVERTED_HAMMER': (
+                    talib.CDLINVERTEDHAMMER, 'BULLISH', 0.65
+                ),
+                'HARAMI': (talib.CDLHARAMI, 'NEUTRAL', 0.60),
+                'HARAMI_CROSS': (
+                    talib.CDLHARAMICROSS, 'NEUTRAL', 0.65
+                ),
+                'MARUBOZU': (talib.CDLMARUBOZU, 'NEUTRAL', 0.60),
             }
-            
+
             # Combine all patterns
-            all_talib_patterns = {**talib_patterns_high_priority, **talib_patterns_medium}
-            
-            for pattern_name, (func, default_signal, base_conf) in all_talib_patterns.items():
+            all_talib_patterns = {
+                **talib_patterns_high_priority, **talib_patterns_medium
+            }
+
+            for pattern_name, (func, default_signal, base_conf) in (
+                all_talib_patterns.items()
+            ):
                 try:
-                    result = func(open_prices, high_prices, low_prices, close_prices)
-                    
+                    result = func(
+                        open_prices, high_prices, low_prices, close_prices
+                    )
+
                     # Check last few candles for pattern
                     for i in range(max(0, len(result) - 5), len(result)):
                         value = result[i]
-                        
+
                         if value != 0:  # Pattern detected
                             # Determine signal
                             if pattern_name in ['ENGULFING_BULLISH']:
                                 signal = 'BULLISH' if value > 0 else 'BEARISH'
-                                # ✅ FIX: Pattern ismini signal'a göre düzelt (ENGULFING_BULLISH vs ENGULFING_BEARISH)
+                                # ✅ FIX: Pattern ismini signal'a göre düzelt
+                                # (ENGULFING_BULLISH vs ENGULFING_BEARISH)
                                 # Frontend'de doğru çeviri yapılabilmesi için
                                 if signal == 'BEARISH':
                                     pattern_name = 'ENGULFING_BEARISH'
                                 # else: pattern_name zaten 'ENGULFING_BULLISH'
                             elif default_signal == 'NEUTRAL':
-                                # For neutral patterns, check if bullish or bearish
+                                # For neutral patterns, check if bullish or
+                                # bearish
                                 signal = 'BULLISH' if value > 0 else 'BEARISH'
-                                # ✅ FIX: Pattern ismini signal'a göre düzelt (NEUTRAL pattern'ler için)
+                                # ✅ FIX: Pattern ismini signal'a göre düzelt
+                                # (NEUTRAL pattern'ler için)
                                 if pattern_name == 'HARAMI':
-                                    pattern_name = 'HARAMI_BULLISH' if signal == 'BULLISH' else 'HARAMI_BEARISH'
+                                    pattern_name = (
+                                        'HARAMI_BULLISH'
+                                        if signal == 'BULLISH'
+                                        else 'HARAMI_BEARISH'
+                                    )
                                 elif pattern_name == 'HARAMI_CROSS':
-                                    # ✅ FIX: HARAMI_CROSS için de isim sinyale göre ayarlansın
-                                    pattern_name = 'HARAMI_CROSS_BULLISH' if signal == 'BULLISH' else 'HARAMI_CROSS_BEARISH'
+                                    # ✅ FIX: HARAMI_CROSS için de isim sinyale
+                                    # göre ayarlansın
+                                    pattern_name = (
+                                        'HARAMI_CROSS_BULLISH'
+                                        if signal == 'BULLISH'
+                                        else 'HARAMI_CROSS_BEARISH'
+                                    )
                                 elif pattern_name == 'MARUBOZU':
-                                    pattern_name = 'MARUBOZU_BULLISH' if signal == 'BULLISH' else 'MARUBOZU_BEARISH'
+                                    pattern_name = (
+                                        'MARUBOZU_BULLISH'
+                                        if signal == 'BULLISH'
+                                        else 'MARUBOZU_BEARISH'
+                                    )
                                 # Diğer NEUTRAL pattern'ler için de eklenebilir
                             else:
                                 signal = default_signal
-                            
+
                             # Adjust confidence based on pattern strength
                             confidence = base_conf * (abs(value) / 100.0)
                             confidence = float(np.clip(confidence, 0.5, 0.95))
-                            
+
                             patterns.append({
                                 'pattern': pattern_name,
                                 'signal': signal,
@@ -311,14 +377,16 @@ class AdvancedPatternDetector:
                                 'strength': abs(value)
                             })
                             break  # Only report first occurrence
-                            
+
                 except Exception as e:
                     logger.debug(f"TA-Lib {pattern_name} error: {e}")
                     continue
-            
-            logger.info(f"✅ TA-Lib detected {len(patterns)} candlestick patterns")
-            
+
+            logger.info(
+                f"✅ TA-Lib detected {len(patterns)} candlestick patterns"
+            )
+
         except Exception as e:
             logger.error(f"TA-Lib pattern detection error: {e}")
-        
+
         return patterns

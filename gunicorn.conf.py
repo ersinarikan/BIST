@@ -9,11 +9,19 @@ bind = os.getenv("GUNICORN_BIND", "127.0.0.1:5000")
 backlog = int(os.getenv("GUNICORN_BACKLOG", "2048"))
 
 # Worker processes (env ile özelleştirilebilir)
-# Single worker for automation state consistency and WebSocket support (default)
+# Single worker for automation state consistency and WebSocket support
+# (default)
 workers = int(os.getenv("GUNICORN_WORKERS", "1"))
-worker_class = os.getenv("GUNICORN_WORKER_CLASS", "geventwebsocket.gunicorn.workers.GeventWebSocketWorker")  # WebSocket support için GeventWebSocketWorker kullan
-worker_connections = int(os.getenv("GUNICORN_WORKER_CONNECTIONS", "1000"))
-# Uzun süren toplama/analizlerde worker'ın timeout ile öldürülmesini önlemek için süreyi artırıyoruz
+# WebSocket support için GeventWebSocketWorker kullan
+worker_class = os.getenv(
+    "GUNICORN_WORKER_CLASS",
+    "geventwebsocket.gunicorn.workers.GeventWebSocketWorker"
+)
+worker_connections = int(
+    os.getenv("GUNICORN_WORKER_CONNECTIONS", "1000")
+)
+# Uzun süren toplama/analizlerde worker'ın timeout ile öldürülmesini
+# önlemek için süreyi artırıyoruz
 # FinBERT model download için timeout artırıldı
 timeout = int(os.getenv("GUNICORN_TIMEOUT", "1800"))
 keepalive = int(os.getenv("GUNICORN_KEEPALIVE", "30"))

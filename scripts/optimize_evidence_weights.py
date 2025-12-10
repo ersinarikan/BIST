@@ -62,7 +62,11 @@ def _save_param_store(out_dir: str, store: Dict) -> str:
     # embed checksum of weights section for quick validation
     try:
         import hashlib
-        checksum = hashlib.sha256(json.dumps(store.get('weights', {}), sort_keys=True).encode('utf-8')).hexdigest()
+        checksum = hashlib.sha256(
+            json.dumps(store.get('weights', {}), sort_keys=True).encode(
+                'utf-8'
+            )
+        ).hexdigest()
         store['weights_checksum'] = checksum  # type: ignore[assignment]
     except Exception:
         pass
@@ -100,7 +104,9 @@ def _corr(xs: List[float], ys: List[float]) -> float:
         return 0.0
 
 
-def learn_weights(window_days: int = 30, min_samples: int = 150) -> Dict[str, Dict[str, float]]:
+def learn_weights(
+    window_days: int = 30, min_samples: int = 150
+) -> Dict[str, Dict[str, float]]:
     out: Dict[str, Dict[str, float]] = {}
     with app.app_context():
         cutoff = datetime.utcnow() - timedelta(days=window_days)
@@ -108,11 +114,15 @@ def learn_weights(window_days: int = 30, min_samples: int = 150) -> Dict[str, Di
         for h in horizons:
             q = (
                 db.session.query(PredictionsLog, OutcomesLog)
-                .join(OutcomesLog, OutcomesLog.prediction_id == PredictionsLog.id)
+                .join(
+                    OutcomesLog,
+                    OutcomesLog.prediction_id == PredictionsLog.id
+                )
                 .filter(PredictionsLog.horizon == h)
                 .filter(PredictionsLog.ts_pred >= cutoff)
             )
-            p_list: List[Tuple[float, float, int]] = []  # (pat_score, sent_score, hit)
+            # (pat_score, sent_score, hit)
+            p_list: List[Tuple[float, float, int]] = []
             for p, o in q.all():
                 try:
                     ps = _safe_float(getattr(p, 'pat_score', None))
@@ -126,7 +136,11 @@ def learn_weights(window_days: int = 30, min_samples: int = 150) -> Dict[str, Di
             if len(p_list) < min_samples:
                 # insufficient; keep defaults
                 base = DEFAULTS.get(h, (0.03, 0.02))
-                out[h] = {'w_pat': base[0], 'w_sent': base[1], 'samples': len(p_list)}
+                out[h] = {
+                    'w_pat': base[0],
+                    'w_sent': base[1],
+                    'samples': len(p_list)
+                }
                 continue
             pats = [it[0] for it in p_list]
             sents = [it[1] for it in p_list]
@@ -156,11 +170,15 @@ def main() -> int:
     store = store if isinstance(store, dict) else {}
     store['weights_generated_at'] = datetime.utcnow().isoformat()
     store['weights'] = weights
-    # Initialize simple bandit section if absent (keep traffic small by default)
-    store.setdefault('bandit', {}).setdefault('horizons', {}).setdefault('1d', {'traffic': 0.10})
+    # Initialize simple bandit section if absent (keep traffic small)
+    store.setdefault('bandit', {}).setdefault('horizons', {}).setdefault(
+        '1d', {'traffic': 0.10}
+    )
     # File-locked atomic save
     try:
-        from bist_pattern.utils.param_store_lock import file_lock  # type: ignore
+        from bist_pattern.utils.param_store_lock import (
+            file_lock  # type: ignore
+        )
     except Exception:
         file_lock = None  # type: ignore
     if file_lock is not None:

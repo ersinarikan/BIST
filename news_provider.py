@@ -5,7 +5,8 @@ Reads RSS feeds from environment (NEWS_SOURCES) and returns recent
 headlines that likely relate to a given BIST symbol.
 
 Environment variables (override via systemd):
-  - NEWS_SOURCES: comma-separated RSS URLs (e.g., Milliyet Ekonomi RSS, BloombergHT RSS)
+  - NEWS_SOURCES: comma-separated RSS URLs (e.g., Milliyet Ekonomi RSS,
+    BloombergHT RSS)
   - NEWS_LOOKBACK_HOURS: time window to accept items (default 24)
   - NEWS_MAX_ITEMS: maximum items to return (default 10)
   - NEWS_CACHE_TTL: seconds to cache results in-process (default 600)
@@ -38,7 +39,7 @@ def _get_env_list(name: str) -> List[str]:
     except Exception:
         return []
 
- 
+
 def _within_lookback(published_ts: float, lookback_hours: int) -> bool:
     try:
         if not published_ts:
@@ -57,7 +58,10 @@ def _entry_text(entry) -> str:
     except Exception:
         pass
     try:
-        summary = getattr(entry, "summary", None) or getattr(entry, "description", None) or ""
+        summary = (
+            getattr(entry, "summary", None) or
+            getattr(entry, "description", None) or ""
+        )
         if summary:
             parts.append(str(summary))
     except Exception:
@@ -82,7 +86,8 @@ def _normalize(text: str) -> str:
         t = (text or "").upper()
         # Basic Turkish normalization
         trans = str.maketrans({
-            "İ": "I", "I": "I", "Ş": "S", "Ğ": "G", "Ü": "U", "Ö": "O", "Ç": "C",
+            "İ": "I", "I": "I", "Ş": "S", "Ğ": "G", "Ü": "U",
+            "Ö": "O", "Ç": "C",
             "ı": "I", "ş": "S", "ğ": "G", "ü": "U", "ö": "O", "ç": "C",
         })
         return t.translate(trans)
@@ -133,7 +138,9 @@ def _get_company_names(symbol: str) -> List[str]:
     return out
 
 
-def _match_symbol_or_name(text: str, symbol: str, company_names: List[str]) -> bool:
+def _match_symbol_or_name(
+    text: str, symbol: str, company_names: List[str]
+) -> bool:
     try:
         t = _normalize(text)
         s = _normalize(symbol)
@@ -151,14 +158,20 @@ def _match_symbol_or_name(text: str, symbol: str, company_names: List[str]) -> b
             n = _strip_company_suffixes(name)
             if not n:
                 continue
-            if f" {n} " in t or t.startswith(n + " ") or t.endswith(" " + n) or n + ":" in t:
+            if (
+                f" {n} " in t or t.startswith(n + " ") or
+                t.endswith(" " + n) or n + ":" in t
+            ):
                 return True
         return False
     except Exception:
         return False
 
 
-def get_recent_news(symbol: str, *, max_items: int | None = None, lookback_hours: int | None = None) -> List[str]:
+def get_recent_news(
+    symbol: str, *, max_items: int | None = None,
+    lookback_hours: int | None = None
+) -> List[str]:
     try:
         sources = _get_env_list("NEWS_SOURCES")
         if not sources:
@@ -185,7 +198,9 @@ def get_recent_news(symbol: str, *, max_items: int | None = None, lookback_hours
             cache_ttl = 600
 
         # Cache key by symbol + sources signature
-        cache_key = f"{symbol}|{','.join(sources)}|{max_items}|{lookback_hours}"
+        cache_key = (
+            f"{symbol}|{','.join(sources)}|{max_items}|{lookback_hours}"
+        )
         c = _cache.get(cache_key)
         if c and (_now_ts() - float(c.get("ts", 0.0))) < cache_ttl:
             data = c.get("data")
@@ -200,11 +215,15 @@ def get_recent_news(symbol: str, *, max_items: int | None = None, lookback_hours
         for url in sources:
             try:
                 feed = feedparser.parse(url)
-                for e in getattr(feed, "entries", [])[: max_items * 3]:  # soft cap per feed
+                # soft cap per feed
+                for e in getattr(feed, "entries", [])[: max_items * 3]:
                     # Compute published timestamp
                     published_ts = 0.0
                     try:
-                        if hasattr(e, "published_parsed") and e.published_parsed:
+                        if (
+                            hasattr(e, "published_parsed") and
+                            e.published_parsed
+                        ):
                             published_ts = time.mktime(e.published_parsed)
                     except Exception:
                         published_ts = 0.0
@@ -217,12 +236,17 @@ def get_recent_news(symbol: str, *, max_items: int | None = None, lookback_hours
                         hits.append(text)
                     elif len(generals) < max_items:
                         # Keep a pool of general market headlines
-                        if any(k in text.upper() for k in ["BIST", "BORSA İSTANBUL", "BORSA", "HİSSE"]):
+                        if any(
+                            k in text.upper() for k in [
+                                "BIST", "BORSA İSTANBUL", "BORSA", "HİSSE"
+                            ]
+                        ):
                             generals.append(text)
             except Exception:
                 continue
 
-        # Prefer symbol-specific headlines; fallback to general market news
+        # Prefer symbol-specific headlines; fallback to general market
+        # news
         result: List[str] = hits[: max_items]
         if len(result) < (max_items or 0):
             for t in generals:

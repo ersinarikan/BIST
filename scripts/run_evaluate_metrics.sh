@@ -11,6 +11,7 @@ fi
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
 
 export BIST_LOG_PATH="${BIST_LOG_PATH:-/opt/bist-pattern/logs}"
+export PYTHONPATH="/opt/bist-pattern:${PYTHONPATH:-}"
 mkdir -p "$BIST_LOG_PATH"
 cd /opt/bist-pattern
 

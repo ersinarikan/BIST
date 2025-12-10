@@ -7,11 +7,14 @@ Combines base model predictions using a hybrid of:
 - Performance weighting (uses historical R^2 as a proxy for model quality)
 
 Inputs:
-- predictions: np.ndarray shape (n_models,), numeric predictions on the same scale
-- historical_r2: np.ndarray shape (n_models,), R^2 per model (can be negative)
+- predictions: np.ndarray shape (n_models,), numeric predictions on same
+  scale
+- historical_r2: np.ndarray shape (n_models,), R^2 per model (can be
+  negative)
 - consensus_weight: float in [0,1]
 - performance_weight: float in [0,1]
-- sigma: float > 0, controls consensus sharpness (smaller → penalize disagreement more)
+- sigma: float > 0, controls consensus sharpness (smaller → penalize
+  disagreement more)
 
 Returns:
 - ensemble_pred: float, weighted average prediction
@@ -61,20 +64,27 @@ def smart_ensemble(
     if r2.size != n:
         # Align length
         if r2.size < n:
-            r2 = np.pad(r2, (0, n - r2.size), mode='constant', constant_values=0.0)
+            r2 = np.pad(
+                r2, (0, n - r2.size), mode='constant', constant_values=0.0
+            )
         else:
             r2 = r2[:n]
 
     # Consensus weights: penalize deviation from mean prediction
     mu = float(np.mean(preds))
     var = float(np.var(preds)) if np.isfinite(np.var(preds)) else 0.0
-    # Adaptive sigma: if provided sigma is too small/zero, use a fraction of empirical spread
-    adaptive_sigma = max(1e-6, sigma if sigma and sigma > 0 else max(1e-6, math.sqrt(var) * 0.5))
+    # Adaptive sigma: if provided sigma is too small/zero, use a fraction
+    # of empirical spread
+    adaptive_sigma = max(
+        1e-6,
+        sigma if sigma and sigma > 0 else max(1e-6, math.sqrt(var) * 0.5)
+    )
     # Gaussian kernel around mean
     consensus_w = np.exp(-0.5 * ((preds - mu) / adaptive_sigma) ** 2)
     consensus_w = _normalize(consensus_w)
 
-    # Performance weights: softmax over clipped R^2 (allow negatives, but compress extremes)
+    # Performance weights: softmax over clipped R^2 (allow negatives, but
+    # compress extremes)
     r2_clipped = np.clip(r2, -0.5, 1.0)
     # Temperature to avoid overly peaky softmax
     perf_temp = 2.0
@@ -103,7 +113,10 @@ def smart_ensemble(
             pw = _safe_array(prior_weights, fallback_len=n, fill=1.0)
             if pw.size != n:
                 if pw.size < n:
-                    pw = np.pad(pw, (0, n - pw.size), mode='constant', constant_values=1.0)
+                    pw = np.pad(
+                        pw, (0, n - pw.size), mode='constant',
+                        constant_values=1.0
+                    )
                 else:
                     pw = pw[:n]
             # elementwise multiply and renormalize

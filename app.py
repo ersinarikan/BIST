@@ -4,6 +4,7 @@ from gevent import monkey
 monkey.patch_all()
 
 from datetime import datetime  # noqa: E402
+from typing import Any, cast  # noqa: E402
 from flask import Flask, jsonify, request, redirect, url_for  # noqa: E402
 from flask_login import LoginManager, current_user  # noqa: E402
 from flask_mail import Mail  # noqa: E402
@@ -51,7 +52,9 @@ except ImportError:
     logger.warning("⚠️ ML Prediction modülü yüklenemedi")
 
 try:
-    from working_automation import get_working_automation_pipeline  # noqa: F401
+    from working_automation import (
+        get_working_automation_pipeline  # noqa: F401
+    )
     AUTOMATED_PIPELINE_AVAILABLE = True
 except ImportError:
     AUTOMATED_PIPELINE_AVAILABLE = False
@@ -87,10 +90,14 @@ def create_app(config_name='default'):
     app.config.from_object(config[config_name])
     config[config_name].init_app(app)
 
-    # Map INTERNAL_API_TOKEN from environment if present (keeps existing config fallback)
+    # Map INTERNAL_API_TOKEN from environment if present
+    # (keeps existing config fallback)
     try:
         # ✅ FIX: Use ConfigManager for consistent config access
-        app.config['INTERNAL_API_TOKEN'] = ConfigManager.get('INTERNAL_API_TOKEN', app.config.get('INTERNAL_API_TOKEN'))
+        app.config['INTERNAL_API_TOKEN'] = ConfigManager.get(
+            'INTERNAL_API_TOKEN',
+            app.config.get('INTERNAL_API_TOKEN')
+        )
     except Exception as e:
         ErrorHandler.handle(e, 'app_init_internal_token', level='warning')
         logger.warning(f"Failed to set INTERNAL_API_TOKEN: {e}")
@@ -100,10 +107,14 @@ def create_app(config_name='default'):
     login_manager.init_app(app)
     mail.init_app(app)
     migrate.init_app(app, db)
-    # Configure optional cross-process message queue for Socket.IO (required for multi-worker)
+    # Configure optional cross-process message queue for
+    # Socket.IO (required for multi-worker)
     try:
         # ✅ FIX: Use ConfigManager for consistent config access
-        mq_url = ConfigManager.get('SOCKETIO_MESSAGE_QUEUE', app.config.get('SOCKETIO_MESSAGE_QUEUE'))
+        mq_url = ConfigManager.get(
+            'SOCKETIO_MESSAGE_QUEUE',
+            app.config.get('SOCKETIO_MESSAGE_QUEUE')
+        )
     except Exception as e:
         ErrorHandler.handle(e, 'app_init_socketio_mq', level='debug')
         mq_url = None
@@ -115,18 +126,29 @@ def create_app(config_name='default'):
         logger=False,
         engineio_logger=False,
         ping_timeout=60,  # ✅ FIX: Reduced to 60s (standard)
-        ping_interval=25,  # ✅ FIX: Reduced to 25s to keep connection active through proxies
+        ping_interval=25,  # ✅ FIX: keep connection active through proxies
         message_queue=mq_url,
     )
     if not mq_url:
-        logger.warning("Socket.IO message_queue not configured; cross-process emits may not reach clients. Set SOCKETIO_MESSAGE_QUEUE (e.g., redis://localhost:6379/0)")
+        logger.warning(
+            "Socket.IO message_queue not configured; cross-process emits "
+            "may not reach clients. Set SOCKETIO_MESSAGE_QUEUE "
+            "(e.g., redis://localhost:6379/0)"
+        )
     csrf.init_app(app)
-    # Exempt Socket.IO transport (polling POSTs) from CSRF to prevent 400s on /socket.io/
+    # Exempt Socket.IO transport (polling POSTs) from CSRF to
+    # prevent 400s on /socket.io/
     try:
-        if hasattr(app, 'view_functions') and 'socketio' in app.view_functions:
+        if (
+            hasattr(app, 'view_functions') and
+            'socketio' in app.view_functions
+        ):
             csrf.exempt(app.view_functions['socketio'])
     except Exception as _csrf_socketio_err:
-        logger.info(f"CSRF exempt for socketio failed: {_csrf_socketio_err}")
+        logger.info(
+            "CSRF exempt for socketio failed: %s",
+            _csrf_socketio_err
+        )
     limiter.init_app(app)
 
     # Template auto-reload to avoid stale cached templates in production
@@ -142,11 +164,15 @@ def create_app(config_name='default'):
         try:
             from bist_pattern.core.broadcaster import _sanitize_json_value
             import json
-            
+
             # ✅ FIX: Use provided service or infer from category
             if service is None:
-                service = 'working_automation' if category == 'working_automation' else None
-            
+                service = (
+                    'working_automation'
+                    if category == 'working_automation'
+                    else None
+                )
+
             payload = {
                 'level': level,
                 'message': str(message)[:2000],
@@ -155,26 +181,38 @@ def create_app(config_name='default'):
             }
             if service:
                 payload['service'] = service
-            
+
             clean_payload = _sanitize_json_value(payload)
             # Verify serialization to prevent disconnects
             json.dumps(clean_payload)
-            socketio.emit('log_update', clean_payload, room='admin')  # type: ignore
+            emit_fn = cast(Any, socketio.emit)
+            emit_fn(
+                'log_update',
+                clean_payload,
+                room='admin'
+            )
         except Exception as e:
             logger.debug(f"Broadcast log failed: {e}")
-    
-    # Store broadcast_log on app early to avoid race condition with log tailer threads
-    app.broadcast_log = broadcast_log
 
-    # Optional: tail gunicorn logs and broadcast to Live System Logs (read-only)
+    # Store broadcast_log on app early to avoid race condition
+    # with log tailer threads
+    app.broadcast_log = broadcast_log  # type: ignore[attr-defined]
+
+    # Optional: tail gunicorn logs and broadcast to Live System Logs
+    # (read-only)
     def _start_log_tailer():
         try:
             # ✅ FIX: Use ConfigManager for consistent config access
-            enabled = str(ConfigManager.get('ENABLE_GUNICORN_TAIL', 'False')).lower() == 'true'
+            enabled = (
+                str(ConfigManager.get('ENABLE_GUNICORN_TAIL', 'False'))
+                .lower() == 'true'
+            )
             if not enabled:
                 return
             # ✅ FIX: Use ConfigManager for consistent config access
-            log_dir = ConfigManager.get('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+            log_dir = ConfigManager.get(
+                'BIST_LOG_PATH', '/opt/bist-pattern/logs'
+            )
             files = [
                 os.path.join(log_dir, 'gunicorn_error.log'),
                 os.path.join(log_dir, 'gunicorn_access.log')
@@ -184,7 +222,10 @@ def create_app(config_name='default'):
                 try:
                     if not os.path.exists(path):
                         return
-                    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    app_obj = cast(Any, app)
+                    with open(
+                        path, 'r', encoding='utf-8', errors='ignore'
+                    ) as f:
                         f.seek(0, os.SEEK_END)
                         while True:
                             line = f.readline()
@@ -192,16 +233,31 @@ def create_app(config_name='default'):
                                 time.sleep(1)
                                 continue
                             try:
-                                # ✅ FIX: Check if broadcast_log exists before calling (defensive)
-                                if hasattr(app, 'broadcast_log'):
-                                    app.broadcast_log('INFO', line.strip(), category)
+                                # ✅ FIX: Check if broadcast_log exists
+                                # before calling (defensive)
+                                if hasattr(app_obj, 'broadcast_log'):
+                                    app_obj.broadcast_log(
+                                        'INFO',
+                                        line.strip(),
+                                        category
+                                    )  # type: ignore[attr-defined]
                             except Exception as e:
-                                logger.debug(f"Log tail broadcast failed for {category}: {e}")
+                                logger.debug(
+                                    "Log tail broadcast failed for %s: %s",
+                                    category,
+                                    e
+                                )
                 except Exception as e:
-                    logger.warning(f"Log tailing failed for {path}: {e}")
+                    logger.warning(
+                        "Log tailing failed for %s: %s",
+                        path,
+                        e
+                    )
 
             for fpath in files:
-                t = threading.Thread(target=_tail, args=(fpath, 'gunicorn'), daemon=True)
+                t = threading.Thread(
+                    target=_tail, args=(fpath, 'gunicorn'), daemon=True
+                )
                 t.start()
         except Exception as e:
             logger.warning(f"Failed to start log tailer: {e}")
@@ -210,69 +266,91 @@ def create_app(config_name='default'):
 
     # Debug: Log selected routes to verify blueprint registration
     try:
-        routes_to_check = ('/api/pattern-summary', '/api/pattern-analysis', '/api/visual-analysis', '/api/internal/visual-analysis')
+        routes_to_check = (
+            '/api/pattern-summary',
+            '/api/pattern-analysis',
+            '/api/visual-analysis',
+            '/api/internal/visual-analysis'
+        )
         for rule in app.url_map.iter_rules():
             text = str(rule)
             if any(seg in text for seg in routes_to_check):
-                logger.info(f"ROUTE_REGISTERED {text}")
+                logger.info("ROUTE_REGISTERED %s", text)
     except Exception as _route_log_err:
-        logger.debug(f"route log skipped: {_route_log_err}")
+        logger.debug("route log skipped: %s", _route_log_err)
 
     # Graceful shutdown for continuous loop
     # Signal handling moved to gevent-compatible version
     try:
         import signal
-        
+
         def _graceful_stop(signum, frame):
             """Gevent-safe graceful shutdown handler"""
             try:
-                # Use gevent-safe spawn to avoid BlockingIOError on signal wakeup fd
+                # Use gevent-safe spawn to avoid BlockingIOError
+                # on signal wakeup fd
                 if GEVENT_AVAILABLE:
                     from gevent import spawn as gevent_spawn
 
                     def _shutdown_task():
                         try:
-                            from working_automation import get_working_automation_pipeline
+                            from working_automation import (
+                                get_working_automation_pipeline
+                            )
                             pipeline = get_working_automation_pipeline()
                             if getattr(pipeline, 'is_running', False):
                                 pipeline.stop_scheduler()
-                                logger.info('Graceful shutdown: pipeline stopped')
+                                logger.info(
+                                    'Graceful shutdown: pipeline stopped'
+                                )
                         except Exception as _e:
-                            logger.warning(f'Graceful shutdown failed: {_e}')
+                            logger.warning(
+                                'Graceful shutdown failed: %s', _e
+                            )
 
                     gevent_spawn(_shutdown_task)
                 else:
-                    from working_automation import get_working_automation_pipeline
+                    from working_automation import (
+                        get_working_automation_pipeline
+                    )
                     pipeline = get_working_automation_pipeline()
                     if getattr(pipeline, 'is_running', False):
                         pipeline.stop_scheduler()
                         logger.info('Graceful shutdown: pipeline stopped')
             except Exception as _e:
-                logger.warning(f'Signal handler error: {_e}')
-        
+                logger.warning('Signal handler error: %s', _e)
+
         # Register signal handlers
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, _graceful_stop)
     except Exception as e:
-        logger.warning(f'Signal handler setup failed: {e}')
+        logger.warning('Signal handler setup failed: %s', e)
 
-    # SocketIO was already initialized above with async_mode and CORS; avoid duplicate initialization
-    
+    # SocketIO already initialized with async_mode and CORS
+
     # Auto-start automation pipeline on application startup
     def _auto_start_automation():
         """Automatically start automation pipeline when service starts"""
         try:
             if not AUTOMATED_PIPELINE_AVAILABLE:
-                logger.info("⚠️ Automation pipeline not available - skipping auto-start")
+                logger.info(
+                    "⚠️ Automation pipeline not available - "
+                    "skipping auto-start"
+                )
                 return
-            
+
             # Check if auto-start is enabled (default: True)
             # ✅ FIX: Use ConfigManager for consistent config access
-            auto_start = str(ConfigManager.get('AUTO_START_CYCLE', 'True')).lower() in ('true', '1', 'yes', 'on')
+            auto_start = str(
+                ConfigManager.get('AUTO_START_CYCLE', 'True')
+            ).lower() in ('true', '1', 'yes', 'on')
             if not auto_start:
-                logger.info("⚠️ AUTO_START_CYCLE disabled - pipeline will not auto-start")
+                logger.info(
+                    "⚠️ AUTO_START_CYCLE disabled - "
+                    "pipeline will not auto-start"
+                )
                 return
-            
+
             # Delay startup to allow app to fully initialize
             import threading
 
@@ -280,43 +358,70 @@ def create_app(config_name='default'):
                 try:
                     import time
                     time.sleep(3)  # Wait 3 seconds for app to be ready
-                    
+
                     with app.app_context():
-                        from working_automation import get_working_automation_pipeline
+                        from working_automation import (
+                            get_working_automation_pipeline
+                        )
                         pipeline = get_working_automation_pipeline()
-                        
-                        if pipeline and not getattr(pipeline, 'is_running', False):
+
+                        is_running = getattr(pipeline, 'is_running', False)
+                        if pipeline and not is_running:
                             success = pipeline.start_scheduler()
                             if success:
-                                logger.info("✅ Automation pipeline auto-started on service startup")
+                                logger.info(
+                                    "✅ Automation pipeline auto-started "
+                                    "on service startup"
+                                )
                             else:
-                                logger.warning("⚠️ Automation pipeline auto-start failed")
+                                logger.warning(
+                                    "⚠️ Automation pipeline auto-start failed"
+                                )
                         else:
-                            logger.info("ℹ️ Automation pipeline already running")
+                            logger.info(
+                                "ℹ️ Automation pipeline already running"
+                            )
                 except Exception as e:
-                    logger.error(f"❌ Automation pipeline auto-start error: {e}")
-            
-            thread = threading.Thread(target=_delayed_start, daemon=True, name='AutoStartCycle')
+                    logger.error(
+                        "❌ Automation pipeline auto-start error: %s",
+                        e
+                    )
+
+            thread = threading.Thread(
+                target=_delayed_start, daemon=True, name='AutoStartCycle'
+            )
             thread.start()
-            logger.info("🔄 Automation pipeline auto-start scheduled (3s delay)")
-            
+            logger.info(
+                "🔄 Automation pipeline auto-start scheduled (3s delay)"
+            )
+
         except Exception as e:
             logger.warning(f"Auto-start automation setup failed: {e}")
-    
+
     _auto_start_automation()
-    
+
     # Login Manager (use the globally initialized instance)
     login_manager.init_app(app)
-    login_manager.login_view = 'auth.login'  # Updated for blueprint routing
+    login_manager.login_view = 'auth.login'  # type: ignore[assignment]
 
     # RBAC helpers
     def is_admin(user) -> bool:
         try:
-            # Prefer explicit role flag, fallback to username/email for backward compatibility
+            # Prefer explicit role flag, fallback to username/email
+            # for backward compatibility
             if user and getattr(user, 'role', None) == 'admin':
                 return True
             admin_email = app.config.get('ADMIN_EMAIL')
-            return bool(user and (getattr(user, 'username', None) == 'systemadmin' or (admin_email and getattr(user, 'email', None) == admin_email)))
+            return bool(
+                user
+                and (
+                    getattr(user, 'username', None) == 'systemadmin'
+                    or (
+                        admin_email and
+                        getattr(user, 'email', None) == admin_email
+                    )
+                )
+            )
         except Exception as e:
             logger.warning(f"Admin check failed: {e}")
             return False
@@ -335,24 +440,30 @@ def create_app(config_name='default'):
                 return jsonify({'status': 'unauthorized'}), 401
             return redirect(url_for('login'))
         return wrapper
-    
+
     @login_manager.user_loader
     def load_user(user_id):
         return User.query.get(int(user_id))
-    
+
     # Mail/Migrate already initialized via init_app above
-    
+
     # Optional OAuth setup
     oauth = None
     try:
         from authlib.integrations.flask_client import OAuth
         oauth = OAuth(app)
-        if app.config.get('GOOGLE_CLIENT_ID') and app.config.get('GOOGLE_CLIENT_SECRET'):
+        if (
+            app.config.get('GOOGLE_CLIENT_ID')
+            and app.config.get('GOOGLE_CLIENT_SECRET')
+        ):
             oauth.register(
                 name='google',
                 client_id=app.config.get('GOOGLE_CLIENT_ID'),
                 client_secret=app.config.get('GOOGLE_CLIENT_SECRET'),
-                server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+                server_metadata_url=(
+                    'https://accounts.google.com/.well-known/'
+                    'openid-configuration'
+                ),
                 client_kwargs={'scope': 'openid email profile'}
             )
         # Apple Sign-In (optional)
@@ -361,7 +472,10 @@ def create_app(config_name='default'):
                 name='apple',
                 client_id=app.config.get('APPLE_CLIENT_ID'),
                 client_secret=app.config.get('APPLE_CLIENT_SECRET'),
-                server_metadata_url='https://appleid.apple.com/.well-known/openid-configuration',
+                server_metadata_url=(
+                    'https://appleid.apple.com/.well-known/'
+                    'openid-configuration'
+                ),
                 client_kwargs={'scope': 'name email'}
             )
     except Exception as _oauth_err:
@@ -370,10 +484,12 @@ def create_app(config_name='default'):
     # Security: CSRF, Rate limit, CORS (basic)
     # CSRF is already initialized via csrf.init_app(app) above
 
-    # Limiter already attached via init_app; default limits can be configured via env if needed
+    # Limiter already attached via init_app; default limits can be
+    # configured via env if needed
 
     def internal_route(f):
-        """Internal-only route: require INTERNAL_API_TOKEN or allow localhost if explicitly enabled."""
+        """Internal-only route: require INTERNAL_API_TOKEN or allow
+        localhost if explicitly enabled."""
         from functools import wraps
 
         @wraps(f)
@@ -382,10 +498,21 @@ def create_app(config_name='default'):
                 configured_token = app.config.get('INTERNAL_API_TOKEN')
                 header_token = request.headers.get('X-Internal-Token')
                 # Allow localhost only if explicitly enabled via env or config
-                # Default True to preserve local internal communications unless explicitly disabled
+                # Default True to preserve local internal communications
+                # unless explicitly disabled
                 # ✅ FIX: Use ConfigManager for consistent config access
-                allow_localhost = str(ConfigManager.get('INTERNAL_ALLOW_LOCALHOST', str(app.config.get('INTERNAL_ALLOW_LOCALHOST', 'True')))).lower() == 'true'
-                remote_ip = (request.headers.get('X-Forwarded-For') or request.remote_addr or '').split(',')[0].strip()
+                allow_localhost = str(
+                    ConfigManager.get(
+                        'INTERNAL_ALLOW_LOCALHOST',
+                        str(app.config.get('INTERNAL_ALLOW_LOCALHOST', 'True'))
+                    )
+                ).lower() == 'true'
+                remote_ip = (
+                    (request.headers.get('X-Forwarded-For')
+                     or request.remote_addr or '')
+                    .split(',')[0]
+                    .strip()
+                )
                 is_local = remote_ip in ('127.0.0.1', '::1', 'localhost')
 
                 # Prefer token auth
@@ -418,56 +545,64 @@ def create_app(config_name='default'):
         logger.warning(f"CORS init failed: {_cors_err}")
 
     # CSRF Configuration - exempt API endpoints
-    app.config['WTF_CSRF_CHECK_DEFAULT'] = False  # Disable CSRF globally, enable per-route as needed
-    
+    app.config['WTF_CSRF_CHECK_DEFAULT'] = False
+    # Disable CSRF globally, enable per-route as needed
+
     @app.before_request
     def _api_csrf_exempt():
         """API endpoints don't need CSRF (they use tokens/auth instead)."""
         pass  # CSRF disabled globally via config
 
     # ==========================================
-    # BLUEPRINT REGISTRATION  
+    # BLUEPRINT REGISTRATION
     # ==========================================
     # All HTTP routes moved to blueprints for better modularity
     try:
-        from bist_pattern.blueprints.register_all import register_all_blueprints
+        from bist_pattern.blueprints.register_all import (
+            register_all_blueprints
+        )
         register_all_blueprints(app, csrf)
         logger.info("✅ All blueprints registered successfully")
     except Exception as e:
         logger.error(f"❌ Blueprint registration error: {e}")
-
-
     # ==========================================
     # REALTIME WEBSOCKET HANDLERS
     # ==========================================
 
     # ✅ DEBUG: Wrap socketio.emit AND Flask-SocketIO emit to log all emissions
     _original_socketio_emit = socketio.emit
-    
+
     def _logged_socketio_emit(event, data=None, *args, **kwargs):
         try:
             room = kwargs.get('room') or kwargs.get('to') or 'broadcast'
             symbol = data.get('symbol') if isinstance(data, dict) else 'N/A'
-            logger.warning(f"🔊 SOCKETIO.EMIT: event='{event}', room='{room}', symbol='{symbol}'")
+            logger.warning(
+                "🔊 SOCKETIO.EMIT: event='%s', room='%s', symbol='%s'",
+                event,
+                room,
+                symbol
+            )
             if event == 'pattern_analysis':
                 import traceback
-                logger.error(f"⚠️ BLOCKED pattern_analysis emit! Traceback:\n{''.join(traceback.format_stack())}")
+                logger.error(
+                    "⚠️ BLOCKED pattern_analysis emit! Traceback:\n%s",
+                    ''.join(traceback.format_stack())
+                )
                 return  # ✅ CRITICAL FIX: Prevent this event from being sent
 
         except Exception as e:
             logger.debug(f"Emit logging error: {e}")
         return _original_socketio_emit(event, data, *args, **kwargs)
-    
+
     socketio.emit = _logged_socketio_emit
-    
+
     # Also wrap the standalone emit function from flask_socketio
     # Note: We can't easily wrap the imported emit function globally,
     # but we can monitor socketio.emit which is what matters
-
-
     @socketio.on('connect')
     def handle_connect(auth):
-        logger.info(f"🔗 Client connected: {request.sid}")
+        sid_val = getattr(request, 'sid', 'N/A')  # type: ignore[attr-defined]
+        logger.info("🔗 Client connected: %s", sid_val)
         # ✅ CRITICAL FIX: Sanitize status data before emitting
         try:
             from bist_pattern.core.broadcaster import _sanitize_json_value
@@ -475,7 +610,7 @@ def create_app(config_name='default'):
             status_data = {
                 'message': 'Connected to BIST AI System',
                 'timestamp': datetime.now().isoformat(),
-                'connection_id': str(request.sid)[:100]
+                'connection_id': str(sid_val)[:100]
             }
             sanitized_status = _sanitize_json_value(status_data)
             json.dumps(sanitized_status)  # Test serialization
@@ -484,23 +619,34 @@ def create_app(config_name='default'):
             logger.debug(f"Status emit sanitization failed: {e}")
             # Fallback: send minimal status
             try:
-                emit('status', {'message': 'Connected', 'timestamp': datetime.now().isoformat()})
+                emit(
+                    'status',
+                    {
+                        'message': 'Connected',
+                        'timestamp': datetime.now().isoformat()
+                    }
+                )
             except Exception as e:
                 logger.debug(f"Fallback status emit failed: {e}")
-    
+
     @socketio.on('disconnect')
     def handle_disconnect():
-        logger.info(f"❌ Client disconnected: {request.sid}")
-    
+        sid_val = getattr(request, 'sid', 'N/A')  # type: ignore[attr-defined]
+        logger.info("❌ Client disconnected: %s", sid_val)
+
     @socketio.on('join_admin')
     def handle_join_admin():
         join_room('admin')
-        logger.info(f"👤 Client joined admin room: {request.sid}")
+        sid_val = getattr(request, 'sid', 'N/A')  # type: ignore[attr-defined]
+        logger.info("👤 Client joined admin room: %s", sid_val)
         # ✅ CRITICAL FIX: Sanitize room_joined data before emitting
         try:
             from bist_pattern.core.broadcaster import _sanitize_json_value
             import json
-            room_data = {'room': 'admin', 'message': 'Admin dashboard connected'}
+            room_data = {
+                'room': 'admin',
+                'message': 'Admin dashboard connected'
+            }
             sanitized_room = _sanitize_json_value(room_data)
             json.dumps(sanitized_room)  # Test serialization
             emit('room_joined', sanitized_room)
@@ -511,110 +657,174 @@ def create_app(config_name='default'):
                 emit('room_joined', {'room': 'admin'})
             except Exception as e:
                 logger.debug(f"Fallback room_joined emit failed: {e}")
-    
+
     @socketio.on('join_user')
     def handle_join_user(data):
         user_id = data.get('user_id', 'anonymous')
         join_room(f'user_{user_id}')
-        logger.info(f"👤 Client joined user room: {request.sid} -> user_{user_id}")
+        sid_val = getattr(request, 'sid', 'N/A')  # type: ignore[attr-defined]
+        logger.info(
+            "👤 Client joined user room: %s -> user_%s",
+            sid_val,
+            user_id
+        )
         # ✅ CRITICAL FIX: Sanitize room_joined data before emitting
         try:
             from bist_pattern.core.broadcaster import _sanitize_json_value
             import json
-            room_data = {'room': f'user_{user_id}', 'message': 'User interface connected'}
+            room_data = {
+                'room': f'user_{user_id}',
+                'message': 'User interface connected'
+            }
             sanitized_room = _sanitize_json_value(room_data)
             json.dumps(sanitized_room)  # Test serialization
             emit('room_joined', sanitized_room)
         except Exception as e:
-            logger.debug(f"Room joined emit sanitization failed: {e}")
+            logger.debug(
+                "Room joined emit sanitization failed: %s",
+                e
+            )
             # Fallback: send minimal data
             try:
                 emit('room_joined', {'room': f'user_{user_id}'})
             except Exception as e:
-                logger.debug(f"Fallback room_joined emit failed for user {user_id}: {e}")
-    
+                logger.debug(
+                    "Fallback room_joined emit failed for user %s: %s",
+                    user_id,
+                    e
+                )
+
     @socketio.on('subscribe_stock')
     def handle_subscribe_stock(data):
         symbol = data.get('symbol', '').upper()
         if symbol:
             join_room(f'stock_{symbol}')
-            logger.info(f"📈 Client subscribed to {symbol}: {request.sid}")
-            # ✅ CRITICAL FIX: Sanitize subscription_confirmed data before emitting
+            sid_val = getattr(
+                request, 'sid', 'N/A'
+            )  # type: ignore[attr-defined]
+            logger.info(
+                "📈 Client subscribed to %s: %s",
+                symbol,
+                sid_val
+            )
+            # ✅ CRITICAL FIX: Sanitize subscription_confirmed data
+            # before emitting
             try:
                 from bist_pattern.core.broadcaster import _sanitize_json_value
                 import json
-                sub_data = {'symbol': symbol, 'message': f'Subscribed to {symbol} updates'}
+                sub_data = {
+                    'symbol': symbol,
+                    'message': f'Subscribed to {symbol} updates'
+                }
                 sanitized_sub = _sanitize_json_value(sub_data)
                 json.dumps(sanitized_sub)  # Test serialization
                 emit('subscription_confirmed', sanitized_sub)
             except Exception as e:
-                logger.debug(f"Subscription confirmed emit sanitization failed: {e}")
+                logger.debug(
+                    "Subscription confirmed emit sanitization failed: %s",
+                    e
+                )
                 # Fallback: send minimal data
                 try:
                     emit('subscription_confirmed', {'symbol': symbol})
                 except Exception as e:
-                    logger.debug(f"Fallback subscription_confirmed emit failed for {symbol}: {e}")
-    
+                    logger.debug(
+                        "Fallback subscription_confirmed emit failed for %s: "
+                        "%s",
+                        symbol,
+                        e
+                    )
+
     @socketio.on('unsubscribe_stock')
     def handle_unsubscribe_stock(data):
         symbol = data.get('symbol', '').upper()
         if symbol:
             leave_room(f'stock_{symbol}')
-            logger.info(f"📉 Client unsubscribed from {symbol}: {request.sid}")
-            # ✅ CRITICAL FIX: Sanitize subscription_removed data before emitting
+            sid_val = getattr(
+                request, 'sid', 'N/A'
+            )  # type: ignore[attr-defined]
+            logger.info(
+                "📉 Client unsubscribed from %s: %s",
+                symbol,
+                sid_val
+            )
+            # ✅ CRITICAL FIX: Sanitize subscription_removed data
+            # before emitting
             try:
                 from bist_pattern.core.broadcaster import _sanitize_json_value
                 import json
-                sub_data = {'symbol': symbol, 'message': f'Unsubscribed from {symbol}'}
+                sub_data = {
+                    'symbol': symbol,
+                    'message': f'Unsubscribed from {symbol}'
+                }
                 sanitized_sub = _sanitize_json_value(sub_data)
                 json.dumps(sanitized_sub)  # Test serialization
                 emit('subscription_removed', sanitized_sub)
             except Exception as e:
-                logger.debug(f"Subscription removed emit sanitization failed: {e}")
+                logger.debug(
+                    "Subscription removed emit sanitization failed: %s",
+                    e
+                )
                 # Fallback: send minimal data
                 try:
                     emit('subscription_removed', {'symbol': symbol})
                 except Exception as e:
-                    logger.debug(f"Fallback subscription_removed emit failed for {symbol}: {e}")
-    
-    # ✅ CRITICAL FIX: DISABLED request_pattern_analysis handler - use batch API instead
+                    logger.debug(
+                        "Fallback subscription_removed emit failed for %s: %s",
+                        symbol,
+                        e
+                    )
+
+    # ✅ CRITICAL FIX: DISABLED request_pattern_analysis handler
+    # use batch API instead
     # @socketio.on('request_pattern_analysis')
     # def handle_pattern_request(data):
     #     symbol = data.get('symbol', '').upper()
     #     if symbol:
-    #         logger.debug(f"📊 Pattern analysis request ignored for {symbol} - use batch API instead")
+    #         logger.debug(
+    #             f"📊 Pattern analysis request ignored for {symbol} "
+    #             "- use batch API instead"
+    #         )
     #     # Do nothing - client should use batch API endpoints instead
-    
-    # Real-time log broadcasting function (already defined earlier to avoid race condition)
-    # broadcast_log function and app.broadcast_log assignment moved earlier (before log tailer)
-    
+
+    # Real-time log broadcasting function (already defined earlier
+    # to avoid race condition)
+    # broadcast_log function and app.broadcast_log assignment moved
+    # earlier (before log tailer)
+
     # Store socketio instance globally for background tasks
-    app.socketio = socketio
-    # app.broadcast_log already assigned earlier (line ~143) to avoid race condition with log tailer threads
-    
+    app.socketio = socketio  # type: ignore[attr-defined]
+    # app.broadcast_log already assigned earlier (line ~143) to avoid
+    # race condition with log tailer threads
+
     # ==========================================
     # CALIBRATION DEFAULT STATE (BYPASS=TRUE)
     # ==========================================
     try:
-        # If BYPASS_ISOTONIC_CALIBRATION is truthy (default '1'), persist a closed state to file
+        # If BYPASS_ISOTONIC_CALIBRATION is truthy (default '1'),
+        # persist a closed state to file
         # ✅ FIX: Use ConfigManager for consistent config access
-        _bypass_env = str(ConfigManager.get('BYPASS_ISOTONIC_CALIBRATION', '1')).strip().lower() in ('1', 'true', 'yes', 'on')
-        logger.info(f"🔧 Calibration startup: BYPASS_ISOTONIC_CALIBRATION={ConfigManager.get('BYPASS_ISOTONIC_CALIBRATION', '1')}, enabled={_bypass_env}")
-        
-        # ✅ NOTE: We don't force bypass based on skipped_horizons anymore
-        # Reason: Online adjustment should be globally enabled (toggle open), but per-horizon
-        # adjustment is already skipped in pattern_detector.py if horizon has insufficient data.
-        # This allows adjustment to work for horizons WITH data (1d, 3d) even if other
-        # horizons (7d, 14d, 30d) have insufficient data.
-        # 
-        # Per-horizon skipping is handled in pattern_detector.py._get_empirical_confidence_adjustment()
-        # by checking skipped_horizons from param_store.json
-        
+        _bypass_env = str(
+            ConfigManager.get('BYPASS_ISOTONIC_CALIBRATION', '1')
+        ).strip().lower() in ('1', 'true', 'yes', 'on')
+        logger.info(
+            "🔧 Calibration startup: BYPASS_ISOTONIC_CALIBRATION=%s, "
+            "enabled=%s",
+            ConfigManager.get('BYPASS_ISOTONIC_CALIBRATION', '1'),
+            _bypass_env
+        )
+
+        # ✅ NOTE: We don't force bypass based on skipped_horizons anymore.
+        # Online adjustment is globally toggled; per-horizon skipping
+        # happens in pattern_detector.py based on param_store.json.
+
         if _bypass_env:
             import json as _json
             from datetime import datetime as _dt
             # ✅ FIX: Use ConfigManager for consistent config access
-            _log_dir = ConfigManager.get('BIST_LOG_PATH', '/opt/bist-pattern/logs')
+            _log_dir = ConfigManager.get(
+                'BIST_LOG_PATH', '/opt/bist-pattern/logs'
+            )
             os.makedirs(_log_dir, exist_ok=True)
             _state_path = os.path.join(_log_dir, 'calibration_state.json')
             # Merge with existing content if present, but force bypass=true
@@ -627,8 +837,12 @@ def create_app(config_name='default'):
                 logger.debug(f"Failed to load calibration_state.json: {e}")
                 cur = {}
             cur['bypass'] = True
-            # Keep previous penalty_factor if any, else provide conservative default
-            if 'penalty_factor' not in cur or cur.get('penalty_factor') is None:
+            # Keep previous penalty_factor if any,
+            # else provide conservative default
+            if (
+                'penalty_factor' not in cur
+                or cur.get('penalty_factor') is None
+            ):
                 cur['penalty_factor'] = 0.95
             cur['updated_at'] = _dt.now().isoformat()
             _tmp = _state_path + '.tmp'
@@ -636,17 +850,27 @@ def create_app(config_name='default'):
                 with open(_tmp, 'w') as wf:
                     wf.write(_json.dumps(cur, ensure_ascii=False))
                 os.replace(_tmp, _state_path)
-                logger.info(f"✅ Calibration bypass persisted to {_state_path}")
+                logger.info(
+                    "✅ Calibration bypass persisted to %s",
+                    _state_path
+                )
             except Exception as e:
-                logger.warning(f"⚠️ Atomic write failed, trying fallback: {e}")
+                logger.warning(
+                    "⚠️ Atomic write failed, trying fallback: %s",
+                    e
+                )
                 # Non-atomic fallback
                 with open(_state_path, 'w') as wf:
                     wf.write(_json.dumps(cur, ensure_ascii=False))
-                logger.info(f"✅ Calibration bypass persisted (fallback) to {_state_path}")
+                logger.info(
+                    "✅ Calibration bypass persisted (fallback) to %s",
+                    _state_path
+                )
     except Exception as e:
         logger.error(f"❌ Calibration startup error: {e}")
-    
+
     return app
+
 
 # Duplike flag tanımlamaları kaldırıldı - bunlar artık module başında tanımlı
 
@@ -669,6 +893,7 @@ def get_pipeline_with_context():
         return get_working_automation_pipeline()  # type: ignore
     return None
 
+
 # Flask app instance
 app = create_app(os.getenv('FLASK_ENV', 'default'))
 # socketio zaten factory içinde init edildi; burada yeniden atamaya gerek yok
@@ -678,6 +903,6 @@ if __name__ == '__main__':
     host = os.getenv('FLASK_HOST', '0.0.0.0')
     port = int(os.getenv('FLASK_PORT', 5000))
     debug = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
-    
+
     # SocketIO ile çalıştır
     socketio.run(app, host=host, port=port, debug=debug)
